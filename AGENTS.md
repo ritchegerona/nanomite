@@ -16,39 +16,31 @@ siblings are not part of the project:
   `memory.json`, `test.*`, `smoke.txt` — scratch, ignore.
 - `nanomite/target/` is ~5.5 GB; build scratch copies before full rebuilds.
 
-## Build state — READ FIRST (verified 2026-10-15)
+## Build state — READ FIRST (verified 2026-10-15, after perf pass)
 
-`cargo check` **fails with 46 errors**. All of them are confined to two
-in-progress areas:
+`cargo check` (lib + bins) **passes clean**. `cargo test --lib` is
+**261 passed / 0 failed** (~1.3 s, fully offline). `cargo clippy --all-targets
+-- -D warnings` is clean. The previously reported broken state (46 errors in
+`src/extract/`, dead `DiffView` stub, never-compiling bench target) is fully
+resolved — do not re-fix it.
 
-1. `src/extract/` — `src/extract/mod.rs:23,25` declares `pub mod document;`
-   and `pub mod tabular;` but **neither file exists** (E0583), plus type errors
-   in `mod.rs`, `structured.rs` (private `table` module), `text.rs`,
-   `zipcontainer.rs`, `code.rs`. Nothing outside the module uses `extract`.
-2. `src/ui/diff.rs` — a dead `DiffView` stub using a nonexistent `line!` macro
-   and string colors (`.fg("green")`), plus a `Line`/`Span` mismatch. Nothing
-   references `DiffView`; only `src/ui/mod.rs:4` declares it.
-
-Verified: commenting out `pub mod extract;` (`src/lib.rs:11`) and
-`pub mod diff;` (`src/ui/mod.rs:4`) makes the lib, the bin and all tests
-compile. The rest of the tree is sound — do not go hunting for other breakage.
-
-`benches/perf.rs` **cannot compile on stable** (`#![feature(test)]`, `#[bench]`
-→ E0554/E0601) and only the stable 1.99 toolchain is installed. `cargo test`
-builds bench targets by default, so it will fail on this alone.
+`benches/perf.rs` is a stable, zero-dep harness (median of 7 batches) and
+compiles on the stable toolchain: `cargo bench` works, and `cargo test`
+(builds bench targets) passes.
 
 ## Commands
 
 ```bash
-cargo check            # errors above are expected until extract/diff land
-cargo test --lib       # 146 passed, 0 failed, ~1.3 s, fully offline (verified)
-cargo clippy           # no clippy.toml / rustfmt.toml / CI in the repo
+cargo check            # clean
+cargo test --lib       # 261 passed, 0 failed, ~1.3 s, fully offline (verified)
+cargo bench            # benches/perf.rs harness; bench profile inherits release
+cargo clippy --all-targets -- -D warnings   # clean (no clippy.toml / CI in the repo)
 cargo fmt
 ```
 
-`cargo test` without `--lib` fails on the bench target. Use `cargo test --lib`.
-Do not "fix" the suite by deleting tests or by claiming a count from README/docs
-without running it. Test counts in README (146) are correct for `--lib`.
+Do not "fix" the suite by deleting tests or by claiming a count from
+README/docs without running it. Test counts in README (261) are correct for
+`--lib`.
 
 Release profile sets `panic = "abort"`, so the panic hook in `src/main.rs:141`
 must stay: abort cannot unwind, and a raw-mode terminal would otherwise be left

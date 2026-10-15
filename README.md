@@ -51,7 +51,7 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
   graphite and mono
 - **Persistent setup** — provider, key and model are saved to
   `~/.config/nanomite/config.toml` and survive restarts
-- **Offline-capable test suite** — 242 tests, zero network required
+- **Offline-capable test suite** — 261 tests, zero network required
 
 ## Installation
 
@@ -361,7 +361,7 @@ src/
 ## Development
 
 ```bash
-cargo test --lib     # 242 tests, fully offline
+cargo test --lib     # 261 tests, fully offline
 cargo run            # dev build against your config
 cargo build --release
 ```

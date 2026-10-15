@@ -43,6 +43,9 @@ pub struct ToolRow {
     /// File edit specific fields (populated for edit_file tool)
     pub edit_path: Option<String>,
     pub edit_replacements: Option<usize>,
+    /// Bounded code/command preview built from the call arguments (shown live
+    /// under the row while the tool runs; collapsed by `/details` off).
+    pub preview: Option<String>,
 }
 
 /// Cached, width-dependent rendering of one transcript entry.
@@ -612,7 +615,11 @@ impl App {
                     self.view.scroll_from_bottom = 0;
                 }
             }
-            AgentEvent::ToolStart { name, detail } => {
+            AgentEvent::ToolStart {
+                name,
+                detail,
+                preview,
+            } => {
                 if let Some(entry) = self.entries.get_mut(index) {
                     // For edit_file, the ToolStart detail is the file path (from describe_args)
                     let edit_path = if name == "edit_file" {
@@ -627,6 +634,7 @@ impl App {
                         ok: true,
                         edit_path: edit_path.map(|s| s.to_string()),
                         edit_replacements: None,
+                        preview,
                     });
                     entry.touch();
                 }
@@ -662,6 +670,7 @@ impl App {
                             ok,
                             edit_path: None,
                             edit_replacements: None,
+                            preview: None,
                         });
                     }
                     entry.touch();
@@ -1572,8 +1581,8 @@ impl App {
 
             KeyCode::Up => self.composer_or_scroll(key, -1),
             KeyCode::Down => self.composer_or_scroll(key, 1),
-            KeyCode::PageUp => self.scroll_page(-1),
-            KeyCode::PageDown => self.scroll_page(1),
+            KeyCode::PageUp => self.scroll_page(1),
+            KeyCode::PageDown => self.scroll_page(-1),
 
             KeyCode::Char(c) => {
                 if ctrl || alt {
@@ -1595,7 +1604,10 @@ impl App {
             return;
         }
         let _ = key;
-        self.scroll_by(delta);
+        // Same convention as the wheel: Up = toward older messages. `delta`
+        // keeps its composer sense (Up = -1) for move_row above, so the
+        // scroll fallback inverts it.
+        self.scroll_by(-delta);
     }
 
     fn on_key_overlay(&mut self, key: crossterm::event::KeyEvent) {
@@ -1743,7 +1755,9 @@ impl App {
     pub fn on_mouse(&mut self, kind: crossterm::event::MouseEventKind) {
         use crossterm::event::MouseEventKind;
         match kind {
-            // Reversed: scroll up moves content down (natural/"inverted" direction)
+            // OpenCode/standard direction: wheel up scrolls toward older
+            // messages, wheel down toward newer (scroll_by(+) moves back
+            // into history; delta 0 pins to the live bottom).
             MouseEventKind::ScrollUp => self.scroll_by(3),
             MouseEventKind::ScrollDown => self.scroll_by(-3),
             _ => {}

@@ -416,6 +416,33 @@ impl Entry {
                             Style::default().fg(theme.faint()),
                         ),
                     ]));
+                    // Live preview of what the tool is writing/running
+                    // (OpenCode-style): bounded at construction, rendered under
+                    // the row while the tool runs. `/details` off collapses it.
+                    if details {
+                        if let Some(preview) = &tool.preview {
+                            for raw in preview.split('\n') {
+                                let style = if raw.starts_with("- ") {
+                                    Style::default().fg(theme.danger())
+                                } else if raw.starts_with("+ ") {
+                                    Style::default().fg(theme.success())
+                                } else if raw.starts_with('…') {
+                                    Style::default().fg(theme.faint())
+                                } else {
+                                    Style::default().fg(theme.muted())
+                                };
+                                let shown = text::truncate(raw, inner.saturating_sub(4));
+                                if shown.is_empty() {
+                                    lines.push(Line::from(Span::raw("    ")));
+                                } else {
+                                    lines.push(Line::from(Span::styled(
+                                        format!("    {shown}"),
+                                        style,
+                                    )));
+                                }
+                            }
+                        }
+                    }
                 }
                 if !self.tools.is_empty() {
                     lines.push(Line::default());

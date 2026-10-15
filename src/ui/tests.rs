@@ -54,6 +54,7 @@ fn with_tool(name: &str, detail: &str, ok: bool) -> ToolRow {
         ok,
         edit_path: None,
         edit_replacements: None,
+        preview: None,
     }
 }
 
@@ -139,6 +140,57 @@ async fn renders_a_turn_with_tools_and_markdown() {
     assert!(text.contains("✗"), "tool failure marker missing:\n{text}");
     // The opencode-minimal quote marker identifies the user turn.
     assert!(text.contains('\u{203a}'), "user marker missing:\n{text}");
+}
+
+#[tokio::test]
+async fn tool_rows_show_code_preview_live() {
+    let mut app = test_app().await;
+    app.entries
+        .push(Entry::new(EntryRole::User, "make a calculator"));
+    let mut reply = assistant("writing the file");
+    let mut tool = with_tool("write_file", "calculator.py", true);
+    tool.preview = Some("def add(a, b):\n    return a + b".into());
+    reply.tools.push(tool);
+    app.entries.push(reply);
+
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        text.contains("def add(a, b):"),
+        "code preview missing:\n{text}"
+    );
+    assert!(
+        text.contains("return a + b"),
+        "preview body missing:\n{text}"
+    );
+
+    // `/details` off collapses previews back to bare tool rows.
+    app.show_tool_details = false;
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        !text.contains("def add(a, b):"),
+        "preview must hide with /details off:\n{text}"
+    );
+}
+
+#[tokio::test]
+async fn edit_preview_shows_old_and_new_lines() {
+    let mut app = test_app().await;
+    app.entries.push(Entry::new(EntryRole::User, "fix it"));
+    let mut reply = assistant("editing");
+    let mut tool = with_tool("edit_file", "calculator.py", true);
+    tool.preview = Some("- return a - b\n+ return a + b".into());
+    reply.tools.push(tool);
+    app.entries.push(reply);
+
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        text.contains("- return a - b"),
+        "old line missing:\n{text}"
+    );
+    assert!(
+        text.contains("+ return a + b"),
+        "new line missing:\n{text}"
+    );
 }
 
 #[tokio::test]

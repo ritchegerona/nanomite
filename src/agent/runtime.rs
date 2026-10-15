@@ -52,6 +52,9 @@ pub enum AgentEvent {
     ToolStart {
         name: String,
         detail: String,
+        /// Bounded preview of what the call is about to write/run, built from
+        /// its arguments, so the transcript can show the code live.
+        preview: Option<String>,
     },
     ToolEnd {
         name: String,
@@ -374,10 +377,12 @@ impl AgentRuntime {
                     tools_used.push(call.name.clone());
                 }
                 let detail = describe_args(&call);
+                let preview = preview_args(&call);
                 if tx
                     .send(AgentEvent::ToolStart {
                         name: call.name.clone(),
                         detail,
+                        preview,
                     })
                     .is_err()
                 {
@@ -712,6 +717,88 @@ fn shorten(s: &str, max: usize) -> String {
     }
 }
 
+/// Caps for the live tool preview shown under a transcript tool row.
+const PREVIEW_MAX_LINES: usize = 12;
+const PREVIEW_MAX_CHARS: usize = 1_600;
+
+/// Bounded preview of what a tool call is about to do, built from its
+/// arguments at start time so the transcript shows the code being written or
+/// edited while it happens: `write_file` shows the content, `edit_file` a
+/// compact `-old`/`+new` diff, `run_command` the command line. Bounded so a
+/// huge file write can never flood the event channel or the transcript.
+fn preview_args(call: &ToolCall) -> Option<String> {
+    let args = serde_json::from_str::<serde_json::Value>(&call.arguments).ok()?;
+    match call.name.as_str() {
+        "write_file" => {
+            let content = args.get("content").and_then(|v| v.as_str())?;
+            if content.trim().is_empty() {
+                return None;
+            }
+            Some(bounded_preview(content, PREVIEW_MAX_LINES, PREVIEW_MAX_CHARS))
+        }
+        "edit_file" => {
+            let old = args.get("old_string").and_then(|v| v.as_str())?;
+            let new = args.get("new_string").and_then(|v| v.as_str())?;
+            if old.trim().is_empty() && new.trim().is_empty() {
+                return None;
+            }
+            let half_lines = PREVIEW_MAX_LINES / 2;
+            let half_chars = PREVIEW_MAX_CHARS / 2;
+            let removed = old
+                .lines()
+                .map(|l| format!("- {l}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let added = new
+                .lines()
+                .map(|l| format!("+ {l}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(format!(
+                "{}\n{}",
+                bounded_preview(&removed, half_lines, half_chars),
+                bounded_preview(&added, half_lines, half_chars),
+            ))
+        }
+        "run_command" => {
+            let cmd = args.get("command").and_then(|v| v.as_str())?;
+            if cmd.trim().is_empty() {
+                return None;
+            }
+            Some(shorten(cmd, 120))
+        }
+        _ => None,
+    }
+}
+
+/// Trim a block to at most `max_lines` lines and `max_chars` characters,
+/// appending a `… +N more lines` marker when anything was cut.
+fn bounded_preview(text: &str, max_lines: usize, max_chars: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = String::new();
+    let mut emitted = 0usize;
+    for line in lines.iter().take(max_lines) {
+        if out.len() >= max_chars {
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        let room = max_chars - out.len();
+        if line.len() + 1 > room {
+            out.push_str(&shorten(line, room.saturating_sub(1)));
+        } else {
+            out.push_str(line);
+        }
+        emitted += 1;
+    }
+    let hidden = lines.len().saturating_sub(emitted);
+    if hidden > 0 {
+        out.push_str(&format!("\n… +{hidden} more lines"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -925,5 +1012,92 @@ mod tests {
             },
         );
         assert!(outcome.is_err(), "no engine means a clean refusal");
+    }
+
+    #[test]
+    fn preview_args_shows_written_code() {
+        let call = ToolCall {
+            id: "t1".into(),
+            name: "write_file".into(),
+            arguments: r#"{"path":"c.py","content":"def add(a, b):\n    return a + b"}"#
+                .to_string(),
+            index: 0,
+        };
+        let p = preview_args(&call).expect("write_file gets a preview");
+        assert!(p.contains("def add(a, b):"), "{p}");
+        assert!(p.contains("return a + b"), "{p}");
+    }
+
+    #[test]
+    fn preview_args_edit_file_is_a_mini_diff() {
+        let call = ToolCall {
+            id: "t2".into(),
+            name: "edit_file".into(),
+            arguments: r#"{"path":"c.py","old_string":"return a - b","new_string":"return a + b"}"#
+                .to_string(),
+            index: 0,
+        };
+        let p = preview_args(&call).expect("edit_file gets a preview");
+        assert!(p.contains("- return a - b"), "{p}");
+        assert!(p.contains("+ return a + b"), "{p}");
+    }
+
+    #[test]
+    fn preview_args_run_command_shows_the_command() {
+        let call = ToolCall {
+            id: "t3".into(),
+            name: "run_command".into(),
+            arguments: r#"{"command":"python3 calculator.py"}"#.to_string(),
+            index: 0,
+        };
+        assert_eq!(
+            preview_args(&call).as_deref(),
+            Some("python3 calculator.py")
+        );
+    }
+
+    #[test]
+    fn preview_args_other_tools_and_empty_args_get_none() {
+        let none = ToolCall {
+            id: "t4".into(),
+            name: "list_files".into(),
+            arguments: "{}".into(),
+            index: 0,
+        };
+        assert!(preview_args(&none).is_none());
+
+        let empty = ToolCall {
+            id: "t5".into(),
+            name: "write_file".into(),
+            arguments: r#"{"path":"c.py","content":""}"#.to_string(),
+            index: 0,
+        };
+        assert!(preview_args(&empty).is_none());
+
+        let junk = ToolCall {
+            id: "t6".into(),
+            name: "write_file".into(),
+            arguments: "not json".into(),
+            index: 0,
+        };
+        assert!(preview_args(&junk).is_none());
+    }
+
+    #[test]
+    fn bounded_preview_caps_lines_and_marks_the_rest() {
+        let text = (0..40)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let p = bounded_preview(&text, 5, 1_600);
+        assert_eq!(p.lines().count(), 6, "5 kept + marker: {p}");
+        assert!(p.contains("… +35 more lines"), "{p}");
+    }
+
+    #[test]
+    fn bounded_preview_caps_chars() {
+        let text = "x".repeat(10_000);
+        let p = bounded_preview(&text, 100, 200);
+        assert!(p.len() <= 210, "char cap leaked: {}", p.len());
     }
 }

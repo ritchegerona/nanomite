@@ -1,16 +1,30 @@
 # Performance
 
-Status: **L0 — unmeasured.** No telemetry, no benchmarks, no profiling hooks
-exist. (`Cargo.toml` carries a `[[bench]] perf` section but `benches/` is
-absent — the tree does not currently build because of it.) This file records
-the baseline procedure and the rules for future optimization.
+Status: **L1 — microbenchmarked.** A stable, zero-dep benchmark harness
+(`benches/perf.rs`, run with `cargo bench`) covers the tool/extract hot paths;
+run it with `cargo bench`. No runtime telemetry or profiling hooks exist yet
+(see Rules 4). This file records the benchmark methodology, the current
+baseline, and the rules for future optimization.
 
-## Baselines (measured 2026-10-14, dev profile)
+## Benchmarks (measured 2026-10-15, bench profile ≈ release)
 
-- `cargo test` (55 tests, pre-memory wiring): **0.36 s**, fully offline.
-- `cargo build` (dev, warm): **0.16 s** incremental.
-- Startup time, first-token latency, tool durations, retrieval latency, memory
-  use, DB query times, cache hits: **not measured**.
+Harness: `benches/perf.rs` — median of 7 in-process batches after warmup,
+zero external deps. Machine noise between full runs is ±8–15% (all benches
+drift together); treat sub-15% deltas as noise. 300-file / ~4 MB synthetic
+tree for search; 1.3 MB file sliced to 4 KB for read_file.
+
+| Benchmark | Before | After | Change |
+|---|---|---|---|
+| read_file 4 KB slice of 1.3 MB | 91 µs | 8.7 µs | ~10× (seek+bounded read instead of whole-file read) |
+| search hit, 300 files (mixed ASCII/Unicode fixture) | 4.31 ms | 4.68 ms | parity on fixture (Unicode lines take exact fallback); matcher core ~2.4× on mostly-ASCII trees (3.47 vs 8.41 ms per 4 MB) |
+| search miss, 300 files | 13.19 ms | 13.08 ms | parity on fixture |
+| extract text/code/json/csv | 0.44/0.46/0.74/0.79 ms | 0.46/0.49/0.81/0.82 ms | parity (noise) |
+| extract toml ~20 KB | 2.04 ms | 2.22 ms | parity on fixture (scalar fast path; toml parse dominates) |
+| wrap_spans, fingerprint | 19 µs / 0.49 ms/MB | 20 µs / 0.53 ms/MB | parity (noise) |
+
+Startup (3–6 ms), TUI rendering (dirty-flagged with cached renders), and the
+SQLite memory store (WAL + `synchronous=NORMAL`) were inspected and left
+alone — already fast by design.
 
 ## Rules
 

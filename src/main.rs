@@ -1,6 +1,8 @@
 use nanomite::app::{App, Control};
 use nanomite::ui;
-use ratatui::crossterm::event::{Event, EventStream, KeyEventKind};
+use ratatui::crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind,
+};
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
@@ -121,6 +123,7 @@ fn suspend(terminal: &mut Terminal<Backend>) -> io::Result<()> {
     ratatui::crossterm::terminal::disable_raw_mode()?;
     ratatui::crossterm::execute!(
         terminal.backend_mut(),
+        DisableMouseCapture,
         LeaveAlternateScreen,
         ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
     )?;
@@ -129,7 +132,11 @@ fn suspend(terminal: &mut Terminal<Backend>) -> io::Result<()> {
 }
 
 fn resume(terminal: &mut Terminal<Backend>) -> io::Result<()> {
-    ratatui::crossterm::execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    ratatui::crossterm::execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
     ratatui::crossterm::terminal::enable_raw_mode()?;
     terminal.hide_cursor()?;
     terminal.clear()?;
@@ -144,6 +151,7 @@ fn install_panic_hook() {
         let _ = ratatui::crossterm::terminal::disable_raw_mode();
         let _ = ratatui::crossterm::execute!(
             io::stdout(),
+            DisableMouseCapture,
             LeaveAlternateScreen,
             ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
         );
@@ -157,7 +165,11 @@ fn setup_terminal() -> io::Result<Terminal<Backend>> {
     ratatui::crossterm::execute!(
         stdout,
         EnterAlternateScreen,
-        ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
+        ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All),
+        // Without mouse capture the wheel never reaches the app: in the alternate
+        // screen there is no scrollback, and terminals fall back to arrow-key
+        // emulation. OpenCode's TUI enables mouse reporting for the same reason.
+        EnableMouseCapture
     )?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     terminal.hide_cursor()?;
@@ -168,6 +180,7 @@ fn restore_terminal(terminal: &mut Terminal<Backend>) -> io::Result<()> {
     ratatui::crossterm::terminal::disable_raw_mode()?;
     ratatui::crossterm::execute!(
         terminal.backend_mut(),
+        DisableMouseCapture,
         LeaveAlternateScreen,
         ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
     )?;

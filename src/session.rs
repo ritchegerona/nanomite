@@ -91,6 +91,7 @@ impl StoredSession {
                         ok: !tool.ends_with("(failed)"),
                         edit_path: None,
                         edit_replacements: None,
+                        preview: None,
                     });
                 }
                 entry
@@ -268,6 +269,7 @@ mod tests {
                 ok: true,
                 edit_path: None,
                 edit_replacements: None,
+                preview: None,
             });
             a
         }];
