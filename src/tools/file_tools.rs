@@ -463,8 +463,8 @@ mod tests {
             ("mode", "model"),
             ("MODELLING", "model"),
             ("m0del", "model"),
-            ("a\r-b", "-b"),  // control char must not fold onto '-'
-            ("\x10 x", "0"),  // 0x10|32 == '0'|32: probe hit, verify rejects
+            ("a\r-b", "-b"), // control char must not fold onto '-'
+            ("\x10 x", "0"), // 0x10|32 == '0'|32: probe hit, verify rejects
         ];
         for (hay, needle) in &cases {
             let fast = contains_ci_ascii(hay.as_bytes(), needle.as_bytes());
@@ -482,7 +482,11 @@ mod tests {
     fn search_finds_case_insensitive_hits() {
         let dir = std::env::temp_dir().join(format!("nanomite-search-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("a.txt"), "The QUICK brown Fox\nnothing to see\nQUOKKA\n").unwrap();
+        fs::write(
+            dir.join("a.txt"),
+            "The QUICK brown Fox\nnothing to see\nQUOKKA\n",
+        )
+        .unwrap();
         let tools = FileTools::new(dir.clone(), 1024 * 1024);
         let result = tools
             .search(SearchArgs {

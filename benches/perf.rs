@@ -111,7 +111,6 @@ impl Drop for Scratch {
 
 fn main() {
     println!("nanomite perf harness — stable, zero-dep\n");
-    phase_test();
 
     // -- search --------------------------------------------------------------
     let tree = Scratch::new("tree");
