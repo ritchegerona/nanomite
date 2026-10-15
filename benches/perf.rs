@@ -78,9 +78,7 @@ fn rust_source(idx: usize) -> String {
 fn prose(idx: usize) -> String {
     (0..LINES_PER_FILE)
         .map(|i| {
-            format!(
-                "Paragraph {idx}.{i}: the Model registry keeps every Streaming Agent honest.\n"
-            )
+            format!("Paragraph {idx}.{i}: the Model registry keeps every Streaming Agent honest.\n")
         })
         .collect()
 }
@@ -113,6 +111,7 @@ impl Drop for Scratch {
 
 fn main() {
     println!("nanomite perf harness — stable, zero-dep\n");
+    phase_test();
 
     // -- search --------------------------------------------------------------
     let tree = Scratch::new("tree");
@@ -150,7 +149,7 @@ fn main() {
 
     // -- read_file -----------------------------------------------------------
     let big = Scratch::new("big");
-    let big_path = big.write("big.rs", &rust_source(9_999).repeat(9)); // ~1.3 MB
+    let big_path = big.write("big.rs", &rust_source(9_999).repeat(90)); // ~1.2 MB
     let ft2 = Arc::new(FileTools::new(big.root.clone(), 64 * 1024 * 1024));
     {
         let ft2 = Arc::clone(&ft2);
@@ -242,4 +241,43 @@ fn main() {
     }
 
     println!("\nDone.");
+}
+
+// -- temporary phase isolation for search -----------------------------------
+#[allow(dead_code)]
+fn phase_test() {
+    use std::time::Instant;
+    let tree = std::env::temp_dir().join(format!("nanomite-bench-{}-tree", std::process::id()));
+    let mut bytes = Vec::new();
+    for i in 0..TREE_FILES {
+        bytes.extend_from_slice(rust_source(i).as_bytes());
+    }
+    println!("total bytes: {}", bytes.len());
+    let t = Instant::now();
+    let text = String::from_utf8_lossy(&bytes);
+    println!("from_utf8_lossy: {:?}", t.elapsed());
+    let t = Instant::now();
+    let lower = text.to_lowercase();
+    println!("whole to_lowercase: {:?}", t.elapsed());
+    let t = Instant::now();
+    let alower = text.to_ascii_lowercase();
+    println!("whole to_ascii_lowercase: {:?}", t.elapsed());
+    let t = Instant::now();
+    let n: usize = text.lines().filter(|l| l.to_lowercase().contains("model")).count();
+    println!("per-line to_lowercase+contains: {:?} (hits {n})", t.elapsed());
+    let t = Instant::now();
+    let n: usize = lower
+        .lines()
+        .zip(text.lines())
+        .filter(|(lo, _)| lo.contains("model"))
+        .count();
+    println!("prelowered zip contains: {:?} (hits {n})", t.elapsed());
+    let t = Instant::now();
+    let n: usize = alower
+        .lines()
+        .zip(text.lines())
+        .filter(|(lo, _)| lo.contains("model"))
+        .count();
+    println!("ascii-lowered zip contains: {:?} (hits {n})", t.elapsed());
+    drop(tree);
 }
