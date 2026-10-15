@@ -60,7 +60,7 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
 Requires Rust 1.75+ (install via [rustup](https://rustup.rs)):
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/nanomite.git
+git clone https://github.com/ritchegerona/nanomite.git
 cd nanomite
 cargo build --release
 ```
@@ -74,7 +74,7 @@ ln -sf "$(pwd)/target/release/nanomite" ~/.local/bin/nanomite
 ### From a release
 
 Grab the prebuilt binary from the
-[releases page](https://github.com/YOUR_USERNAME/nanomite/releases), unpack it
+[releases page](https://github.com/ritchegerona/nanomite/releases), unpack it
 and move it somewhere on your `PATH`:
 
 ```bash
