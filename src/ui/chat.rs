@@ -83,10 +83,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
         while row < bottom && row < entry_end {
             let local = (row - entry_start) as usize;
             let line = if local < status_rows {
-                status.as_ref().map(|l| if bubbled {
-                    l.clone()
-                } else {
-                    gutter_line(l.clone(), rail)
+                status.as_ref().map(|l| {
+                    if bubbled {
+                        l.clone()
+                    } else {
+                        gutter_line(l.clone(), rail)
+                    }
                 })
             } else {
                 // Past the body this is the blank separator row between entries.
@@ -162,10 +164,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
             Span::styled("nanomite", theme.bold()),
         ]),
         Line::from(Span::styled("    \u{2b21}\u{2b21}\u{2b21}", hex)),
-        Line::from(Span::styled(
-            "  the microscopic agent",
-            theme.faint_style(),
-        )),
+        Line::from(Span::styled("  the microscopic agent", theme.faint_style())),
     ];
     let lines: Vec<Line<'static>> = logo
         .into_iter()
@@ -365,8 +364,7 @@ impl Entry {
                                 for span in l.spans.iter_mut() {
                                     *span = Span::styled(span.content.to_string(), style);
                                 }
-                                let mut spans: Vec<Span> =
-                                    Vec::with_capacity(l.spans.len() + 2);
+                                let mut spans: Vec<Span> = Vec::with_capacity(l.spans.len() + 2);
                                 spans.push(Span::styled(
                                     if first { "\u{203a} " } else { "  " },
                                     marker,

@@ -1,5 +1,6 @@
 pub mod chat;
 pub mod composer;
+pub mod diff;
 pub mod panels;
 #[cfg(test)]
 mod tests;
@@ -189,8 +190,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 impl View {
     fn layout(&mut self, area: Rect, composer_rows: u16) -> Rects {
         if let Some((cached_area, cached_rows, _, rects)) = self.layout {
-            if cached_area == area && cached_rows == composer_rows
-            {
+            if cached_area == area && cached_rows == composer_rows {
                 return rects;
             }
         }

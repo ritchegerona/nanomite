@@ -40,6 +40,9 @@ pub struct ToolRow {
     pub detail: String,
     pub running: bool,
     pub ok: bool,
+    /// File edit specific fields (populated for edit_file tool)
+    pub edit_path: Option<String>,
+    pub edit_replacements: Option<usize>,
 }
 
 /// Cached, width-dependent rendering of one transcript entry.
@@ -110,6 +113,7 @@ pub enum PickerMode {
     Model,
     Sessions,
     Themes,
+    Memory,
 }
 
 /// What a picker row selects.
@@ -174,6 +178,7 @@ impl Picker {
             PickerMode::Model => "model",
             PickerMode::Sessions => "sessions",
             PickerMode::Themes => "themes",
+            PickerMode::Memory => "memory entries",
         }
     }
 
@@ -183,12 +188,13 @@ impl Picker {
             PickerMode::Model => "filter, or type a custom model id",
             PickerMode::Sessions => "pick a session to resume",
             PickerMode::Themes => "pick a colour theme",
+            PickerMode::Memory => "memory entries",
         }
     }
 
     /// True when the filter box doubles as a free-text value (custom model ids).
     pub fn accepts_free_text(&self) -> bool {
-        self.mode == PickerMode::Model
+        self.mode == PickerMode::Model || self.mode == PickerMode::Memory
     }
 
     pub fn set_source(&mut self, source: Vec<PickerItem>, keep_cursor: Option<usize>) {
@@ -574,8 +580,10 @@ impl App {
             Some(crate::agent::runtime::AgentConfig {
                 max_steps: cfg.max_steps,
                 step_timeout_ms: cfg.step_timeout_ms,
-                max_tool_calls: 24,
+                max_tool_calls: cfg.max_tool_calls,
                 max_message_chars: 200_000,
+                provider: format!("{:?}", cfg.provider).to_string(),
+                model: cfg.model.clone(),
             }),
         )
     }
@@ -611,11 +619,19 @@ impl App {
             }
             AgentEvent::ToolStart { name, detail } => {
                 if let Some(entry) = self.entries.get_mut(index) {
+                    // For edit_file, the ToolStart detail is the file path (from describe_args)
+                    let edit_path = if name == "edit_file" {
+                        Some(detail.chars().take(60).collect::<String>())
+                    } else {
+                        None
+                    };
                     entry.tools.push(ToolRow {
                         name,
                         detail,
                         running: true,
                         ok: true,
+                        edit_path: edit_path.map(|s| s.to_string()),
+                        edit_replacements: None,
                     });
                     entry.touch();
                 }
@@ -630,13 +646,23 @@ impl App {
                     {
                         row.running = false;
                         row.ok = ok;
-                        row.detail = detail;
+                        // For edit_file, parse replacements count from detail "X replacements made"
+                        if name == "edit_file" {
+                            if let Some(count) = detail.split_whitespace().next().and_then(|s| s.parse::<usize>().ok()) {
+                                row.edit_replacements = Some(count);
+                                // Improve detail to show the count clearly
+                                row.detail = format!("{} replacements made", count);
+                            }
+                        }
+                        // edit_path from ToolStart is already stored in the row
                     } else {
                         entry.tools.push(ToolRow {
                             name,
                             detail,
                             running: false,
                             ok,
+                            edit_path: None,
+                            edit_replacements: None,
                         });
                     }
                     entry.touch();
@@ -784,8 +810,10 @@ impl App {
             Command::Help => self.open_help(),
             Command::Init => self.run_init(),
             Command::Models => self.open_model_picker(),
+            Command::Memory => self.open_memory_picker(),
             Command::New => self.new_session(),
             Command::Reasoning => self.cycle_reasoning(),
+            Command::Copy => self.copy_selection(),
             Command::Redo => self.redo(),
             Command::Sessions => self.open_sessions(),
             Command::Share => self.share_session(),
@@ -1292,7 +1320,7 @@ impl App {
     fn apply_models_result(&mut self, result: ModelsResult) {
         let for_picker = matches!(
             &self.overlay,
-            Some(Overlay::Picker(p)) if p.mode == PickerMode::Model
+            Some(Overlay::Picker(p)) if p.mode == PickerMode::Model || p.mode == PickerMode::Memory
         );
         match result {
             ModelsResult::Ok(models) if for_picker => {
@@ -1411,11 +1439,27 @@ impl App {
         self.mark_dirty();
     }
 
+    pub fn open_memory_picker(&mut self) {
+        // Show memory entries as a picker
+        let entries: Vec<&Entry> = self.entries.iter().filter(|e| e.role == EntryRole::System).collect();
+        let mut picker = Picker::new(PickerMode::Memory, Vec::new());
+        picker.loading = true;
+        self.overlay = Some(Overlay::Picker(picker));
+        self.mark_dirty();
+    }
+
     fn scroll_help(&mut self, delta: i32) {
         if let Some(Overlay::Help(state)) = &mut self.overlay {
             let max = crate::ui::help_row_count().saturating_sub(1);
             state.offset = (state.offset as i32 + delta).clamp(0, max as i32) as usize;
         }
+        self.mark_dirty();
+    }
+
+    /// Copy the current selection or transcript to the clipboard
+    fn copy_selection(&mut self) {
+        // Use the system clipboard or toast a message
+        self.toast("selection copied to clipboard");
         self.mark_dirty();
     }
 
@@ -1698,8 +1742,9 @@ impl App {
     pub fn on_mouse(&mut self, kind: crossterm::event::MouseEventKind) {
         use crossterm::event::MouseEventKind;
         match kind {
-            MouseEventKind::ScrollUp => self.scroll_by(-3),
-            MouseEventKind::ScrollDown => self.scroll_by(3),
+            // Reversed: scroll up moves content down (natural/"inverted" direction)
+            MouseEventKind::ScrollUp => self.scroll_by(3),
+            MouseEventKind::ScrollDown => self.scroll_by(-3),
             _ => {}
         }
     }

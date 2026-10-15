@@ -4,7 +4,7 @@ use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Paragraph, Block, BorderType};
 use ratatui::Frame;
 use std::collections::VecDeque;
 
@@ -418,10 +418,7 @@ pub const MAX_INNER_ROWS: usize = 8;
 /// Total composer height for a measured layout: the text rows plus a
 /// separator rule above and the hint line below (borderless design).
 pub fn rows(layout: &Layout) -> u16 {
-    (layout
-        .rows()
-        .clamp(MIN_INNER_ROWS, MAX_INNER_ROWS)
-        + 2) as u16
+    (layout.rows().clamp(MIN_INNER_ROWS, MAX_INNER_ROWS) + 2) as u16
 }
 
 /// Returns `(inner_width, Option<(row, x, y)>)` for the text cursor.
@@ -438,14 +435,29 @@ pub fn render(
     let busy = app.is_busy();
     let focused = app.overlay.is_none();
 
+    // Build a rounded block with a title bar.
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded);
+
+    // The content area inside the block border.
+    let inner = block.inner(area);
+
     // Permanent faint separator between the transcript and the input.
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            "\u{2500}".repeat(area.width as usize),
-            Style::default().fg(theme.border()),
-        )),
-        Rect { x: area.x, y: area.y, width: area.width, height: 1 },
-    );
+    // Draw within the block's inner area.
+    if inner.width >= 8 && inner.height >= 3 {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "\u{2500}".repeat(inner.width as usize),
+                Style::default().fg(theme.border()),
+            )),
+            Rect {
+                x: inner.x,
+                y: inner.y,
+                width: inner.width,
+                height: 1,
+            },
+        );
+    }
 
     // Hint line along the bottom, aligned with the prompt.
     let hint_text = if busy {
@@ -453,19 +465,22 @@ pub fn render(
     } else {
         "enter send \u{b7} ctrl+j newline \u{b7} / commands"
     };
-    frame.render_widget(
-        Paragraph::new(Span::styled(hint_text, theme.faint_style())),
-        Rect {
-            x: area.x + 2,
-            y: area.y + area.height - 1,
-            width: area.width.saturating_sub(2),
-            height: 1,
-        },
-    );
+    if inner.height >= 3 {
+        frame.render_widget(
+            Paragraph::new(Span::styled(hint_text, theme.faint_style())),
+            Rect {
+                x: inner.x + 2,
+                y: inner.y + inner.height - 1,
+                width: inner.width.saturating_sub(2),
+                height: 1,
+            },
+        );
+    }
 
-    let text_top = area.y + 1;
-    let text_h = area.height.saturating_sub(2) as usize; // rule + hint
+    let text_top = inner.y + 1;
+    let text_h = inner.height.saturating_sub(2) as usize; // rule + hint
     if text_h == 0 {
+        frame.render_widget(block, area);
         return None;
     }
 
@@ -479,11 +494,16 @@ pub fn render(
     );
     frame.render_widget(
         Paragraph::new(prompt),
-        Rect { x: area.x, y: text_top, width: 2, height: 1 },
+        Rect {
+            x: inner.x,
+            y: text_top,
+            width: 2,
+            height: 1,
+        },
     );
 
-    let text_x = area.x + 2;
-    let text_w = area.width.saturating_sub(2);
+    let text_x = inner.x + 2;
+    let text_w = inner.width.saturating_sub(2);
     if text_w == 0 {
         return None;
     }
@@ -499,7 +519,12 @@ pub fn render(
                 text::truncate(hint, text_w as usize),
                 theme.faint_style(),
             )),
-            Rect { x: text_x, y: text_top, width: text_w, height: 1 },
+            Rect {
+                x: text_x,
+                y: text_top,
+                width: text_w,
+                height: 1,
+            },
         );
         return Some((0, text_x, text_top));
     }
@@ -510,7 +535,12 @@ pub fn render(
     let visible: Vec<Line<'static>> = layout.lines.iter().skip(first).cloned().collect();
     frame.render_widget(
         Paragraph::new(ratatui::text::Text::from(visible)),
-        Rect { x: text_x, y: text_top, width: text_w, height: text_h as u16 },
+        Rect {
+            x: text_x,
+            y: text_top,
+            width: text_w,
+            height: text_h as u16,
+        },
     );
 
     let cursor_y = text_top + (cursor_row - first) as u16;

@@ -261,7 +261,7 @@ impl FileTools {
         args: WriteFileArgs,
     ) -> Result<WriteFileResult, Box<dyn Error + Send + Sync>> {
         let full_path = self.resolve(Some(&args.path))?;
-        
+
         // Open file with appropriate options (create if doesn't exist)
         let mut options = fs::OpenOptions::new();
         options.create(true);
@@ -270,11 +270,11 @@ impl FileTools {
         } else {
             options.write(true).truncate(true);
         }
-        
+
         let mut file = options.open(&full_path)?;
         let bytes = args.content.as_bytes();
         file.write_all(bytes)?;
-        
+
         Ok(WriteFileResult {
             bytes_written: bytes.len(),
             truncated: false, // We don't truncate the content we write
@@ -287,7 +287,7 @@ impl FileTools {
     ) -> Result<EditFileResult, Box<dyn Error + Send + Sync>> {
         let full_path = self.resolve(Some(&args.path))?;
         let mut content = fs::read_to_string(&full_path)?;
-        
+
         let mut replacements_made = 0;
         if args.replace_all {
             // Replace all occurrences
@@ -302,12 +302,10 @@ impl FileTools {
                 replacements_made = 1;
             }
         }
-        
+
         fs::write(&full_path, content)?;
-        
-        Ok(EditFileResult {
-            replacements_made,
-        })
+
+        Ok(EditFileResult { replacements_made })
     }
 }
 

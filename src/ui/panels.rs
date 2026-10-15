@@ -1,9 +1,6 @@
 use super::text;
 use super::theme::{glyph, Theme};
-use crate::app::{
-    Action, App, Overlay, OverlayKind, PickerItem, PickerValue,
-    CONNECT_FIELDS,
-};
+use crate::app::{Action, App, Overlay, OverlayKind, PickerItem, PickerValue, CONNECT_FIELDS};
 use crate::commands::Command;
 
 use ratatui::layout::Rect;
@@ -590,7 +587,6 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-
     let viewport = inner_h.saturating_sub(2); // two lines reserved for search
 
     // Handle empty filtered results gracefully
@@ -632,7 +628,11 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         cursor_line - viewport + 1
     };
-    let shown = lines.into_iter().skip(top + 2).take(viewport).collect::<Vec<_>>();
+    let shown = lines
+        .into_iter()
+        .skip(top + 2)
+        .take(viewport)
+        .collect::<Vec<_>>();
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)

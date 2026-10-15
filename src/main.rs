@@ -1,12 +1,5 @@
-mod agent;
-mod app;
-mod commands;
-mod config;
-mod session;
-mod tools;
-mod ui;
-
-use app::{App, Control};
+use nanomite::app::{App, Control};
+use nanomite::ui;
 use ratatui::crossterm::event::{Event, EventStream, KeyEventKind};
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -21,7 +14,7 @@ type Backend = CrosstermBackend<Stdout>;
 #[tokio::main]
 async fn main() -> io::Result<()> {
     install_panic_hook();
-    let cfg = config::Config::load();
+    let cfg = nanomite::config::Config::load();
     let handle = tokio::runtime::Handle::current();
 
     let mut terminal = setup_terminal()?;
@@ -89,7 +82,8 @@ fn run_control(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (target, seed) = match &control {
         Control::EditComposer(text) => {
-            let path = std::env::temp_dir().join(format!("nanomite-prompt-{}.md", std::process::id()));
+            let path =
+                std::env::temp_dir().join(format!("nanomite-prompt-{}.md", std::process::id()));
             std::fs::write(&path, text)?;
             (path, Some(text.clone()))
         }

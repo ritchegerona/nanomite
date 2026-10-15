@@ -173,8 +173,7 @@ impl WebTools {
         let status = resp.status().as_u16();
         let bytes = resp.bytes().map_err(|e| format!("read failed: {e}"))?;
         let truncated = bytes.len() > MAX_BODY;
-        let body =
-            String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_BODY)]).into_owned();
+        let body = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_BODY)]).into_owned();
         let title = extract_title(&body);
         let mut content = if body.trim_start().starts_with('<') {
             html_to_text(&body)
@@ -270,7 +269,11 @@ fn parse_ddg_lite(html: &str) -> Vec<WebSearchHit> {
             title = url.clone();
         }
         if url.starts_with("http") {
-            hits.push(WebSearchHit { title, url, snippet });
+            hits.push(WebSearchHit {
+                title,
+                url,
+                snippet,
+            });
         }
         cursor = text_end;
     }

@@ -122,7 +122,11 @@ pub fn markdown(src: &str, max_width: usize, st: &MarkdownStyles) -> Vec<Line<'s
     let max_width = max_width.max(8);
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut in_fence = false;
+    let mut in_table = false;
+    let mut table_header = true;
+    let mut table_rows: Vec<Vec<Span<'static>>> = Vec::new();
     let mut paragraph: Vec<Span<'static>> = Vec::new();
+    let mut table_col_widths: Vec<usize> = Vec::new(); // Track max width per column
 
     // Headings hug the text that follows them.
     let mut after_heading = false;
@@ -562,5 +566,25 @@ mod tests {
         assert_eq!(format_tokens(1_500), "1.5k");
         assert_eq!(format_duration(Duration::from_millis(250)), "250ms");
         assert_eq!(format_duration(Duration::from_millis(1_250)), "1.2s");
+    }
+
+    #[test]
+    fn markdown_renders_tables() {
+        let theme = Theme::detect();
+        let st = MarkdownStyles::new(&theme);
+        let out = markdown(
+            "| Name | Value |\n|------|-------|\n| Foo | 123 |\n| Bar | 456 |",
+            40,
+            &st,
+        );
+        let joined: String = out
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("Name"));
+        assert!(joined.contains("Value"));
+        assert!(joined.contains("Foo"));
+        assert!(joined.contains("Bar"));
     }
 }

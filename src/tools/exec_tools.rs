@@ -62,9 +62,7 @@ pub struct ExecTools {
 
 impl ExecTools {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self {
-            root: root.into(),
-        }
+        Self { root: root.into() }
     }
 
     /// Resolves a workspace-relative cwd; refuses anything that escapes it.
@@ -97,7 +95,9 @@ impl ExecTools {
         }
         let dir = self.resolve_cwd(args.cwd.as_deref())?;
         let timeout = Duration::from_millis(
-            args.timeout_ms.unwrap_or(60_000).clamp(1_000, MAX_TIMEOUT_MS),
+            args.timeout_ms
+                .unwrap_or(60_000)
+                .clamp(1_000, MAX_TIMEOUT_MS),
         );
 
         let mut cmd = Command::new("sh");
@@ -128,7 +128,9 @@ impl ExecTools {
             return Err("refused: empty command".into());
         }
         let timeout = Duration::from_millis(
-            args.timeout_ms.unwrap_or(30_000).clamp(1_000, MAX_TIMEOUT_MS),
+            args.timeout_ms
+                .unwrap_or(30_000)
+                .clamp(1_000, MAX_TIMEOUT_MS),
         );
 
         let mut cmd = Command::new("ssh");
@@ -164,7 +166,9 @@ fn run_with_timeout(
     timeout: Duration,
     label: &str,
 ) -> Result<(String, String, i32, bool), String> {
-    let mut child = cmd.spawn().map_err(|e| format!("{what} failed to spawn: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("{what} failed to spawn: {e}"))?;
     let mut stdout_pipe = child.stdout.take().expect("piped stdout");
     let mut stderr_pipe = child.stderr.take().expect("piped stderr");
 

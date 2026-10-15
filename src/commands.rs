@@ -24,6 +24,8 @@ pub enum Command {
     Thinking,
     Undo,
     Unshare,
+    Memory,
+    Copy,
     ProviderMenu,
 }
 
@@ -129,6 +131,12 @@ pub const COMMANDS: &[Entry] = &[
         kind: Command::Share,
     },
     Entry {
+        command: "/memory",
+        aliases: &["/mem"],
+        hint: "persistent memory status",
+        kind: Command::Memory,
+    },
+    Entry {
         command: "/themes",
         aliases: &["/theme"],
         hint: "switch colour theme",
@@ -151,6 +159,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "remove any shared copy",
         kind: Command::Unshare,
+    },
+    Entry {
+        command: "/copy",
+        aliases: &[],
+        hint: "copy selection to clipboard",
+        kind: Command::Copy,
     },
 ];
 
@@ -216,6 +230,7 @@ mod tests {
             "/export",
             "/help",
             "/init",
+            "/memory",
             "/models",
             "/new",
             "/redo",

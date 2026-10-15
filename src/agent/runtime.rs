@@ -1,13 +1,19 @@
 use crate::agent::provider::{
     AgentProvider, ChatMessage, DynError, Role, StreamEvent, ToolCall, ToolCallAccumulator, Usage,
 };
+use crate::memory::{TurnObservation, TurnOutcome};
 use crate::tools::exec_tools::{RunCommandArgs, SshRunArgs};
 use crate::tools::file_tools::{
     EditFileArgs, ListFilesArgs, ReadFileArgs, SearchArgs, WriteFileArgs,
 };
+use crate::tools::memory_tools::{
+    MemoryDeleteArgs, MemoryGetArgs, MemoryListArgs, MemorySaveArgs, MemorySearchArgs,
+    MemoryUpdateArgs,
+};
 use crate::tools::web_tools::{WebFetchArgs, WebSearchArgs};
 use crate::tools::ToolSet;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,15 +25,21 @@ pub struct AgentConfig {
     pub step_timeout_ms: u64,
     pub max_tool_calls: usize,
     pub max_message_chars: usize,
+    /// Labels used only for memory provenance - the runtime works with any
+    /// provider, so these never shape behaviour.
+    pub provider: String,
+    pub model: String,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            max_steps: 12,
+            max_steps: usize::MAX,
             step_timeout_ms: 120_000,
-            max_tool_calls: 24,
+            max_tool_calls: usize::MAX,
             max_message_chars: 200_000,
+            provider: String::new(),
+            model: String::new(),
         }
     }
 }
@@ -97,6 +109,14 @@ pub struct AgentRuntime {
     tools_schema: Arc<Vec<crate::agent::provider::Tool>>,
     system_prompt: String,
     config: AgentConfig,
+    /// Workspace root, remembered so memory retrieval can be project-scoped.
+    workspace: PathBuf,
+    /// Slugified workspace name: the default project key for memory.
+    project: Option<String>,
+    /// Stable per-session identifier for memory checkpoints.
+    session: String,
+    /// Remembered so `with_memory` can rebuild the tool set with memory attached.
+    max_file_bytes: usize,
 }
 
 impl AgentRuntime {
@@ -108,17 +128,91 @@ impl AgentRuntime {
     ) -> Self {
         let workspace: std::path::PathBuf = workspace.into();
         let tools = Arc::new(ToolSet::new(workspace.clone(), max_file_bytes));
+        let project = crate::memory::model::slugify(
+            &workspace
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
         Self {
             provider,
             tools,
             tools_schema: Arc::new(crate::agent::openai::tool_schemas()),
             system_prompt: crate::agent::openai::system_prompt(&workspace.display().to_string()),
             config: config.unwrap_or_default(),
+            workspace: workspace.clone(),
+            project: (!project.is_empty()).then_some(project),
+            session: crate::memory::security::new_id(
+                crate::memory::model::now(),
+                0,
+                &format!("session:{}", workspace.display()),
+            ),
+            max_file_bytes,
         }
+    }
+
+    /// Attaches the persistent memory engine: memory tools become available,
+    /// every turn retrieves bounded context before the request, and finished
+    /// turns feed the post-task capture policy.
+    ///
+    /// Memory is provider-independent by construction - nothing here mentions a
+    /// model, an endpoint or a prompt format.
+    pub fn with_memory(mut self, engine: Arc<crate::memory::MemoryEngine>) -> Self {
+        let mut tools = ToolSet::new(self.workspace.clone(), self.max_file_bytes);
+        tools.memory = Some(Arc::clone(&engine));
+        self.tools = Arc::new(tools);
+        let mut schemas = (*self.tools_schema).clone();
+        schemas.extend(crate::tools::memory_tools::memory_tool_schemas());
+        self.tools_schema = Arc::new(schemas);
+        self.system_prompt.push_str(
+            "\n\nPersistent memory is available through the memory_* tools. Search it when \
+             context from earlier sessions would help, and save durable facts, decisions \
+             and preferences the user states - never credentials or secrets.",
+        );
+        self
     }
 
     pub fn provider(&self) -> &Arc<dyn AgentProvider> {
         &self.provider
+    }
+
+    /// Appends bounded retrieved memory to the trusted system message, keeping
+    /// one system message (widest provider compatibility).
+    fn inject_memory_context(&self, messages: &mut [ChatMessage], input: &str) {
+        let Some(engine) = &self.tools.memory else {
+            return;
+        };
+        let context = engine.context(input, self.project.as_deref());
+        if context.text.is_empty() {
+            return;
+        }
+        if let Some(system) = messages.first_mut() {
+            if system.role == Role::System {
+                system.content.push_str("\n\n");
+                system.content.push_str(&context.text);
+            }
+        }
+    }
+
+    /// Feeds the finished turn to the post-task capture policy. Fire-and-forget:
+    /// observation is best-effort by contract and must never delay or fail the
+    /// turn it observes.
+    fn observe_turn(&self, outcome: TurnOutcome, input: &str, tools_used: &[String]) {
+        let Some(engine) = &self.tools.memory else {
+            return;
+        };
+        let observation = TurnObservation {
+            user_input: input.chars().take(2_000).collect(),
+            outcome,
+            tools: tools_used.to_vec(),
+            workspace: self.workspace.display().to_string(),
+            project: self.project.clone(),
+            provider: self.config.provider.clone(),
+            model: self.config.model.clone(),
+            session: self.session.clone(),
+        };
+        let engine = Arc::clone(engine);
+        tokio::task::spawn_blocking(move || engine.observe(&observation));
     }
 
     /// Runs one conversational turn, streaming progress to `tx`.
@@ -134,14 +228,22 @@ impl AgentRuntime {
 
         let mut messages = vec![ChatMessage::system(self.system_prompt.clone())];
         messages.extend_from_slice(history);
-        messages.push(ChatMessage::user(user_input));
+        messages.push(ChatMessage::user(user_input.clone()));
+
+        // Retrieve bounded memory context for this request. Retrieval never fails
+        // the turn, never grants tool permissions, and is framed by the engine as
+        // untrusted reference data - distinct from this trusted system prompt.
+        self.inject_memory_context(&mut messages, &user_input);
 
         let usage = std::cell::Cell::new(Usage::default());
         let mut tool_calls_made = 0usize;
         let mut steps = 0usize;
+        // Tool names this turn used, in first-use order, for the capture policy.
+        let mut tools_used: Vec<String> = Vec::new();
 
         loop {
             if cancel.is_cancelled() {
+                self.observe_turn(TurnOutcome::Interrupted, &user_input, &tools_used);
                 let _ = tx.send(AgentEvent::Interrupted);
                 return None;
             }
@@ -151,6 +253,7 @@ impl AgentRuntime {
                 } else {
                     format!("(stopped after {tool_calls_made} tool calls)")
                 };
+                self.observe_turn(TurnOutcome::Interrupted, &user_input, &tools_used);
                 let _ = tx.send(AgentEvent::Finished {
                     text: note,
                     usage: usage.take(),
@@ -173,10 +276,12 @@ impl AgentRuntime {
             } {
                 StepOutcome::Value(stream) => stream,
                 StepOutcome::ProviderError(e) => {
+                    self.observe_turn(TurnOutcome::Failed, &user_input, &tools_used);
                     let _ = tx.send(AgentEvent::Failed(e.to_string()));
                     return None;
                 }
                 StepOutcome::Elapsed => {
+                    self.observe_turn(TurnOutcome::Failed, &user_input, &tools_used);
                     let _ = tx.send(AgentEvent::Failed(format!(
                         "step timed out after {}s",
                         self.config.step_timeout_ms / 1000
@@ -224,10 +329,12 @@ impl AgentRuntime {
             }
 
             if cancel.is_cancelled() {
+                self.observe_turn(TurnOutcome::Interrupted, &user_input, &tools_used);
                 let _ = tx.send(AgentEvent::Interrupted);
                 return None;
             }
             if let Some(err) = failure {
+                self.observe_turn(TurnOutcome::Failed, &user_input, &tools_used);
                 let _ = tx.send(AgentEvent::Failed(err));
                 return None;
             }
@@ -247,6 +354,7 @@ impl AgentRuntime {
                 } else {
                     content
                 };
+                self.observe_turn(TurnOutcome::Completed, &user_input, &tools_used);
                 let _ = tx.send(AgentEvent::Finished {
                     text,
                     usage: usage.take(),
@@ -257,10 +365,14 @@ impl AgentRuntime {
 
             for call in calls {
                 if cancel.is_cancelled() {
+                    self.observe_turn(TurnOutcome::Interrupted, &user_input, &tools_used);
                     let _ = tx.send(AgentEvent::Interrupted);
                     return None;
                 }
                 tool_calls_made += 1;
+                if !tools_used.iter().any(|name| name == &call.name) {
+                    tools_used.push(call.name.clone());
+                }
                 let detail = describe_args(&call);
                 if tx
                     .send(AgentEvent::ToolStart {
@@ -344,7 +456,8 @@ fn run_tool(tools: &ToolSet, call: &ToolCall) -> Result<(String, String), String
                 .map_err(|e| format!("bad list_files arguments: {e}"))?;
             let where_ = parsed.path.clone().unwrap_or_else(|| ".".to_string());
             let result = tools
-                .files.list_files(parsed)
+                .files
+                .list_files(parsed)
                 .map_err(|e| format!("list_files failed: {e}"))?;
             let summary = format!(
                 "{} {} + {} dirs",
@@ -360,7 +473,8 @@ fn run_tool(tools: &ToolSet, call: &ToolCall) -> Result<(String, String), String
                 .map_err(|e| format!("bad read_file arguments: {e}"))?;
             let path = parsed.path.clone();
             let result = tools
-                .files.read_file(parsed)
+                .files
+                .read_file(parsed)
                 .map_err(|e| format!("read_file failed: {e}"))?;
             let suffix = if result.trimmed { " (truncated)" } else { "" };
             let summary = format!("{} lines{suffix}", result.lines);
@@ -368,11 +482,12 @@ fn run_tool(tools: &ToolSet, call: &ToolCall) -> Result<(String, String), String
             Ok((payload, format!("{} · {summary}", shorten(&path, 48))))
         }
         "search" => {
-            let parsed: SearchArgs = serde_json::from_value(args)
-                .map_err(|e| format!("bad search arguments: {e}"))?;
+            let parsed: SearchArgs =
+                serde_json::from_value(args).map_err(|e| format!("bad search arguments: {e}"))?;
             let query = parsed.query.clone();
             let result = tools
-                .files.search(parsed)
+                .files
+                .search(parsed)
                 .map_err(|e| format!("search failed: {e}"))?;
             let summary = if result.hits.is_empty() {
                 format!("no matches in {} files", result.files_scanned)
@@ -391,7 +506,8 @@ fn run_tool(tools: &ToolSet, call: &ToolCall) -> Result<(String, String), String
                 .map_err(|e| format!("bad write_file arguments: {e}"))?;
             let path = parsed.path.clone();
             let result = tools
-                .files.write_file(parsed)
+                .files
+                .write_file(parsed)
                 .map_err(|e| format!("write_file failed: {e}"))?;
             let summary = format!("{} bytes written", result.bytes_written);
             let payload = serde_json::to_string(&result).unwrap_or_default();
@@ -402,7 +518,8 @@ fn run_tool(tools: &ToolSet, call: &ToolCall) -> Result<(String, String), String
                 .map_err(|e| format!("bad edit_file arguments: {e}"))?;
             let path = parsed.path.clone();
             let result = tools
-                .files.edit_file(parsed)
+                .files
+                .edit_file(parsed)
                 .map_err(|e| format!("edit_file failed: {e}"))?;
             let summary = format!("{} replacements made", result.replacements_made);
             let payload = serde_json::to_string(&result).unwrap_or_default();
@@ -425,8 +542,8 @@ fn run_tool(tools: &ToolSet, call: &ToolCall) -> Result<(String, String), String
             Ok((payload, format!("{} · {summary}", shorten(&cmd, 40))))
         }
         "ssh_run" => {
-            let parsed: SshRunArgs = serde_json::from_value(args)
-                .map_err(|e| format!("bad ssh_run arguments: {e}"))?;
+            let parsed: SshRunArgs =
+                serde_json::from_value(args).map_err(|e| format!("bad ssh_run arguments: {e}"))?;
             let host = parsed.host.clone();
             let cmd = parsed.command.clone();
             let result = tools
@@ -459,7 +576,10 @@ fn run_tool(tools: &ToolSet, call: &ToolCall) -> Result<(String, String), String
                 if result.truncated { " (truncated)" } else { "" }
             );
             let payload = serde_json::to_string(&result).unwrap_or_default();
-            Ok((payload, format!("{} · {}", shorten(&url, 40), summary.trim())))
+            Ok((
+                payload,
+                format!("{} · {}", shorten(&url, 40), summary.trim()),
+            ))
         }
         "web_search" => {
             let parsed: WebSearchArgs = serde_json::from_value(args)
@@ -473,8 +593,94 @@ fn run_tool(tools: &ToolSet, call: &ToolCall) -> Result<(String, String), String
             let payload = serde_json::to_string(&result).unwrap_or_default();
             Ok((payload, format!("{} · {}", shorten(&query, 32), summary)))
         }
+        // Persistent memory. Every operation authorizes inside the engine via
+        // MemoryPolicy; these arms only adapt JSON and keep payloads bounded.
+        "memory_search" => {
+            let parsed: MemorySearchArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad memory_search arguments: {e}"))?;
+            let result = memory_error(tools.memory.as_ref(), |memory| memory.search(parsed))?;
+            let summary = if result.results.is_empty() {
+                "no matching memories".to_string()
+            } else {
+                format!("{} of {} memories", result.results.len(), result.total)
+            };
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "memory_save" => {
+            let parsed: MemorySaveArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad memory_save arguments: {e}"))?;
+            let content = parsed.content.clone();
+            let result = memory_error(tools.memory.as_ref(), |memory| memory.save(parsed))?;
+            let summary = if result.duplicate {
+                "already stored".to_string()
+            } else {
+                format!("saved as {}", result.id)
+            };
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, format!("{} · {}", shorten(&content, 40), summary)))
+        }
+        "memory_get" => {
+            let parsed: MemoryGetArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad memory_get arguments: {e}"))?;
+            let id = parsed.id.clone();
+            let result = memory_error(tools.memory.as_ref(), |memory| memory.get(parsed))?;
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, format!("{} · retrieved", shorten(&id, 20))))
+        }
+        "memory_update" => {
+            let parsed: MemoryUpdateArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad memory_update arguments: {e}"))?;
+            let id = parsed.id.clone();
+            let result = memory_error(tools.memory.as_ref(), |memory| memory.update(parsed))?;
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, format!("{} · updated", shorten(&id, 20))))
+        }
+        "memory_delete" => {
+            let parsed: MemoryDeleteArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad memory_delete arguments: {e}"))?;
+            let id = parsed.id.clone();
+            let result = memory_error(tools.memory.as_ref(), |memory| memory.delete(parsed))?;
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, format!("{} · deleted", shorten(&id, 20))))
+        }
+        "memory_list" => {
+            let parsed: MemoryListArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad memory_list arguments: {e}"))?;
+            let result = memory_error(tools.memory.as_ref(), |memory| memory.list(parsed))?;
+            let summary = if result.results.is_empty() {
+                "no memories stored".to_string()
+            } else {
+                format!("{} of {} memories", result.results.len(), result.total)
+            };
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
         other => Err(format!("unknown tool `{other}`")),
     }
+}
+
+/// Runs a memory tool when the engine is attached; reports a structured refusal
+/// when it is not. Tool failures are data for the model, never a crash.
+fn memory_error<T, F>(memory: Option<&Arc<crate::memory::MemoryEngine>>, f: F) -> Result<T, String>
+where
+    F: FnOnce(
+        &crate::tools::memory_tools::MemoryTools,
+    ) -> Result<T, crate::memory::model::MemoryError>,
+{
+    let Some(engine) = memory else {
+        return Err("memory is not available in this session".to_string());
+    };
+    let tools = crate::tools::memory_tools::MemoryTools::new(Arc::clone(engine));
+    f(&tools).map_err(|e| {
+        // Structured, machine-readable refusal: the model can adapt instead of
+        // retrying blindly.
+        format!(
+            "{{\"error\":{},\"code\":\"{}\"}}",
+            serde_json::to_string(&e.to_string()).unwrap_or_else(|_| "\"memory error\"".into()),
+            e.code()
+        )
+    })
 }
 
 fn describe_args(call: &ToolCall) -> String {
@@ -489,6 +695,11 @@ fn describe_args(call: &ToolCall) -> String {
                 .and_then(|q| q.as_str())
                 .map(|q| format!("\"{}\"", shorten(q, 32)))
         })
+        .or_else(|| {
+            args.get("id")
+                .and_then(|i| i.as_str())
+                .map(|i| shorten(i, 20))
+        })
         .unwrap_or_default()
 }
 
@@ -498,5 +709,221 @@ fn shorten(s: &str, max: usize) -> String {
     } else {
         let head: String = s.chars().take(max.saturating_sub(1)).collect();
         format!("{head}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::provider::{BoxStream, StreamEvent, Tool};
+    use crate::memory::model::{MemoryCategory, NewMemory, SearchQuery};
+    use crate::memory::policy::MemoryPolicy;
+    use crate::memory::MemoryEngine;
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+
+    /// Provider that records the messages it is handed, so tests can assert on
+    /// what the runtime actually sent.
+    struct RecordingProvider {
+        seen: Mutex<Vec<Vec<ChatMessage>>>,
+    }
+
+    impl RecordingProvider {
+        fn new() -> Self {
+            Self {
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn last_system(&self) -> String {
+            self.seen
+                .lock()
+                .unwrap()
+                .last()
+                .and_then(|messages| messages.first())
+                .map(|m| m.content.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    #[async_trait]
+    impl AgentProvider for RecordingProvider {
+        async fn stream_chat(
+            &self,
+            messages: Vec<ChatMessage>,
+            _tools: Option<Vec<Tool>>,
+        ) -> Result<BoxStream, DynError> {
+            self.seen.lock().unwrap().push(messages);
+            let stream = futures_util::stream::iter(vec![
+                Ok(StreamEvent::Delta("done".into())),
+                Ok(StreamEvent::Done),
+            ]);
+            Ok(Box::pin(stream))
+        }
+    }
+
+    fn memory_engine() -> Arc<MemoryEngine> {
+        let policy = MemoryPolicy {
+            mirror_markdown: false,
+            ..MemoryPolicy::default()
+        };
+        Arc::new(MemoryEngine::open_in_memory(policy).expect("engine"))
+    }
+
+    fn runtime_with(
+        provider: Arc<dyn AgentProvider>,
+        memory: Option<Arc<MemoryEngine>>,
+    ) -> AgentRuntime {
+        let runtime = AgentRuntime::new(
+            provider,
+            std::env::temp_dir().join("nanomite-runtime-test-workspace"),
+            64 * 1024,
+            None,
+        );
+        match memory {
+            Some(engine) => runtime.with_memory(engine),
+            None => runtime,
+        }
+    }
+
+    async fn run_turn(runtime: &AgentRuntime) {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        runtime
+            .run(
+                "what storage does this project use".into(),
+                &[],
+                Cancel::new(),
+                tx,
+            )
+            .await;
+        while rx.try_recv().is_ok() {}
+    }
+
+    #[tokio::test]
+    async fn retrieved_memory_is_injected_into_the_system_message() {
+        let memory = memory_engine();
+        memory
+            .save(&NewMemory::new(
+                MemoryCategory::Decision,
+                "nanomite stores memory in rusqlite",
+            ))
+            .unwrap();
+
+        let provider = Arc::new(RecordingProvider::new());
+        let runtime = runtime_with(
+            Arc::clone(&provider) as Arc<dyn AgentProvider>,
+            Some(Arc::clone(&memory)),
+        );
+        run_turn(&runtime).await;
+        let system = provider.last_system();
+        assert!(
+            system.contains(crate::memory::CONTEXT_OPEN),
+            "memory block must be framed as data:\n{system}"
+        );
+        assert!(
+            system.contains("rusqlite"),
+            "retrieved fact must be present:\n{system}"
+        );
+    }
+
+    #[tokio::test]
+    async fn turns_without_memory_send_a_plain_system_prompt() {
+        let provider = Arc::new(RecordingProvider::new());
+        let runtime = runtime_with(Arc::clone(&provider) as Arc<dyn AgentProvider>, None);
+        run_turn(&runtime).await;
+        assert!(!provider.last_system().contains(crate::memory::CONTEXT_OPEN));
+    }
+
+    #[tokio::test]
+    async fn finished_turns_feed_the_capture_policy() {
+        let memory = memory_engine();
+        let runtime = runtime_with(
+            Arc::new(RecordingProvider::new()),
+            Some(Arc::clone(&memory)),
+        );
+        run_turn(&runtime).await;
+        // The capture policy runs detached; poll briefly for the checkpoint.
+        for _ in 0..50 {
+            if memory
+                .search(&SearchQuery::text("checkpoint"), false)
+                .map(|(list, _)| list.total)
+                .unwrap_or(0)
+                > 0
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (list, _) = memory
+            .search(&SearchQuery::text("checkpoint"), false)
+            .unwrap();
+        assert!(list.total >= 1, "a session checkpoint must be captured");
+    }
+
+    #[test]
+    fn memory_tools_dispatch_through_the_tool_layer() {
+        let memory = memory_engine();
+        let runtime = runtime_with(
+            Arc::new(RecordingProvider::new()),
+            Some(Arc::clone(&memory)),
+        );
+        let tools = runtime.tools.clone();
+
+        let (payload, _) = run_tool(
+            &tools,
+            &ToolCall {
+                id: "t1".into(),
+                name: "memory_save".into(),
+                arguments: serde_json::json!({
+                    "category": "core",
+                    "content": "the release gate is cargo test"
+                })
+                .to_string(),
+                index: 0,
+            },
+        )
+        .expect("memory_save via run_tool");
+        assert!(payload.contains("\"id\""));
+
+        let (payload, _) = run_tool(
+            &tools,
+            &ToolCall {
+                id: "t2".into(),
+                name: "memory_search".into(),
+                arguments: serde_json::json!({ "query": "release gate" }).to_string(),
+                index: 0,
+            },
+        )
+        .expect("memory_search via run_tool");
+        assert!(payload.contains("cargo test"), "{payload}");
+
+        // Deletion without confirmation is refused; the refusal reaches the model
+        // as a structured error string on the tool-result path.
+        let refusal = run_tool(
+            &tools,
+            &ToolCall {
+                id: "t3".into(),
+                name: "memory_delete".into(),
+                arguments: serde_json::json!({ "id": "mem_x", "confirm": false }).to_string(),
+                index: 0,
+            },
+        )
+        .expect_err("the refusal reaches the model as data");
+        assert!(refusal.starts_with("{\"error\""), "{refusal}");
+    }
+
+    #[test]
+    fn memory_tools_are_absent_without_the_engine() {
+        let runtime = runtime_with(Arc::new(RecordingProvider::new()), None);
+        let outcome = run_tool(
+            &runtime.tools,
+            &ToolCall {
+                id: "t1".into(),
+                name: "memory_list".into(),
+                arguments: "{}".into(),
+                index: 0,
+            },
+        );
+        assert!(outcome.is_err(), "no engine means a clean refusal");
     }
 }

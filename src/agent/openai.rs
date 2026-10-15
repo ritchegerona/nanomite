@@ -39,60 +39,60 @@ impl OpenAiProvider {
         })
     }
 
-/// OpenAI wire format for a chat message. Tool calls must be nested under a
-/// `function` object with `id` + `type`, and tool results must carry
-/// `tool_call_id` - serde's derived shape is flat and providers reject it.
-fn message_to_wire(m: &ChatMessage) -> Value {
-    let role = match m.role {
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::Tool => "tool",
-        Role::System => "system",
-        Role::Unknown => "user",
-    };
-    let mut obj = serde_json::Map::new();
-    obj.insert("role".into(), json!(role));
-    match m.role {
-        Role::Tool => {
-            obj.insert("content".into(), json!(m.content));
-            if let Some(id) = &m.tool_call_id {
-                obj.insert("tool_call_id".into(), json!(id));
-            }
-        }
-        _ => {
-            if let Some(calls) = &m.tool_calls {
-                obj.insert(
-                    "content".into(),
-                    if m.content.is_empty() {
-                        Value::Null
-                    } else {
-                        json!(m.content)
-                    },
-                );
-                let arr: Vec<Value> = calls
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| {
-                        let id = if c.id.is_empty() {
-                            format!("call_{i}")
-                        } else {
-                            c.id.clone()
-                        };
-                        json!({
-                            "id": id,
-                            "type": "function",
-                            "function": { "name": c.name, "arguments": c.arguments }
-                        })
-                    })
-                    .collect();
-                obj.insert("tool_calls".into(), Value::Array(arr));
-            } else {
+    /// OpenAI wire format for a chat message. Tool calls must be nested under a
+    /// `function` object with `id` + `type`, and tool results must carry
+    /// `tool_call_id` - serde's derived shape is flat and providers reject it.
+    fn message_to_wire(m: &ChatMessage) -> Value {
+        let role = match m.role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::Tool => "tool",
+            Role::System => "system",
+            Role::Unknown => "user",
+        };
+        let mut obj = serde_json::Map::new();
+        obj.insert("role".into(), json!(role));
+        match m.role {
+            Role::Tool => {
                 obj.insert("content".into(), json!(m.content));
+                if let Some(id) = &m.tool_call_id {
+                    obj.insert("tool_call_id".into(), json!(id));
+                }
+            }
+            _ => {
+                if let Some(calls) = &m.tool_calls {
+                    obj.insert(
+                        "content".into(),
+                        if m.content.is_empty() {
+                            Value::Null
+                        } else {
+                            json!(m.content)
+                        },
+                    );
+                    let arr: Vec<Value> = calls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| {
+                            let id = if c.id.is_empty() {
+                                format!("call_{i}")
+                            } else {
+                                c.id.clone()
+                            };
+                            json!({
+                                "id": id,
+                                "type": "function",
+                                "function": { "name": c.name, "arguments": c.arguments }
+                            })
+                        })
+                        .collect();
+                    obj.insert("tool_calls".into(), Value::Array(arr));
+                } else {
+                    obj.insert("content".into(), json!(m.content));
+                }
             }
         }
+        Value::Object(obj)
     }
-    Value::Object(obj)
-}
 
     fn build_body(
         &self,

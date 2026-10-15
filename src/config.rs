@@ -197,7 +197,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         key_env: None,
         offline: true,
     },
-    /// Scripted provider: test-suite only, never in the shipped roster.
+    // Scripted provider: test-suite only, never in the shipped roster.
     #[cfg(test)]
     ProviderPreset {
         id: "scripted",
@@ -286,6 +286,7 @@ pub struct Config {
     /// Token budget used for the context gauge in the status bar.
     pub context_limit: usize,
     pub max_steps: usize,
+    pub max_tool_calls: usize,
     pub max_file_bytes: usize,
     pub step_timeout_ms: u64,
     pub workspace: PathBuf,
@@ -546,9 +547,14 @@ impl Config {
                 raw.max(1_000)
             },
             max_steps: if use_env {
-                num_env("NANOMITE_MAX_STEPS", 12)
+                num_env("NANOMITE_MAX_STEPS", usize::MAX)
             } else {
-                12
+                usize::MAX
+            },
+            max_tool_calls: if use_env {
+                num_env("NANOMITE_MAX_TOOL_CALLS", usize::MAX)
+            } else {
+                usize::MAX
             },
             max_file_bytes: if use_env {
                 num_env("NANOMITE_MAX_FILE_BYTES", 200_000)
@@ -748,7 +754,8 @@ mod tests {
         cfg.api_key = Some("sk-test-123".into());
         cfg.reasoning = Reasoning::High;
 
-        let path = std::env::temp_dir().join(format!("nanomite-config-{}.toml", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("nanomite-config-{}.toml", std::process::id()));
         cfg.save_to(&path);
 
         let loaded = Config::load_from(&path);

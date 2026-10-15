@@ -1,7 +1,5 @@
 use super::*;
-use crate::app::{
-    App, Entry, EntryRole, Overlay, OverlayKind, Phase, PickerMode, ToolRow,
-};
+use crate::app::{App, Entry, EntryRole, Overlay, OverlayKind, Phase, PickerMode, ToolRow};
 use crate::commands;
 use crate::config::Config;
 use ratatui::backend::TestBackend;
@@ -54,6 +52,8 @@ fn with_tool(name: &str, detail: &str, ok: bool) -> ToolRow {
         detail: detail.into(),
         running: false,
         ok,
+        edit_path: None,
+        edit_replacements: None,
     }
 }
 
@@ -493,11 +493,18 @@ async fn slash_opens_the_command_menu() {
     );
 
     // The menu lists every command and filters as you type.
-    assert_eq!(app.composer.value(), "", "the menu must not eat the composer");
+    assert_eq!(
+        app.composer.value(),
+        "",
+        "the menu must not eat the composer"
+    );
     type_text(&mut app, "con");
     let text = frame_text(&mut app, 100, 26);
     assert!(text.contains("/connect"), "filtered row missing:\n{text}");
-    assert!(!text.contains("/models"), "unmatched rows must drop:\n{text}");
+    assert!(
+        !text.contains("/models"),
+        "unmatched rows must drop:\n{text}"
+    );
 
     // Enter runs the highlighted command and closes the menu.
     press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
@@ -601,8 +608,6 @@ async fn provider_menu_switches_and_filters() {
 
 #[tokio::test]
 async fn provider_menu_filters_by_name() {
-    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-
     let mut app = test_app().await;
     app.open_provider_menu();
     type_text(&mut app, "olla");

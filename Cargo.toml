@@ -1,6 +1,6 @@
 [package]
 name = "nanomite"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -14,6 +14,42 @@ async-trait = "0.1.92"
 dirs = "7.0.0"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 unicode-width = "0.2"
+# Authoritative structured-memory store. `bundled` keeps the SQLite build
+# self-contained (no system libsqlite3 needed) and enables FTS5 full-text search.
+rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
+
+# --- file intelligence (extract layer) -------------------------------------
+# Every parser dependency is optional and pulled in by the matching
+# `format-*` feature so builds can drop a family of parsers entirely.
+csv = { version = "1.3", optional = true }
+quick-xml = { version = "0.42", optional = true }
+toml = { version = "1", optional = true }
+yaml-rust2 = { version = "0.13", optional = true }
+# Zip containers only need deflate; the default feature set drags in
+# aes/zstd/lzma/zopfli which we neither want to compile nor would ever run.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"], optional = true }
+pdf-extract = { version = "0.12", optional = true }
+
+[features]
+default = [
+    "format-structured",
+    "format-tabular",
+    "format-documents",
+    "format-pdf",
+]
+# JSON/YAML/TOML/XML parsing
+format-structured = ["dep:toml", "dep:yaml-rust2", "dep:quick-xml"]
+# CSV, XLSX, ODS (spreadsheets need zip + quick-xml)
+format-tabular = ["dep:csv", "dep:zip", "dep:quick-xml"]
+# DOCX, ODT (document containers need zip + quick-xml)
+format-documents = ["dep:zip", "dep:quick-xml"]
+# PDF text extraction
+format-pdf = ["dep:pdf-extract"]
+
+[[bench]]
+name = "perf"
+harness = false
+
 
 [profile.release]
 opt-level = 3

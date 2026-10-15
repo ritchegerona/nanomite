@@ -89,6 +89,8 @@ impl StoredSession {
                         detail: detail.trim_end_matches(" (failed)").to_string(),
                         running: false,
                         ok: !tool.ends_with("(failed)"),
+                        edit_path: None,
+                        edit_replacements: None,
                     });
                 }
                 entry
@@ -197,7 +199,7 @@ pub fn to_markdown(session: &StoredSession) -> String {
         if entry.text.trim().is_empty() {
             continue;
         }
-            let _ = writeln!(out, "{}", entry.text.trim());
+        let _ = writeln!(out, "{}", entry.text.trim());
     }
     out
 }
@@ -264,6 +266,8 @@ mod tests {
                 detail: "src · 3 files".into(),
                 running: false,
                 ok: true,
+                edit_path: None,
+                edit_replacements: None,
             });
             a
         }];
