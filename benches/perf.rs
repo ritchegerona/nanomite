@@ -263,8 +263,14 @@ fn phase_test() {
     let alower = text.to_ascii_lowercase();
     println!("whole to_ascii_lowercase: {:?}", t.elapsed());
     let t = Instant::now();
-    let n: usize = text.lines().filter(|l| l.to_lowercase().contains("model")).count();
-    println!("per-line to_lowercase+contains: {:?} (hits {n})", t.elapsed());
+    let n: usize = text
+        .lines()
+        .filter(|l| l.to_lowercase().contains("model"))
+        .count();
+    println!(
+        "per-line to_lowercase+contains: {:?} (hits {n})",
+        t.elapsed()
+    );
     let t = Instant::now();
     let n: usize = lower
         .lines()
@@ -279,5 +285,47 @@ fn phase_test() {
         .filter(|(lo, _)| lo.contains("model"))
         .count();
     println!("ascii-lowered zip contains: {:?} (hits {n})", t.elapsed());
+
+    // hand-rolled case-insensitive contains directly on original bytes
+    fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
+        if needle.is_empty() {
+            return true;
+        }
+        let n = needle.len();
+        if n > hay.len() {
+            return false;
+        }
+        let first = needle[0] | 32;
+        let mut i = 0;
+        let last = hay.len() - n;
+        while i <= last {
+            if hay[i] | 32 == first {
+                let mut ok = true;
+                for (h, w) in hay[i..i + n].iter().zip(needle) {
+                    if h | 32 != w | 32 {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+        false
+    }
+    let t = Instant::now();
+    let n: usize = text
+        .lines()
+        .filter(|l| contains_ci(l.as_bytes(), b"model"))
+        .count();
+    println!("hand-rolled ci contains: {:?} (hits {n})", t.elapsed());
+
+    let t = Instant::now();
+    let lower_a = text.to_ascii_lowercase();
+    let n: usize = lower_a.lines().filter(|l| l.contains("model")).count();
+    println!("ascii fold + plain contains: {:?} (hits {n})", t.elapsed());
+    drop(lower_a);
     drop(tree);
 }

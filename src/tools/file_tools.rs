@@ -165,19 +165,35 @@ impl FileTools {
         &self,
         args: ReadFileArgs,
     ) -> Result<ReadFileResult, Box<dyn Error + Send + Sync>> {
+        use std::io::{BufReader, Read, Seek, SeekFrom};
         let full_path = self.resolve(Some(&args.path))?;
-        let offset = args.offset.unwrap_or(0);
+        let file_len = fs::metadata(&full_path)
+            .map_err(|e| -> Box<dyn Error + Send + Sync> {
+                format!("{}: {e}", self.relative(&full_path)).into()
+            })?
+            .len() as usize;
+        let offset = args.offset.unwrap_or(0).min(file_len);
         let budget = self.max_file_bytes.min(args.limit.unwrap_or(usize::MAX));
 
-        let bytes = fs::read(&full_path).map_err(|e| -> Box<dyn Error + Send + Sync> {
+        // Stream only the requested window: a 4 KB slice of a 4 GB log must not
+        // materialise the whole file. Behaviour matches the previous whole-file
+        // read (same content, `trimmed`, `lines`; lossy UTF-8 at the edges).
+        let window = budget.min(file_len - offset);
+        let mut bytes = Vec::with_capacity(window.min(1024 * 1024));
+        let mut file = fs::File::open(&full_path).map_err(|e| -> Box<dyn Error + Send + Sync> {
             format!("{}: {e}", self.relative(&full_path)).into()
         })?;
+        file.seek(SeekFrom::Start(offset as u64))?;
+        BufReader::new(file)
+            .take(window as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|e| -> Box<dyn Error + Send + Sync> {
+                format!("{}: {e}", self.relative(&full_path)).into()
+            })?;
 
-        let slice = &bytes[offset.min(bytes.len())..];
-        let slice = &slice[..slice.len().min(budget)];
-        let trimmed = offset + slice.len() < bytes.len();
+        let trimmed = offset + bytes.len() < file_len;
 
-        let content = String::from_utf8_lossy(slice).into_owned();
+        let content = String::from_utf8_lossy(&bytes).into_owned();
         let lines = content.lines().count();
 
         Ok(ReadFileResult {
@@ -233,7 +249,18 @@ impl FileTools {
                 let text = String::from_utf8_lossy(&bytes);
                 let rel = self.relative(&path);
                 for (idx, line) in text.lines().enumerate() {
-                    if line.to_lowercase().contains(&needle) {
+                    // Pure-ASCII lines (the overwhelming majority in real
+                    // trees) take an allocation-free case-insensitive search;
+                    // for ASCII inputs the A–Z fold is exactly what Unicode
+                    // `to_lowercase` would do, so results are byte-identical
+                    // to the old `line.to_lowercase().contains(&needle)`.
+                    // Non-ASCII lines fall back to the Unicode path unchanged.
+                    let matched = if line.is_ascii() {
+                        contains_ci_ascii(line.as_bytes(), needle.as_bytes())
+                    } else {
+                        line.to_lowercase().contains(&needle)
+                    };
+                    if matched {
                         hits.push(SearchHit {
                             path: rel.clone(),
                             line: idx + 1,
@@ -353,6 +380,51 @@ fn looks_binary(bytes: &[u8]) -> bool {
             > probe.len() / 10
 }
 
+/// Allocation-free case-insensitive substring search for ASCII haystacks.
+///
+/// Semantics are byte-identical to `hay.to_lowercase().contains(needle)` when
+/// `hay` is pure ASCII (callers gate on `line.is_ascii()`): ASCII-fold equals
+/// Unicode lowercase for ASCII, and a non-ASCII needle can never match an
+/// ASCII haystack under either formulation. The probe byte uses `| 32`, which
+/// can only produce false positives (never false negatives); the verify uses
+/// an exact A–Z fold so control characters (`\r` vs `-`, `0x10` vs `0`) are
+/// never confused.
+#[inline]
+fn fold_ascii(b: u8) -> u8 {
+    if b.wrapping_sub(b'A') < 26 {
+        b | 32
+    } else {
+        b
+    }
+}
+
+fn contains_ci_ascii(hay: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let n = needle.len();
+    if n > hay.len() {
+        return false;
+    }
+    let first = needle[0] | 32;
+    let last = hay.len() - n;
+    let mut i = 0;
+    while i <= last {
+        if hay[i] | 32 == first {
+            let window = &hay[i..i + n];
+            if window
+                .iter()
+                .zip(needle)
+                .all(|(h, w)| fold_ascii(*h) == fold_ascii(*w))
+            {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,5 +443,86 @@ mod tests {
         let tools = FileTools::new(std::env::temp_dir(), 1024);
         let err = tools.resolve(Some("../etc/passwd")).unwrap_err();
         assert!(err.to_string().contains("escapes the workspace"));
+    }
+
+    /// The allocation-free ASCII matcher must agree with the old
+    /// `hay.to_lowercase().contains(&needle.to_lowercase())` semantics.
+    #[test]
+    fn contains_ci_ascii_matches_reference() {
+        let cases: [(&str, &str); 15] = [
+            ("The Model Registry", "model"),
+            ("MODEL registry", "model"),
+            ("nothing here", "model"),
+            ("mo", "model"),
+            ("model", "model"),
+            ("a model", ""),
+            ("123 models!", "MODEL"),
+            ("", "model"),
+            ("", ""),
+            ("mod el", "model"),
+            ("mode", "model"),
+            ("MODELLING", "model"),
+            ("m0del", "model"),
+            ("a\r-b", "-b"),  // control char must not fold onto '-'
+            ("\x10 x", "0"),  // 0x10|32 == '0'|32: probe hit, verify rejects
+        ];
+        for (hay, needle) in &cases {
+            let fast = contains_ci_ascii(hay.as_bytes(), needle.as_bytes());
+            let reference = hay.to_lowercase().contains(&needle.to_lowercase());
+            assert_eq!(
+                fast, reference,
+                "fast path diverges from reference for {hay:?} / {needle:?}"
+            );
+        }
+    }
+
+    /// End-to-end: case-insensitive hits still found through the public tool,
+    /// with the hit text carrying the file's original casing.
+    #[test]
+    fn search_finds_case_insensitive_hits() {
+        let dir = std::env::temp_dir().join(format!("nanomite-search-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.txt"), "The QUICK brown Fox\nnothing to see\nQUOKKA\n").unwrap();
+        let tools = FileTools::new(dir.clone(), 1024 * 1024);
+        let result = tools
+            .search(SearchArgs {
+                query: "qu".into(),
+                path: None,
+            })
+            .unwrap();
+        assert_eq!(result.hits.len(), 2);
+        assert_eq!(result.hits[0].line, 1);
+        assert_eq!(result.hits[0].text, "The QUICK brown Fox");
+        assert_eq!(result.hits[1].line, 3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Whole-file lowercasing keeps line structure: every line of the lowered
+    /// text pairs with the same-index original line (the invariant the search
+    /// fast path relies on).
+    #[test]
+    fn lowercasing_preserves_line_structure() {
+        let cases = [
+            "The QUICK brown Fox\nnothing to see\nQUOKKA\n",
+            "«» une ligne UNICODE ÜBER Alles — идёт дождь\nİstanbul ΣΣΣ end\nplain\n",
+            "Σ at start\nmid ΣΣ mid\nend Σ",
+            "",
+            "\n\n\n",
+        ];
+        for case in &cases {
+            let lower = case.to_lowercase();
+            assert_eq!(
+                case.lines().count(),
+                lower.lines().count(),
+                "line count diverged for {case:?}"
+            );
+            for (orig, low) in case.lines().zip(lower.lines()) {
+                assert_eq!(
+                    orig.to_lowercase(),
+                    low,
+                    "per-line lowercase diverged from whole-text lowercase for {case:?}"
+                );
+            }
+        }
     }
 }

@@ -432,14 +432,32 @@ mod structured {
 
     /// Renders a TOML value as JSON text: serde_json is already a hard
     /// dependency, and JSON is unambiguous for retrieval.
+    ///
+    /// Scalars skip the `serde_json::Value` intermediate and the pretty
+    /// printer: `to_string_pretty` renders a scalar exactly like `to_string`
+    /// (quoted/escaped string, `ryu` float, `true`/`false`, `null` for
+    /// non-finite floats), so the fast path is byte-identical. Only arrays and
+    /// tables keep the pretty path — that is where indentation exists.
     fn render_toml_value(value: &toml::Value) -> String {
-        let as_json = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
-        let mut out = serde_json::to_string_pretty(&as_json).unwrap_or_default();
-        if out.len() > 64 * 1024 {
+        let scalar = match value {
+            toml::Value::String(s) => serde_json::to_string(s).unwrap_or_default(),
+            toml::Value::Integer(i) => i.to_string(),
+            toml::Value::Float(f) => serde_json::to_string(f).unwrap_or_default(),
+            toml::Value::Boolean(b) => b.to_string(),
+            toml::Value::Datetime(d) => serde_json::to_string(&d.to_string()).unwrap_or_default(),
+            _ => {
+                let as_json = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
+                serde_json::to_string_pretty(&as_json).unwrap_or_default()
+            }
+        };
+        if scalar.len() > 64 * 1024 {
+            let mut out = scalar;
             out.truncate(64 * 1024);
             out.push_str("\n… (truncated)");
+            out
+        } else {
+            scalar
         }
-        out
     }
 
     /// Streaming XML: one section per element at depth <= 2, text nodes and
