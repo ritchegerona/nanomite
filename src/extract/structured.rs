@@ -215,6 +215,9 @@ fn record_title(value: &serde_json::Value) -> Option<String> {
 }
 
 #[cfg(feature = "format-structured")]
+// Inner module keeps the file's layout mirrors docs/ARCHITECTURE.md; the
+// shared name is intentional (module inception), so silence the lint.
+#[allow(clippy::module_inception)]
 mod structured {
     use super::*;
     use quick_xml::events::Event;
@@ -313,7 +316,7 @@ mod structured {
 
     fn render_yaml_into(y: &yaml_rust2::Yaml, depth: usize, out: &mut String) {
         if depth > 12 || out.len() > 64 * 1024 {
-            out.push_str("…");
+            out.push('…');
             return;
         }
         match y {
@@ -453,7 +456,7 @@ mod structured {
         let mut depth = 0usize;
 
         loop {
-            if elements % 512 == 0 {
+            if elements.is_multiple_of(512) {
                 sink.tick()?;
             }
             if elements >= sink.limits().max_xml_elements {

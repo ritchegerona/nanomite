@@ -1,9 +1,245 @@
-#![feature(test)]
+//! Stable profiling harness for nanomite's hot paths.
+//!
+//! Run with `cargo bench` (the `bench` profile is release-like). The harness is
+//! dependency-free and measures median ns/op over repeated batches after a
+//! warmup, which is stable enough for before/after optimization comparisons.
+//!
+//! Paths measured (chosen because real sessions hit them constantly):
+//! - `file_tools::search`  — case-insensitive scan across a source tree
+//! - `file_tools::read_file` — slice of a large file
+//! - `extract`             — text / code / json / toml / csv extraction
+//! - `ui::text::wrap_spans`— chat render wrapping cost
+//! - `fingerprint`         — per-file content hashing
 
-extern crate test;
-use nanomite::*; // or just a dummy
+use nanomite::extract::{self, ExtractionLimits};
+use nanomite::tools::file_tools::{FileTools, ReadFileArgs, SearchArgs};
+use nanomite::ui::text::wrap_spans;
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
 
-#[bench]
-fn bench_nothing(b: &mut test::Bencher) {
-    b.iter(|| {});
+fn bench<F: FnMut() + 'static>(name: &'static str, iters: usize, mut f: F) {
+    // Warmup: page cache, allocator arenas, branch predictors.
+    for _ in 0..iters.min(5) {
+        f();
+    }
+    let batches = 7;
+    let mut samples = Vec::with_capacity(batches);
+    for _ in 0..batches {
+        let start = Instant::now();
+        for _ in 0..iters {
+            f();
+        }
+        samples.push(start.elapsed().as_nanos() / iters as u128);
+    }
+    samples.sort_unstable();
+    let med = samples[samples.len() / 2];
+    println!(
+        "{:<34} {:>10} ns/op   ({:.2} ms/op @ {} iters/batch)",
+        name,
+        med,
+        med as f64 / 1_000_000.0,
+        iters
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fixture builders (all under a scratch temp dir, removed at the end)
+// ---------------------------------------------------------------------------
+
+const LINES_PER_FILE: usize = 300;
+const TREE_FILES: usize = 300;
+
+/// One fake Rust file body: mixed case so a naive fast path would be wrong.
+fn rust_source(idx: usize) -> String {
+    let mut s = String::with_capacity(LINES_PER_FILE * 48);
+    s.push_str(&format!("// module {idx} — Model Registry sample\n"));
+    for i in 0..LINES_PER_FILE {
+        match i % 8 {
+            0 => s.push_str(&format!("pub struct Model{idx}_{i} {{ id: u64 }}\n")),
+            1 => s.push_str(&format!(
+                "    fn model_step(&self, delta: usize) -> usize {{ delta + {} }}\n",
+                i % 7
+            )),
+            2 => s.push_str("    // TODO(Model): wire the streaming accumulator later\n"),
+            3 => s.push_str(&format!("    let payload = Payload {{ weight: {i}.5 }};\n")),
+            4 => s.push_str("        self.registry.insert(key, value.clone());\n"),
+            5 => s.push_str("«» une ligne UNICODE ÜBER Alles — идёт дождь\n"),
+            6 => s.push_str(&format!("}} // end Model{idx}_{i}\n")),
+            _ => s.push_str("    #[derive(Debug, Clone)]\n"),
+        }
+    }
+    s
+}
+
+fn prose(idx: usize) -> String {
+    (0..LINES_PER_FILE)
+        .map(|i| {
+            format!(
+                "Paragraph {idx}.{i}: the Model registry keeps every Streaming Agent honest.\n"
+            )
+        })
+        .collect()
+}
+
+struct Scratch {
+    root: PathBuf,
+}
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        let root =
+            std::env::temp_dir().join(format!("nanomite-bench-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("scratch dir");
+        Scratch { root }
+    }
+
+    fn write(&self, name: &str, body: &str) -> PathBuf {
+        let p = self.root.join(name);
+        fs::write(&p, body).expect("write fixture");
+        p
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn main() {
+    println!("nanomite perf harness — stable, zero-dep\n");
+
+    // -- search --------------------------------------------------------------
+    let tree = Scratch::new("tree");
+    let src = tree.root.join("src");
+    fs::create_dir_all(&src).unwrap();
+    for i in 0..TREE_FILES {
+        fs::write(src.join(format!("mod{i}.rs")), rust_source(i)).unwrap();
+    }
+    let ft = Arc::new(FileTools::new(tree.root.clone(), 4 * 1024 * 1024));
+
+    {
+        let ft = Arc::clone(&ft);
+        bench("search/300files hit", 3, move || {
+            let r = ft
+                .search(SearchArgs {
+                    query: "model".into(),
+                    path: None,
+                })
+                .expect("search");
+            assert!(!r.hits.is_empty());
+        });
+    }
+    {
+        let ft = Arc::clone(&ft);
+        bench("search/300files miss", 3, move || {
+            let r = ft
+                .search(SearchArgs {
+                    query: "zzzqqqxxx".into(),
+                    path: None,
+                })
+                .expect("search");
+            assert!(r.hits.is_empty());
+        });
+    }
+
+    // -- read_file -----------------------------------------------------------
+    let big = Scratch::new("big");
+    let big_path = big.write("big.rs", &rust_source(9_999).repeat(9)); // ~1.3 MB
+    let ft2 = Arc::new(FileTools::new(big.root.clone(), 64 * 1024 * 1024));
+    {
+        let ft2 = Arc::clone(&ft2);
+        let path = big_path.display().to_string();
+        bench("read_file/1.3MB slice 4KB", 20, move || {
+            let r = ft2
+                .read_file(ReadFileArgs {
+                    path: path.clone(),
+                    offset: Some(600_000),
+                    limit: Some(4_096),
+                })
+                .expect("read_file");
+            assert!(!r.content.is_empty());
+        });
+    }
+
+    // -- extract -------------------------------------------------------------
+    let ext = Scratch::new("extract");
+    let text_p = ext.write("doc.txt", &prose(1).repeat(9));
+    let code_p = ext.write("code.rs", &rust_source(2).repeat(9));
+    let json_v = serde_json::json!({
+        "name": "nanomite", "presets": (0..400).map(|i|
+            serde_json::json!({"id": i, "name": format!("Model{i}"), "tags": ["a","b"], "score": i as f64 / 7.0})
+        ).collect::<Vec<_>>()
+    });
+    let json_p = ext.write("data.json", &serde_json::to_string_pretty(&json_v).unwrap());
+    let mut toml = String::from("[package]\nname = \"nanomite\"\n");
+    for i in 0..400 {
+        toml.push_str(&format!(
+            "[preset.{i}]\nname = \"Model{i}\"\nmodel = \"m/{i}\"\nactive = true\nscore = {}.5\n",
+            i % 97
+        ));
+    }
+    let toml_p = ext.write("cfg.toml", &toml);
+    let mut csv = String::from("id,name,score,active\n");
+    for i in 0..4_000 {
+        csv.push_str(&format!("{i},Model{i},{},true\n", i as f64 / 13.0));
+    }
+    let csv_p = ext.write("rows.csv", &csv);
+    let limits = ExtractionLimits::default();
+
+    macro_rules! extract_bench {
+        ($label:expr, $path:expr) => {{
+            let path: PathBuf = $path.to_path_buf();
+            let limits = limits.clone();
+            bench($label, 10, move || {
+                let d = extract::extract_path(&path, &limits).expect("extract");
+                assert!(!d.text.is_empty());
+            });
+        }};
+    }
+    extract_bench!("extract/text 270KB", &text_p);
+    extract_bench!("extract/code 270KB", &code_p);
+    extract_bench!("extract/json ~160KB", &json_p);
+    extract_bench!("extract/toml ~20KB", &toml_p);
+    extract_bench!("extract/csv 4k rows", &csv_p);
+
+    // -- wrap ----------------------------------------------------------------
+    let mut chat_line: Vec<Span<'static>> = Vec::new();
+    for i in 0..40 {
+        if i % 3 == 0 {
+            chat_line.push(Span::raw(format!("word{i} ")));
+        } else if i % 3 == 1 {
+            chat_line.push(Span::styled(
+                format!("styled_token_{} ", i),
+                Style::new().fg(Color::Cyan),
+            ));
+        } else {
+            chat_line.push(Span::raw("a slightly longer run of plain text here "));
+        }
+    }
+    {
+        let base = chat_line;
+        bench("wrap_spans/40spans w=100", 200, move || {
+            let lines = wrap_spans(base.clone(), 100);
+            assert!(!lines.is_empty());
+        });
+    }
+
+    // -- fingerprint ---------------------------------------------------------
+    let fp_body = rust_source(7).repeat(30); // ~1 MB
+    let fp_p = ext.write("fp.txt", &fp_body);
+    {
+        let path = fp_p;
+        bench("fingerprint_file/1MB", 20, move || {
+            let fp = extract::fingerprint_file(&path).expect("fingerprint");
+            assert!(fp.len() == 16);
+        });
+    }
+
+    println!("\nDone.");
 }

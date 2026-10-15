@@ -4,7 +4,7 @@ use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Block, BorderType};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 use ratatui::Frame;
 use std::collections::VecDeque;
 
@@ -286,24 +286,14 @@ impl Layout {
         let mut row_starts = Vec::new();
         let mut char_pos = 0usize;
 
-        for (i, l) in logical.iter().enumerate() {
-            let rows = wrap_ranges(l, width);
-            for (r, (start, end)) in rows.iter().enumerate() {
-                if i > 0 && r == 0 {
-                    row_starts.push(char_pos);
-                    lines.push(Line::default());
-                }
+        for l in logical.iter() {
+            // `wrap_ranges` never returns an empty vec — an empty logical line
+            // still yields one (empty) visual row, so a trailing newline gets
+            // its row and interior blanks render as real blank rows.
+            for (start, end) in wrap_ranges(l, width) {
                 row_starts.push(char_pos + start);
-                let content: String = l.chars().skip(*start).take(end - start).collect();
+                let content: String = l.chars().skip(start).take(end - start).collect();
                 lines.push(Line::from(Span::styled(content, style)));
-            }
-            if rows.is_empty() {
-                if i > 0 {
-                    row_starts.push(char_pos);
-                    lines.push(Line::default());
-                }
-                row_starts.push(char_pos);
-                lines.push(Line::from(Span::styled(String::new(), style)));
             }
             char_pos += l.chars().count() + 1;
         }
@@ -415,13 +405,14 @@ pub const MIN_INNER_ROWS: usize = 3;
 /// Longest composer expansion before the viewport starts scrolling internally.
 pub const MAX_INNER_ROWS: usize = 8;
 
-/// Total composer height for a measured layout: the text rows plus a
-/// separator rule above and the hint line below (borderless design).
+/// Total composer height for a measured layout: the text rows plus the
+/// rounded border. Hints live on the bottom border, so the inner rows belong
+/// entirely to the text.
 pub fn rows(layout: &Layout) -> u16 {
     (layout.rows().clamp(MIN_INNER_ROWS, MAX_INNER_ROWS) + 2) as u16
 }
 
-/// Returns `(inner_width, Option<(row, x, y)>)` for the text cursor.
+/// Returns `(first_visible_row, x, y)` for the text cursor.
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -435,54 +426,45 @@ pub fn render(
     let busy = app.is_busy();
     let focused = app.overlay.is_none();
 
-    // Build a rounded block with a title bar.
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded);
-
-    // The content area inside the block border.
-    let inner = block.inner(area);
-
-    // Permanent faint separator between the transcript and the input.
-    // Draw within the block's inner area.
-    if inner.width >= 8 && inner.height >= 3 {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "\u{2500}".repeat(inner.width as usize),
-                Style::default().fg(theme.border()),
-            )),
-            Rect {
-                x: inner.x,
-                y: inner.y,
-                width: inner.width,
-                height: 1,
-            },
-        );
-    }
-
-    // Hint line along the bottom, aligned with the prompt.
+    // Rounded block: the workspace path sits on the top border and the key
+    // hints on the bottom one. The border itself separates transcript from
+    // input, so every inner row belongs to the prompt text.
     let hint_text = if busy {
         "esc interrupts \u{b7} type to queue the next turn"
     } else {
         "enter send \u{b7} ctrl+j newline \u{b7} / commands"
     };
-    if inner.height >= 3 {
-        frame.render_widget(
-            Paragraph::new(Span::styled(hint_text, theme.faint_style())),
-            Rect {
-                x: inner.x + 2,
-                y: inner.y + inner.height - 1,
-                width: inner.width.saturating_sub(2),
-                height: 1,
-            },
+    let path_w = (area.width as usize).saturating_sub(6).max(8);
+    let hint_w = (area.width as usize).saturating_sub(4);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if focused {
+            theme.border_focus()
+        } else {
+            theme.border()
+        }))
+        .title(Line::from(Span::styled(
+            format!(" {} ", text::display_path(&app.cwd, path_w)),
+            theme.faint_style(),
+        )))
+        .title_bottom(
+            Line::from(Span::styled(
+                text::truncate(hint_text, hint_w),
+                theme.faint_style(),
+            ))
+            .right_aligned(),
         );
-    }
 
-    let text_top = inner.y + 1;
-    let text_h = inner.height.saturating_sub(2) as usize; // rule + hint
-    if text_h == 0 {
-        frame.render_widget(block, area);
+    // The content area inside the block border.
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.width < 4 || inner.height == 0 {
         return None;
     }
+
+    let text_top = inner.y;
+    let text_h = inner.height as usize;
 
     let prompt = Span::styled(
         format!("{} ", glyph::PROMPT),
@@ -504,9 +486,6 @@ pub fn render(
 
     let text_x = inner.x + 2;
     let text_w = inner.width.saturating_sub(2);
-    if text_w == 0 {
-        return None;
-    }
 
     if app.composer.is_empty() {
         let hint = if busy {
@@ -598,5 +577,25 @@ mod tests {
         let layout = c.layout(10, Style::default());
         assert_eq!(layout.rows(), 3);
         assert_eq!(layout.cursor, (2, 3));
+    }
+
+    #[test]
+    fn multi_line_layout_has_no_phantom_rows() {
+        let mut c = Composer::new();
+        c.insert_str("alpha\nbravo\ncharlie");
+        let layout = c.layout(20, Style::default());
+        let flat: Vec<String> = layout.lines.iter().map(|l| l.to_string()).collect();
+        assert_eq!(flat, ["alpha", "bravo", "charlie"]);
+        assert_eq!(layout.rows(), 3);
+    }
+
+    #[test]
+    fn trailing_newline_gets_its_own_row() {
+        let mut c = Composer::new();
+        c.insert_str("alpha\n");
+        let layout = c.layout(20, Style::default());
+        assert_eq!(layout.rows(), 2);
+        // The caret rests on the empty row after the newline.
+        assert_eq!(layout.cursor, (1, 0));
     }
 }

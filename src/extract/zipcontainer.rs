@@ -142,10 +142,8 @@ pub fn entry_names(
     let scan_cap = 4096.min(archive.len());
     let mut names = Vec::with_capacity(scan_cap.min(1024));
     for i in 0..scan_cap {
-        if i % 256 == 0 {
-            if budget.deadline.expired() {
-                return Err(ExtractError::Timeout("zip directory scan timed out".into()));
-            }
+        if i % 256 == 0 && budget.deadline.expired() {
+            return Err(ExtractError::Timeout("zip directory scan timed out".into()));
         }
         let name = entry_name(archive, i)?;
         validate_entry_name(&name)?;

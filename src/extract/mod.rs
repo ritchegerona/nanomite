@@ -120,8 +120,10 @@ impl fmt::Display for Format {
 /// Structural location of a section inside its source, when the format knows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Locator {
     /// No location information (plain prose, HTML body, ...).
+    #[default]
     None,
     /// 1-based inclusive line range in the extracted text's source.
     Lines { start: usize, end: usize },
@@ -135,12 +137,6 @@ pub enum Locator {
     },
     /// 1-based row range in a row-oriented source (CSV, JSONL).
     Rows { start: usize, end: usize },
-}
-
-impl Default for Locator {
-    fn default() -> Self {
-        Locator::None
-    }
 }
 
 impl Locator {
@@ -537,6 +533,9 @@ impl Default for ExtractorRegistry {
 
 impl ExtractorRegistry {
     /// Every extractor compiled into this build (feature-gated ones included).
+    // The number of pushed extractors depends on the active cargo features,
+    // so the capacity is unknowable up front — silence vec_init_then_push.
+    #[allow(clippy::vec_init_then_push)]
     pub fn builtin() -> Self {
         let mut extractors: Vec<std::sync::Arc<dyn Extractor>> = Vec::new();
         // Containers first: they must claim their formats before any generic

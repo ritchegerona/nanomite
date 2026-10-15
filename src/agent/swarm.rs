@@ -8,6 +8,12 @@ pub struct Swarm {
     providers: Vec<Arc<dyn AgentProvider>>,
 }
 
+impl Default for Swarm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Swarm {
     /// Create an empty swarm.
     pub fn new() -> Self {

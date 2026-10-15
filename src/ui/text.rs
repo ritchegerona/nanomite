@@ -118,15 +118,18 @@ impl MarkdownStyles {
 }
 
 /// Renders a pragmatic subset of markdown into wrapped, styled lines.
+///
+/// Tables render one aligned line per row; over-wide columns are truncated to
+/// fit the viewport instead of being re-wrapped into prose.
 pub fn markdown(src: &str, max_width: usize, st: &MarkdownStyles) -> Vec<Line<'static>> {
     let max_width = max_width.max(8);
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut in_fence = false;
     let mut in_table = false;
-    let mut table_header = true;
-    let mut table_rows: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut has_header = false;
+    let mut table_rows: Vec<Vec<String>> = Vec::new();
+    let mut table_col_widths: Vec<usize> = Vec::new(); // Max content width per column
     let mut paragraph: Vec<Span<'static>> = Vec::new();
-    let mut table_col_widths: Vec<usize> = Vec::new(); // Track max width per column
 
     // Headings hug the text that follows them.
     let mut after_heading = false;
@@ -138,6 +141,23 @@ pub fn markdown(src: &str, max_width: usize, st: &MarkdownStyles) -> Vec<Line<'s
 
     for raw in src.replace('\r', "").split('\n') {
         let trimmed = raw.trim_end();
+        let is_table_row = trimmed.trim_start().starts_with('|');
+
+        // Any non-table line closes a table in progress.
+        if in_table && !is_table_row {
+            flush_table(
+                &table_rows,
+                &table_col_widths,
+                has_header,
+                max_width,
+                st,
+                &mut out,
+            );
+            in_table = false;
+            has_header = false;
+            table_rows.clear();
+            table_col_widths.clear();
+        }
 
         // Fenced code blocks.
         if let Some(lang) = fence_marker(trimmed) {
@@ -165,6 +185,31 @@ pub fn markdown(src: &str, max_width: usize, st: &MarkdownStyles) -> Vec<Line<'s
         }
 
         let line = trimmed.trim_start();
+
+        // Table rows: collect cells, track column widths, skip the divider row.
+        if is_table_row {
+            if !in_table {
+                flush(&mut paragraph, &mut out);
+                in_table = true;
+                has_header = false;
+            }
+            if is_table_separator(line) {
+                // A divider right after the first row marks it as the header.
+                if table_rows.len() == 1 {
+                    has_header = true;
+                }
+            } else {
+                let cells = parse_table_row(line);
+                for (i, cell) in cells.iter().enumerate() {
+                    if table_col_widths.len() <= i {
+                        table_col_widths.push(0);
+                    }
+                    table_col_widths[i] = table_col_widths[i].max(width(cell));
+                }
+                table_rows.push(cells);
+            }
+            continue;
+        }
 
         if line.is_empty() {
             if std::mem::take(&mut after_heading) {
@@ -249,9 +294,132 @@ pub fn markdown(src: &str, max_width: usize, st: &MarkdownStyles) -> Vec<Line<'s
         paragraph.extend(inline(line, st));
     }
 
+    if in_table {
+        flush_table(
+            &table_rows,
+            &table_col_widths,
+            has_header,
+            max_width,
+            st,
+            &mut out,
+        );
+    }
     flush(&mut paragraph, &mut out);
     while out.last().is_some_and(|l| l.spans.is_empty()) {
         out.pop();
+    }
+    out
+}
+
+/// True for the `| --- | :---: |` alignment divider row.
+fn is_table_separator(line: &str) -> bool {
+    let inner = line.trim().trim_start_matches('|').trim_end_matches('|');
+    !inner.is_empty()
+        && inner.split('|').all(|cell| {
+            let c = cell.trim();
+            let c = c.strip_prefix(':').unwrap_or(c);
+            let c = c.strip_suffix(':').unwrap_or(c);
+            !c.is_empty() && c.chars().all(|ch| ch == '-')
+        })
+}
+
+/// Splits `| a | b |` into trimmed cell contents, unescaping `\|`.
+fn parse_table_row(line: &str) -> Vec<String> {
+    let inner = line.trim().trim_start_matches('|').trim_end_matches('|');
+    inner
+        .split('|')
+        .map(|cell| cell.trim().replace("\\|", "|"))
+        .collect()
+}
+
+/// Renders accumulated rows as aligned columns: header, rule, then body rows.
+fn flush_table(
+    rows: &[Vec<String>],
+    natural: &[usize],
+    has_header: bool,
+    max_width: usize,
+    st: &MarkdownStyles,
+    out: &mut Vec<Line<'static>>,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let ncols = natural.len();
+    if ncols == 0 {
+        return;
+    }
+    // " │ " separates columns, 3 columns each.
+    let widths = fit_table_widths(natural, max_width.saturating_sub(3 * (ncols - 1)));
+    let head = st.base.add_modifier(Modifier::BOLD);
+    for (r, row) in rows.iter().enumerate() {
+        if has_header && r == 0 {
+            out.push(table_line(row, &widths, head, st.dim));
+            let mut rule = String::new();
+            for (i, w) in widths.iter().enumerate() {
+                if i > 0 {
+                    rule.push_str("─┼─");
+                }
+                rule.push_str(&"─".repeat(*w));
+            }
+            out.push(Line::from(Span::styled(rule, st.dim)));
+        } else {
+            out.push(table_line(row, &widths, st.base, st.dim));
+        }
+    }
+}
+
+/// One aligned table row as a styled line.
+fn table_line(row: &[String], widths: &[usize], style: Style, sep: Style) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let last = widths.len().saturating_sub(1);
+    for (i, col) in widths.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" │ ", sep));
+        }
+        let cell = row.get(i).map(String::as_str).unwrap_or("");
+        let text = if width(cell) > *col {
+            pad_end(&truncate(cell, *col), *col)
+        } else if i == last {
+            cell.to_string()
+        } else {
+            pad_end(cell, *col)
+        };
+        spans.push(Span::styled(text, style));
+    }
+    Line::from(spans)
+}
+
+/// Shrinks natural column widths to fit `available`, shaving the widest
+/// column first so narrow columns keep their content. Never shrinks below 3.
+fn fit_table_widths(natural: &[usize], available: usize) -> Vec<usize> {
+    let mut widths = natural.to_vec();
+    if widths.is_empty() || widths.iter().sum::<usize>() <= available {
+        return widths;
+    }
+    while widths.iter().sum::<usize>() > available {
+        let Some((idx, _)) = widths
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| **w > 3)
+            .max_by_key(|(_, w)| *w)
+        else {
+            break;
+        };
+        widths[idx] -= 1;
+    }
+    // Degenerate viewport: even split rather than letting one column eat it all.
+    if widths.iter().sum::<usize>() > available {
+        let each = (available / widths.len()).max(1);
+        widths.iter_mut().for_each(|w| *w = each);
+    }
+    widths
+}
+
+/// Pads `s` with trailing spaces up to `w` display columns.
+fn pad_end(s: &str, w: usize) -> String {
+    let mut out = s.to_string();
+    for _ in width(s)..w {
+        out.push(' ');
     }
     out
 }
@@ -577,14 +745,61 @@ mod tests {
             40,
             &st,
         );
-        let joined: String = out
-            .iter()
-            .map(|l| l.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(joined.contains("Name"));
-        assert!(joined.contains("Value"));
-        assert!(joined.contains("Foo"));
-        assert!(joined.contains("Bar"));
+        let flat: Vec<String> = out.iter().map(|l| l.to_string()).collect();
+        // One line per row: header, rule, two body rows — never a merged blob.
+        assert_eq!(flat.len(), 4, "expected 4 table lines, got: {flat:?}");
+        assert!(flat[0].contains("Name") && flat[0].contains("Value"));
+        assert!(flat[1].starts_with('─'), "rule under header: {flat:?}");
+        assert!(flat[2].contains("Foo") && flat[2].contains("123"));
+        assert!(flat[3].contains("Bar") && flat[3].contains("456"));
+        // Columns line up: both values start at the same offset.
+        assert_eq!(
+            flat[2].find("123"),
+            flat[3].find("456"),
+            "values not column-aligned: {flat:?}"
+        );
+        assert!(
+            !flat[0].contains('|'),
+            "raw pipes must not survive: {flat:?}"
+        );
+    }
+
+    #[test]
+    fn markdown_table_closes_and_prose_resumes() {
+        let theme = Theme::detect();
+        let st = MarkdownStyles::new(&theme);
+        let out = markdown(
+            "| a | b |\n|---|---|\n| 1 | 2 |\n\nAfter the table.",
+            40,
+            &st,
+        );
+        let flat: Vec<String> = out.iter().map(|l| l.to_string()).collect();
+        let last = flat.last().expect("non-empty");
+        assert!(last.contains("After the table."), "got: {flat:?}");
+        assert!(!last.contains('│'), "table leaked into prose: {last:?}");
+    }
+
+    #[test]
+    fn markdown_table_truncates_to_viewport() {
+        let theme = Theme::detect();
+        let st = MarkdownStyles::new(&theme);
+        let wide = "x".repeat(60);
+        let out = markdown(&format!("| A | B |\n|---|---|\n| {wide} | y |"), 30, &st);
+        assert!(!out.is_empty());
+        for line in &out {
+            assert!(
+                width(&line.to_string()) <= 30,
+                "line exceeds viewport: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn markdown_table_without_divider_is_all_body_rows() {
+        let theme = Theme::detect();
+        let st = MarkdownStyles::new(&theme);
+        let out = markdown("| a | b |\n| 1 | 2 |", 40, &st);
+        assert_eq!(out.len(), 2, "no rule without a divider row");
+        assert!(!out[0].to_string().starts_with('─'));
     }
 }

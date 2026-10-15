@@ -1,8 +1,8 @@
-#[cfg(test)]
-use crate::agent::testdouble::ScriptedProvider;
 use crate::agent::openai::OpenAiProvider;
 use crate::agent::provider::{AgentProvider, ChatMessage, Usage};
 use crate::agent::runtime::{AgentEvent, AgentRuntime, Cancel};
+#[cfg(test)]
+use crate::agent::testdouble::ScriptedProvider;
 use crate::commands::{self, Command};
 use crate::config::{find_preset, host_of, Config, ProviderKind, ProviderPreset, PRESETS};
 use crate::session::{self, StoredSession};
@@ -286,13 +286,6 @@ pub struct Suggestion {
 }
 
 impl Suggestion {
-    fn new(command: &str, hint: &str) -> Self {
-        Self {
-            command: command.to_string(),
-            hint: hint.to_string(),
-        }
-    }
-
     pub fn parse(&self) -> Option<Command> {
         commands::parse(&self.command).map(|(kind, _)| kind)
     }
@@ -435,6 +428,7 @@ pub struct App {
     active: Option<usize>,
     dirty: bool,
     quit: bool,
+    /// Painted composer text width, synced each frame by `ui::render`.
     pub composer_layout_width: usize,
 }
 
@@ -484,6 +478,7 @@ impl App {
             active: None,
             dirty: true,
             quit: false,
+            // Pre-first-frame fallback; `ui::render` syncs it to the painted width.
             composer_layout_width: 80,
             cfg,
         };
@@ -648,7 +643,11 @@ impl App {
                         row.ok = ok;
                         // For edit_file, parse replacements count from detail "X replacements made"
                         if name == "edit_file" {
-                            if let Some(count) = detail.split_whitespace().next().and_then(|s| s.parse::<usize>().ok()) {
+                            if let Some(count) = detail
+                                .split_whitespace()
+                                .next()
+                                .and_then(|s| s.parse::<usize>().ok())
+                            {
                                 row.edit_replacements = Some(count);
                                 // Improve detail to show the count clearly
                                 row.detail = format!("{} replacements made", count);
@@ -756,7 +755,9 @@ impl App {
         let draft = self.composer.value().trim().to_string();
         if draft.starts_with('/') && !draft.contains(char::is_whitespace) && draft.len() > 1 {
             self.composer.clear();
-            self.toast(format!("unknown command {draft} - try / for the command menu"));
+            self.toast(format!(
+                "unknown command {draft} - try / for the command menu"
+            ));
             return;
         }
 
@@ -1440,8 +1441,8 @@ impl App {
     }
 
     pub fn open_memory_picker(&mut self) {
-        // Show memory entries as a picker
-        let entries: Vec<&Entry> = self.entries.iter().filter(|e| e.role == EntryRole::System).collect();
+        // Memory rows load on demand; the picker opens empty and the
+        // status line reports record counts instead of prebuilt items.
         let mut picker = Picker::new(PickerMode::Memory, Vec::new());
         picker.loading = true;
         self.overlay = Some(Overlay::Picker(picker));

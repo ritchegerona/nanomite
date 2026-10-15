@@ -142,6 +142,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // The composer metrics are needed to solve the vertical layout, so measure it first.
     let inner_width = area.width.saturating_sub(6).max(8) as usize;
+    // Key handling measures wrapping at the painted width; keep the cached
+    // value in sync so Up/Down behave identically at any terminal size.
+    app.composer_layout_width = inner_width;
     let prompt_layout = app.composer.layout(inner_width, theme.base());
     let composer_rows = composer::rows(&prompt_layout);
 

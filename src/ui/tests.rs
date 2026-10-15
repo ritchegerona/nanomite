@@ -75,6 +75,43 @@ async fn renders_welcome_state() {
 }
 
 #[tokio::test]
+async fn composer_border_title_and_footer_render() {
+    let mut app = test_app().await;
+    app.cwd = std::path::PathBuf::from("/tmp/opencode/demo");
+    let text = frame_text(&mut app, 92, 24);
+    // The rounded frame is actually painted, with the cwd as its title.
+    assert!(
+        text.contains('╭') && text.contains('╰'),
+        "border missing:\n{text}"
+    );
+    assert!(text.contains("demo"), "cwd title missing:\n{text}");
+    // Key hints live on the bottom border.
+    assert!(text.contains("enter send"), "hint missing:\n{text}");
+}
+
+#[tokio::test]
+async fn composer_paints_all_measured_rows() {
+    let mut app = test_app().await;
+    for word in ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"] {
+        app.composer.insert_str(word);
+        app.composer.newline();
+    }
+    let text = frame_text(&mut app, 92, 24);
+    // The border must not eat into the promised text rows: every line painted.
+    for word in ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"] {
+        assert!(text.contains(word), "row {word} clipped:\n{text}");
+    }
+}
+
+#[tokio::test]
+async fn composer_layout_width_tracks_terminal() {
+    let mut app = test_app().await;
+    frame_text(&mut app, 100, 24);
+    // margin(2) + border(2) + prompt gutter(2) — the width wrapping is measured at.
+    assert_eq!(app.composer_layout_width, 94);
+}
+
+#[tokio::test]
 async fn renders_a_turn_with_tools_and_markdown() {
     let mut app = test_app().await;
     app.entries

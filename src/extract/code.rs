@@ -179,7 +179,7 @@ impl Extractor for CodeExtractor {
         let mut prev_blank = true;
         for line in text.split_inclusive('\n') {
             line_no += 1;
-            if line_no % 1024 == 0 {
+            if line_no.is_multiple_of(1024) {
                 sink.tick()?;
             }
             let trimmed = line.trim_start();

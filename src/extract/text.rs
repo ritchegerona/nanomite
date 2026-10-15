@@ -286,7 +286,7 @@ pub(crate) fn strip_html(raw: &str, sink: &mut Sink) -> Result<String, ExtractEr
     let mut in_heading = false;
 
     while i < bytes.len() {
-        if i % 4096 == 0 {
+        if i.is_multiple_of(4096) {
             sink.tick()?;
         }
         if bytes[i] == b'<' {
@@ -367,7 +367,8 @@ fn find_close(rest: &str, name: &str) -> Option<usize> {
         if let Some(open) = lower[scan..].find(&format!("<{name}")) {
             depth += 1;
             scan += open + name.len() + 1;
-        } else if let Some(cl) = lower[scan..].find(&close) {
+        } else {
+            let cl = lower[scan..].find(&close)?;
             depth -= 1;
             if depth == 0 {
                 let mut end = scan + cl + close.len();
@@ -377,8 +378,6 @@ fn find_close(rest: &str, name: &str) -> Option<usize> {
                 return Some(end);
             }
             scan += cl + close.len();
-        } else {
-            return None;
         }
     }
     None
