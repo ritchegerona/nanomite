@@ -8,6 +8,8 @@ use crate::board::engine::{BoardEngine, CancelFlag};
 use crate::board::store::{BoardMessage, BoardStore};
 use crate::commands::{self, Command};
 use crate::config::{find_preset, host_of, Config, ProviderKind, ProviderPreset, PRESETS};
+use crate::memory::policy::MemoryPolicy;
+use crate::memory::MemoryEngine;
 use crate::session::{self, StoredSession};
 use crate::ui::composer::Composer;
 use crate::ui::theme::Theme;
@@ -23,6 +25,10 @@ const MAX_HISTORY_MESSAGES: usize = 40;
 const TOAST_TTL: Duration = Duration::from_secs(2);
 /// Discussion rounds a `/panel` convene runs (engine caps at `MAX_ROUNDS`).
 const BOARD_ROUNDS: usize = 2;
+/// Records `/memory` lists: newest first, bounded so the picker stays readable.
+const MEMORY_LIST_ROWS: usize = 100;
+/// Hard cap on the body one `/memory` record overlay will render.
+const MEMORY_BODY_CHARS: usize = 40_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryRole {
@@ -136,6 +142,72 @@ pub enum PickerValue {
     Model(String),
     Session(std::path::PathBuf),
     Theme(crate::ui::theme::ThemeId),
+    Memory(MemoryRow),
+}
+
+/// One `/memory` row: the projection of a stored record the UI needs. Kept
+/// separate from `MemoryRecord` so the picker never holds a whole database row
+/// and the overlay only carries what it renders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryRow {
+    pub id: String,
+    /// Headline: the record summary when present, else its first line.
+    pub title: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    /// Unix seconds.
+    pub created_at: i64,
+    pub project: Option<String>,
+    pub content: String,
+}
+
+impl MemoryRow {
+    /// Compact "how long ago" label: `4m`, `3h`, `5d`, then `YYYY-MM-DD`.
+    pub fn age_label(&self) -> String {
+        let now = crate::memory::model::now();
+        let delta = (now - self.created_at).max(0);
+        if delta < 60 {
+            format!("{delta}s")
+        } else if delta < 3_600 {
+            format!("{}m", delta / 60)
+        } else if delta < 86_400 {
+            format!("{}h", delta / 3_600)
+        } else if delta < 30 * 86_400 {
+            format!("{}d", delta / 86_400)
+        } else {
+            // Far enough back that a calendar date is more useful than a count.
+            let (y, m, d) = civil_from_days(self.created_at.div_euclid(86_400));
+            format!("{y:04}-{m:02}-{d:02}")
+        }
+    }
+
+    /// `core · 2 tags · 3h ago`, the picker's right-hand hint.
+    pub fn hint(&self) -> String {
+        let mut hint = self.category.clone();
+        if let Some(project) = &self.project {
+            hint.push_str(&format!(" · {project}"));
+        }
+        if !self.tags.is_empty() {
+            hint.push_str(&format!(" · {}", self.tags.len()));
+        }
+        hint.push_str(&format!(" · {}", self.age_label()));
+        hint
+    }
+}
+
+/// Days since the Unix epoch to a proleptic-Gregorian civil date (Howard Hinnant's
+/// algorithm). Avoids pulling a date library in for the `/memory` age column.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 #[derive(Debug, Clone)]
@@ -200,13 +272,13 @@ impl Picker {
             PickerMode::Model => "filter, or type a custom model id",
             PickerMode::Sessions => "pick a session to resume",
             PickerMode::Themes => "pick a colour theme",
-            PickerMode::Memory => "memory entries",
+            PickerMode::Memory => "filter stored memories",
         }
     }
 
     /// True when the filter box doubles as a free-text value (custom model ids).
     pub fn accepts_free_text(&self) -> bool {
-        self.mode == PickerMode::Model || self.mode == PickerMode::Memory
+        self.mode == PickerMode::Model
     }
 
     pub fn set_source(&mut self, source: Vec<PickerItem>, keep_cursor: Option<usize>) {
@@ -239,6 +311,9 @@ impl Picker {
                             PickerValue::Model(m) => m.clone(),
                             PickerValue::Session(path) => path.display().to_string(),
                             PickerValue::Theme(t) => t.label().to_string(),
+                            PickerValue::Memory(row) => {
+                                format!("{} {}", row.title, row.content)
+                            }
                             PickerValue::Action(a) => format!("{a:?}"),
                             PickerValue::Command(c) => {
                                 // Aliases stay searchable even though they are not displayed.
@@ -351,6 +426,7 @@ pub enum OverlayKind {
     Help,
     Tools,
     Board,
+    Memory,
 }
 
 impl Overlay {
@@ -363,6 +439,7 @@ impl Overlay {
             Overlay::Help(_) => OverlayKind::Help,
             Overlay::Tools(_) => OverlayKind::Tools,
             Overlay::Board(_) => OverlayKind::Board,
+            Overlay::Memory(_) => OverlayKind::Memory,
         }
     }
 }
@@ -375,6 +452,25 @@ pub enum Overlay {
     Help(HelpState),
     Tools(ToolsState),
     Board(BoardState),
+    Memory(MemoryView),
+}
+
+/// Read-only `/memory` record view: one stored memory, opened from the picker.
+#[derive(Debug, Clone)]
+pub struct MemoryView {
+    pub record: MemoryRow,
+    /// Rows hidden from the top, so `up`/`pgup` move toward older body text.
+    pub offset: usize,
+}
+
+/// One `/undo` step: the transcript rows that were removed, the exact history
+/// messages they owned, and how many messages a `/redo` has to put back.
+#[derive(Debug)]
+struct UndoStep {
+    entries: Vec<Entry>,
+    history: Vec<ChatMessage>,
+    /// `turn_history` entry this turn owned.
+    delta: usize,
 }
 
 /// `/tools` overlay: the tool library. Rows are derived from the catalog at
@@ -430,10 +526,18 @@ pub enum Control {
     EditComposer(String),
     /// Open $EDITOR on a file.
     EditFile(std::path::PathBuf),
+    /// Write `text` to the terminal clipboard with an OSC 52 sequence.
+    Copy(String),
 }
 
 enum ModelsResult {
     Ok(Vec<String>),
+    Err(String),
+}
+
+/// Result of the background `/memory` query, delivered on `memory_rx`.
+enum MemoryResult {
+    Rows(Vec<MemoryRow>),
     Err(String),
 }
 
@@ -466,15 +570,24 @@ pub struct App {
     pub show_thinking: bool,
     pub pending_editor: bool,
     session_started: Instant,
-    undo_stack: Vec<Vec<Entry>>,
+    undo_stack: Vec<UndoStep>,
     control_tx: Option<UnboundedSender<Control>>,
 
     runtime: AgentRuntime,
+    /// Attached persistent memory, when the engine opened. `None` means the
+    /// subsystem is off, disabled by policy, or its location was unusable.
+    memory: Option<Arc<MemoryEngine>>,
+    /// One-time footer hint: why memory is absent (never an error toast).
+    memory_hint: Option<String>,
     cancel: Option<Cancel>,
     rx: UnboundedReceiver<AgentEvent>,
     tx: UnboundedSender<AgentEvent>,
     models_rx: UnboundedReceiver<ModelsResult>,
     models_tx: UnboundedSender<ModelsResult>,
+    memory_rx: UnboundedReceiver<(u64, MemoryResult)>,
+    memory_tx: UnboundedSender<(u64, MemoryResult)>,
+    /// Bumped on every `/memory` open: stale rows from an older query are dropped.
+    memory_gen: u64,
     board_rx: UnboundedReceiver<(u64, BoardEvent)>,
     board_tx: UnboundedSender<(u64, BoardEvent)>,
     /// Bumped on every `/panel`: stale events from an older convene are dropped.
@@ -483,6 +596,10 @@ pub struct App {
     pub(crate) board_cancel: Option<Arc<CancelFlag>>,
     handle: tokio::runtime::Handle,
     history: Vec<ChatMessage>,
+    /// Per user turn, how many `ChatMessage`s that turn appended (a user
+    /// message plus its assistant/tool-bearing reply). `/undo` and `/redo`
+    /// cut on these exact counts instead of guessing from user-message counts.
+    turn_history: Vec<usize>,
     /// Index of the in-flight transcript entry while a turn runs.
     pub(crate) active: Option<usize>,
     dirty: bool,
@@ -510,6 +627,16 @@ impl App {
         let (tx, rx) = unbounded_channel();
         let (models_tx, models_rx) = unbounded_channel();
         let (board_tx, board_rx) = unbounded_channel();
+        let (memory_tx, memory_rx) = unbounded_channel();
+
+        // Persistent memory is opened before the runtime so the six memory tools
+        // are live schemas and turn retrieval/capture run from the first prompt.
+        // A failure here is not an error: the app runs exactly as before.
+        let (memory, memory_hint) = Self::open_memory();
+        let runtime = match &memory {
+            Some(engine) => runtime.with_memory(Arc::clone(engine)),
+            None => runtime,
+        };
 
         let mut app = Self {
             view: View::new(theme),
@@ -528,17 +655,23 @@ impl App {
             undo_stack: Vec::new(),
             control_tx: None,
             runtime,
+            memory,
+            memory_hint,
             cancel: None,
             rx,
             tx,
             models_rx,
             models_tx,
+            memory_rx,
+            memory_tx,
+            memory_gen: 0,
             board_rx,
             board_tx,
             board_gen: 0,
             board_cancel: None,
             handle,
             history: Vec::new(),
+            turn_history: Vec::new(),
             active: None,
             dirty: true,
             quit: false,
@@ -557,6 +690,75 @@ impl App {
     /// Wired up by the main loop so `/editor` and `/export` can shell out.
     pub fn set_control_channel(&mut self, tx: UnboundedSender<Control>) {
         self.control_tx = Some(tx);
+    }
+
+    /// Opens persistent memory at the platform default location.
+    ///
+    /// Policy is read from the environment exactly as the subsystem documents it:
+    /// `NANOMITE_MEMORY=0` disables everything, `NANOMITE_MEMORY_DIR` /
+    /// `NANOMITE_MEMORY_DB` move the markdown tree and the database, and
+    /// `NANOMITE_MEMORY_READONLY` / `NANOMITE_MEMORY_AUTO` tighten writes and
+    /// capture. Nothing here bypasses `MemoryPolicy` - the engine authorizes
+    /// every operation on its own.
+    ///
+    /// Returns the engine, or `None` plus a quiet one-line hint for the footer.
+    /// Tests never open the user's real memory tree: the harness attaches an
+    /// in-memory engine explicitly instead.
+    fn open_memory() -> (Option<Arc<MemoryEngine>>, Option<String>) {
+        if cfg!(test) {
+            return (None, None);
+        }
+        let policy = MemoryPolicy::from_env(true);
+        if !policy.enabled {
+            return (
+                None,
+                Some("memory off · NANOMITE_MEMORY=1 enables it".to_string()),
+            );
+        }
+        match MemoryEngine::open() {
+            Ok(engine) => (Some(Arc::new(engine)), None),
+            // A read-only config directory is a normal state on shared machines,
+            // not a failure worth a red toast.
+            Err(e) => (
+                None,
+                Some(format!(
+                    "memory unavailable · {}",
+                    crate::ui::text::truncate(&e.to_string(), 60)
+                )),
+            ),
+        }
+    }
+
+    /// Attaches an engine the caller already owns. Tests use this with
+    /// `MemoryEngine::open_in_memory`, so no test ever reads or writes the
+    /// real `~/.config/nanomite/memory` tree.
+    #[cfg(test)]
+    pub fn attach_memory_for_test(&mut self, engine: Arc<MemoryEngine>) {
+        self.memory_hint = None;
+        self.memory = Some(engine.clone());
+        self.runtime = self.runtime.clone().with_memory(engine);
+    }
+
+    /// The context the next prompt is built from. Test-only: it is the exact
+    /// boundary `/undo` and `/redo` have to agree on.
+    #[cfg(test)]
+    fn history_snapshot(&self) -> Vec<ChatMessage> {
+        self.history.clone()
+    }
+
+    /// True when the memory subsystem is live.
+    pub fn memory_attached(&self) -> bool {
+        self.memory.is_some()
+    }
+
+    /// Quiet footer hint when memory is not attached, so the reason is visible
+    /// once without a toast the user would have to catch.
+    pub fn memory_hint(&self) -> Option<&str> {
+        if self.memory.is_some() {
+            None
+        } else {
+            self.memory_hint.as_deref()
+        }
     }
 
     fn control_send(&self, control: Control) {
@@ -623,6 +825,13 @@ impl App {
             changed = true;
             self.apply_models_result(result);
         }
+        while let Ok((gen, result)) = self.memory_rx.try_recv() {
+            changed = true;
+            // A newer `/memory` query makes an older one's rows stale.
+            if gen == self.memory_gen {
+                self.apply_memory_result(result);
+            }
+        }
         while let Ok((gen, event)) = self.board_rx.try_recv() {
             changed = true;
             // A cancelled convene's stragglers must never leak into a
@@ -668,7 +877,14 @@ impl App {
             #[cfg(test)]
             ProviderKind::Scripted => Arc::new(ScriptedProvider::default()),
         };
-        self.runtime = Self::build_runtime(provider, &self.cfg, &self.cwd);
+        // Re-attach memory: a rebuilt runtime would otherwise silently drop the
+        // memory tools, retrieval and capture on every model or tool switch.
+        self.runtime = match &self.memory {
+            Some(engine) => {
+                Self::build_runtime(provider, &self.cfg, &self.cwd).with_memory(Arc::clone(engine))
+            }
+            None => Self::build_runtime(provider, &self.cfg, &self.cwd),
+        };
         Ok(())
     }
 
@@ -772,6 +988,7 @@ impl App {
                     entry.touch();
                 }
                 self.history.push(ChatMessage::assistant(text));
+                self.note_history_appended();
                 self.trim_history();
                 self.finish_turn();
             }
@@ -784,6 +1001,7 @@ impl App {
                 self.history.push(ChatMessage::assistant(
                     self.entries[index].text.trim().to_string(),
                 ));
+                self.note_history_appended();
                 self.trim_history();
                 self.finish_turn();
             }
@@ -811,6 +1029,19 @@ impl App {
         while self.history.len() > MAX_HISTORY_MESSAGES {
             self.history.remove(0);
         }
+    }
+
+    /// Records that the running turn appended one more `ChatMessage`.
+    fn note_history_appended(&mut self) {
+        if let Some(last) = self.turn_history.last_mut() {
+            *last += 1;
+        }
+    }
+
+    /// The message count the newest turn owns. Falls back to a single message
+    /// for turns started before the count existed.
+    fn last_turn_history_delta(&self) -> usize {
+        self.turn_history.last().copied().unwrap_or(1).max(1)
     }
 
     pub fn on_tick(&mut self) {
@@ -873,6 +1104,9 @@ impl App {
         self.entries
             .push(Entry::new(EntryRole::User, prompt.clone()));
         self.history.push(ChatMessage::user(prompt.clone()));
+        // This turn starts here; every message the engine appends for it is
+        // counted onto this turn, so `/undo` cuts at the exact boundary.
+        self.turn_history.push(1);
         self.trim_history();
 
         let index = self.entries.len();
@@ -972,6 +1206,7 @@ impl App {
             Entry::new(EntryRole::User, prompt),
         ];
         self.history.clear();
+        self.turn_history.clear();
         self.entries.push(Entry::streaming());
         let last = self.entries.len() - 1;
         self.entries[last].text = summary;
@@ -1002,40 +1237,37 @@ impl App {
             self.toast("nothing to undo");
             return;
         };
-        let removed: Vec<Entry> = self.entries.split_off(last_user);
-        self.history.truncate(
-            self.history
-                .len()
-                .saturating_sub(removed.iter().filter(|e| e.role == EntryRole::User).count()),
-        );
-        self.undo_stack.push(removed);
+        let entries: Vec<Entry> = self.entries.split_off(last_user);
+        // Cut exactly the messages this turn appended. Counting user entries
+        // instead would leave the turn's assistant (and tool-bearing) messages
+        // in the model context of the next prompt.
+        let delta = self.last_turn_history_delta();
+        let drop = delta.min(self.history.len());
+        let history: Vec<ChatMessage> = self.history.split_off(self.history.len() - drop);
+        self.turn_history.pop();
+        let count = entries.len();
+        self.undo_stack.push(UndoStep {
+            entries,
+            history,
+            delta,
+        });
         self.toast(format!(
             "undid {} entr{}",
-            self.undo_stack.last().map(|v| v.len()).unwrap_or(0),
-            if self.undo_stack.last().is_some_and(|v| v.len() == 1) {
-                "y"
-            } else {
-                "ies"
-            }
+            count,
+            if count == 1 { "y" } else { "ies" }
         ));
         self.invalidate_transcript();
     }
 
     fn redo(&mut self) {
-        let Some(restored) = self.undo_stack.pop() else {
+        let Some(step) = self.undo_stack.pop() else {
             self.toast("nothing to redo");
             return;
         };
-        let count = restored
-            .iter()
-            .filter(|e| e.role == EntryRole::User)
-            .count();
-        self.entries.extend(restored);
-        for entry in self.entries.iter().rev().take(count + 1) {
-            if entry.role == EntryRole::User {
-                self.history.push(ChatMessage::user(entry.text.clone()));
-            }
-        }
+        self.entries.extend(step.entries);
+        // The exact messages the undone turn owned, in order.
+        self.history.extend(step.history);
+        self.turn_history.push(step.delta);
         self.trim_history();
         self.toast("redone");
         self.invalidate_transcript();
@@ -1119,6 +1351,7 @@ impl App {
             Ok(stored) => {
                 self.entries = stored.restore();
                 self.history.clear();
+                self.turn_history.clear();
                 self.mark_dirty();
                 self.toast(format!("resumed {}", self.turn_count()));
             }
@@ -1196,9 +1429,7 @@ impl App {
             &self.provider_label(),
             &self.model_label(),
             &self.cwd,
-            SystemTime::now()
-                .checked_sub(Duration::from_secs(0))
-                .unwrap_or_else(SystemTime::now),
+            SystemTime::now(),
         )
     }
 
@@ -1425,9 +1656,11 @@ impl App {
     }
 
     fn apply_models_result(&mut self, result: ModelsResult) {
+        // `/model` is the only picker fed by the endpoint's model list; `/memory`
+        // rows arrive on `memory_rx`.
         let for_picker = matches!(
             &self.overlay,
-            Some(Overlay::Picker(p)) if p.mode == PickerMode::Model || p.mode == PickerMode::Memory
+            Some(Overlay::Picker(p)) if p.mode == PickerMode::Model
         );
         match result {
             ModelsResult::Ok(models) if for_picker => {
@@ -1624,6 +1857,7 @@ impl App {
             PickerValue::Command(command) => self.run_command(command, ""),
             PickerValue::Session(path) => self.restore_session(&path),
             PickerValue::Theme(id) => self.apply_theme(id),
+            PickerValue::Memory(row) => self.open_memory_record(row),
             PickerValue::Model(model) => {
                 if model == self.cfg.model {
                     self.toast(format!("model: {model}"));
@@ -1657,6 +1891,7 @@ impl App {
         self.interrupt_quietly();
         self.entries.clear();
         self.history.clear();
+        self.turn_history.clear();
         self.usage = Usage::default();
         self.session_started = Instant::now();
         self.undo_stack.clear();
@@ -1678,6 +1913,7 @@ impl App {
 
     pub fn clear_transcript(&mut self) {
         self.entries.clear();
+        self.turn_history.clear();
         if let Some(notice) = self.cfg.notice.clone() {
             self.entries.push(Entry::new(EntryRole::System, notice));
         }
@@ -1705,11 +1941,63 @@ impl App {
     }
 
     pub fn open_memory_picker(&mut self) {
-        // Memory rows load on demand; the picker opens empty and the
-        // status line reports record counts instead of prebuilt items.
+        let Some(engine) = self.memory.clone() else {
+            self.toast("memory not available (see /connect or NANOMITE_MEMORY=1)");
+            self.mark_dirty();
+            return;
+        };
+
+        // The picker opens empty and shows a loading line; rows arrive from the
+        // background query, so the UI thread never waits on SQLite.
         let mut picker = Picker::new(PickerMode::Memory, Vec::new());
         picker.loading = true;
         self.overlay = Some(Overlay::Picker(picker));
+
+        self.memory_gen += 1;
+        let gen = self.memory_gen;
+        let tx = self.memory_tx.clone();
+        let handle = self.handle.clone();
+        handle.spawn_blocking(move || {
+            let result = match engine.recent(MEMORY_LIST_ROWS) {
+                Ok(list) => MemoryResult::Rows(list.items.into_iter().map(memory_row).collect()),
+                Err(e) => MemoryResult::Err(e.to_string()),
+            };
+            let _ = tx.send((gen, result));
+        });
+        self.mark_dirty();
+    }
+
+    /// Fills an open `/memory` picker with what the engine returned.
+    fn apply_memory_result(&mut self, result: MemoryResult) {
+        if !matches!(
+            &self.overlay,
+            Some(Overlay::Picker(p)) if p.mode == PickerMode::Memory
+        ) {
+            return;
+        }
+        match result {
+            MemoryResult::Rows(rows) => {
+                let items = rows.into_iter().map(memory_item).collect();
+                if let Some(Overlay::Picker(picker)) = &mut self.overlay {
+                    picker.set_source(items, None);
+                }
+            }
+            MemoryResult::Err(err) => {
+                if let Some(Overlay::Picker(picker)) = &mut self.overlay {
+                    picker.set_source(Vec::new(), None);
+                }
+                self.toast(format!(
+                    "memory unavailable: {}",
+                    crate::ui::text::truncate(&err, 60)
+                ));
+            }
+        }
+        self.mark_dirty();
+    }
+
+    /// Opens one stored record read-only.
+    fn open_memory_record(&mut self, record: MemoryRow) {
+        self.overlay = Some(Overlay::Memory(MemoryView { record, offset: 0 }));
         self.mark_dirty();
     }
 
@@ -1721,9 +2009,30 @@ impl App {
         self.mark_dirty();
     }
 
-    /// Copy the current selection or transcript to the clipboard
+    /// `/copy`: hand the last assistant message to the terminal clipboard.
+    ///
+    /// The transcript tracks no text selection, so the newest assistant reply
+    /// is the copy target; the payload leaves through the control channel and
+    /// is written as an OSC 52 sequence by the main loop, which owns the
+    /// terminal.
     fn copy_selection(&mut self) {
-        // Use the system clipboard or toast a message
+        let Some(text) = self
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.role == EntryRole::Assistant && !e.text.trim().is_empty())
+            .map(|e| e.text.trim().to_string())
+        else {
+            self.toast("nothing to copy yet");
+            self.mark_dirty();
+            return;
+        };
+        if self.control_tx.is_none() {
+            self.toast("clipboard unavailable - no terminal writer");
+            self.mark_dirty();
+            return;
+        }
+        self.control_send(Control::Copy(text));
         self.toast("selection copied to clipboard");
         self.mark_dirty();
     }
@@ -2001,6 +2310,23 @@ impl App {
                 self.overlay = Some(Overlay::Board(state));
                 self.mark_dirty();
             }
+            Overlay::Memory(mut view) => {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                        self.close_overlay();
+                        return;
+                    }
+                    KeyCode::Up => view.offset = view.offset.saturating_add(1),
+                    KeyCode::Down => view.offset = view.offset.saturating_sub(1),
+                    KeyCode::PageUp => view.offset = view.offset.saturating_add(8),
+                    KeyCode::PageDown => view.offset = view.offset.saturating_sub(8),
+                    KeyCode::Home => view.offset = usize::MAX / 2,
+                    KeyCode::End => view.offset = 0,
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Memory(view));
+                self.mark_dirty();
+            }
             Overlay::Providers(mut state) => {
                 match key.code {
                     KeyCode::Esc => {
@@ -2105,5 +2431,339 @@ fn on_off(value: bool) -> &'static str {
         "on"
     } else {
         "off"
+    }
+}
+
+/// One search hit as a `/memory` row: summary when the record has one, else
+/// its first non-empty line, with the body carried for the record overlay.
+fn memory_row(hit: crate::memory::model::MemoryHit) -> MemoryRow {
+    let record = hit.record;
+    let title = record
+        .summary
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            record
+                .content
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .map(|line| line.trim().to_string())
+        })
+        .unwrap_or_else(|| record.id.clone());
+    let content: String = record.content.chars().take(MEMORY_BODY_CHARS).collect();
+    MemoryRow {
+        id: record.id,
+        title,
+        category: record.category.as_str().to_string(),
+        tags: record.tags.clone(),
+        created_at: record.created_at,
+        project: record.project.clone(),
+        content,
+    }
+}
+
+fn memory_item(row: MemoryRow) -> PickerItem {
+    PickerItem {
+        label: row.title.clone(),
+        hint: row.hint(),
+        value: PickerValue::Memory(row),
+        current: false,
+    }
+}
+
+/// Standard base64 (RFC 4648) for the OSC 52 clipboard payload.
+///
+/// Small and local on purpose: the only consumer is `/copy`, and a general
+/// dependency would not earn its place in this binary.
+pub fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[(triple >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(triple >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(triple >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[triple as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// The OSC 52 clipboard sequence for `text`.
+///
+/// `ESC ] 52 ; c ; <base64> BEL`. Terminals that support it put the payload on
+/// the system clipboard; the ones that do not ignore the sequence, so this is
+/// safe to emit unconditionally.
+pub fn osc52(text: &str) -> String {
+    format!("\x1b]52;c;{}\x07", base64_encode(text.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn test_config() -> Config {
+        let mut cfg = Config::from_env();
+        cfg.apply_preset("scripted");
+        cfg.notice = None;
+        cfg
+    }
+
+    async fn test_app() -> App {
+        App::new(test_config(), tokio::runtime::Handle::current()).expect("app")
+    }
+
+    #[test]
+    fn base64_matches_rfc_4648_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn osc52_wraps_the_payload_in_the_terminal_sequence() {
+        assert_eq!(osc52("foo"), "\x1b]52;c;Zm9v\x07");
+    }
+
+    #[test]
+    fn memory_age_label_reads_as_a_relative_duration_then_a_date() {
+        let now = crate::memory::model::now();
+        let row = |created_at| MemoryRow {
+            id: "mem_test".into(),
+            title: "t".into(),
+            category: "core".into(),
+            tags: Vec::new(),
+            created_at,
+            project: None,
+            content: String::new(),
+        };
+        assert_eq!(row(now - 30).age_label(), "30s");
+        assert_eq!(row(now - 600).age_label(), "10m");
+        assert_eq!(row(now - 7_200).age_label(), "2h");
+        assert_eq!(row(now - 3 * 86_400).age_label(), "3d");
+        // Old enough that a calendar date is the useful label.
+        let old = row(now - 400 * 86_400).age_label();
+        assert_eq!(old.len(), 10, "expected YYYY-MM-DD, got {old}");
+        assert!(old.starts_with("20"), "unexpected date {old}");
+    }
+
+    #[test]
+    fn memory_hint_is_quiet_while_the_engine_is_attached() {
+        let row = MemoryRow {
+            id: "mem_1".into(),
+            title: "t".into(),
+            category: "core".into(),
+            tags: vec!["a".into()],
+            created_at: 0,
+            project: Some("nanomite".into()),
+            content: String::new(),
+        };
+        assert!(row.hint().starts_with("core · nanomite · 1 · "));
+    }
+
+    #[tokio::test]
+    async fn memory_picker_lists_records_and_opens_one() {
+        let mut app = test_app().await;
+        let engine = Arc::new(
+            MemoryEngine::open_in_memory(crate::memory::policy::MemoryPolicy {
+                mirror_markdown: false,
+                ..Default::default()
+            })
+            .expect("in-memory engine"),
+        );
+        engine
+            .save(&crate::memory::model::NewMemory {
+                category: crate::memory::model::MemoryCategory::Core,
+                content: "nanomite stores memory in sqlite".to_string(),
+                summary: Some("memory lives in sqlite".to_string()),
+                tags: vec!["storage".to_string()],
+                source: crate::memory::model::MemorySource::new(
+                    crate::memory::model::SourceKind::UserInstruction,
+                ),
+                project: None,
+                confidence: Some(1.0),
+                importance: Some(0.9),
+                expires_at: None,
+                sensitivity: Some(crate::memory::model::Sensitivity::Internal),
+                mirror_markdown: false,
+            })
+            .expect("save");
+        app.attach_memory_for_test(engine);
+
+        app.open_memory_picker();
+        assert!(matches!(
+            app.overlay.as_ref().map(Overlay::kind),
+            Some(OverlayKind::Picker)
+        ));
+
+        // The rows come back from the blocking task, never synchronously.
+        for _ in 0..200 {
+            app.pump_engine();
+            if let Some(Overlay::Picker(p)) = &app.overlay {
+                if !p.items.is_empty() {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let Some(Overlay::Picker(picker)) = &app.overlay else {
+            panic!("picker closed");
+        };
+        assert_eq!(picker.items.len(), 1, "rows: {:?}", picker.items);
+        assert_eq!(picker.items[0].label, "memory lives in sqlite");
+        assert!(picker.items[0].hint.starts_with("core"));
+
+        // Enter on the row opens the read-only record overlay.
+        let value = picker.selection().expect("a row");
+        app.overlay = None;
+        app.apply_picker_value(value);
+        let Some(Overlay::Memory(view)) = &app.overlay else {
+            panic!("record overlay not opened");
+        };
+        assert!(view.record.content.contains("sqlite"));
+    }
+
+    #[tokio::test]
+    async fn memory_picker_reports_absence_instead_of_hanging() {
+        let mut app = test_app().await;
+        assert!(!app.memory_attached());
+        app.open_memory_picker();
+        assert!(app.overlay.is_none(), "no picker without an engine");
+        let (toast, _) = app.toast.clone().expect("hint");
+        assert!(toast.contains("memory not available"), "{toast}");
+    }
+
+    #[tokio::test]
+    async fn undo_cuts_history_at_the_exact_message_boundary() {
+        let mut app = test_app().await;
+        // One tool-bearing turn: the scripted provider emits a `list_files`
+        // call before it answers, so the turn owns more than one message.
+        app.composer.insert_str("list the files");
+        app.submit();
+        // The scripted provider keeps asking for the file list, so this turn is
+        // interrupted once it has really used a tool - that is the shape the old
+        // user-count truncation got wrong.
+        for _ in 0..2_000 {
+            app.pump_engine();
+            if app
+                .entries
+                .get(1)
+                .is_some_and(|e| e.tools.iter().any(|t| !t.running))
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            app.entries[1].tools.iter().any(|t| t.name == "list_files"),
+            "tool-bearing turn expected: {:?}",
+            app.entries[1].tools
+        );
+        app.interrupt();
+        for _ in 0..500 {
+            app.pump_engine();
+            if !app.is_busy() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(!app.is_busy(), "interrupt did not finish the turn");
+        let messages = app.history_snapshot();
+        assert_eq!(messages.len(), 2, "user + assistant: {messages:?}");
+        assert_eq!(messages[0].role, crate::agent::provider::Role::User);
+        assert_eq!(messages[1].role, crate::agent::provider::Role::Assistant);
+
+        app.run_command(Command::Undo, "");
+        // Exact boundary: nothing of the undone turn is left in the context the
+        // next prompt is built from - not the user message, not the reply.
+        assert_eq!(app.history_snapshot().len(), 0);
+        assert!(app.entries.iter().all(|e| e.role != EntryRole::User));
+
+        // A second turn now sees an empty context, and its own boundary is exact.
+        app.composer.insert_str("hello there");
+        app.submit();
+        for _ in 0..2_000 {
+            app.pump_engine();
+            if !app.is_busy() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let after = app.history_snapshot();
+        assert_eq!(after.len(), 2, "{after:?}");
+        assert!(after[0].content.contains("hello there"), "{after:?}");
+
+        // Redo is last-in-first-out: undo turn 2, then replay both turns. Each
+        // restores exactly the messages it cut, no more and no less.
+        app.run_command(Command::Undo, "");
+        assert_eq!(app.history_snapshot().len(), 0);
+        app.run_command(Command::Redo, "");
+        app.run_command(Command::Redo, "");
+        let redone = app.history_snapshot();
+        assert_eq!(redone.len(), 4, "{redone:?}");
+        assert_eq!(app.entries.len(), 4, "{:?}", app.entries.len());
+        assert!(
+            redone.iter().any(|m| m.content.contains("hello there")),
+            "{redone:?}"
+        );
+        assert_eq!(
+            redone
+                .iter()
+                .filter(|m| m.content == messages[0].content)
+                .count(),
+            1,
+            "the undone user message must come back exactly once"
+        );
+        assert_eq!(
+            redone
+                .iter()
+                .filter(|m| m.content == messages[1].content)
+                .count(),
+            1,
+            "the undone reply must come back exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_hands_the_last_assistant_message_to_the_terminal() {
+        let mut app = test_app().await;
+        let (tx, mut rx) = unbounded_channel();
+        app.set_control_channel(tx);
+
+        app.run_command(Command::Copy, "");
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing to copy before an assistant reply"
+        );
+
+        app.composer.insert_str("say something");
+        app.submit();
+        for _ in 0..400 {
+            app.pump_engine();
+            if !app.is_busy() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        app.run_command(Command::Copy, "");
+        match rx.try_recv().expect("clipboard payload") {
+            Control::Copy(text) => assert!(text.contains("Scripted test reply"), "{text}"),
+            other => panic!("unexpected control: {other:?}"),
+        }
     }
 }

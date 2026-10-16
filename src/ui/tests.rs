@@ -1366,3 +1366,120 @@ async fn panel_without_args_toasts_usage() {
         app.toast
     );
 }
+
+/// A memory engine owned by the test process only: no test may ever read or
+/// write the real `~/.config/nanomite/memory` tree.
+fn in_memory_engine() -> std::sync::Arc<crate::memory::MemoryEngine> {
+    std::sync::Arc::new(
+        crate::memory::MemoryEngine::open_in_memory(crate::memory::policy::MemoryPolicy {
+            mirror_markdown: false,
+            ..Default::default()
+        })
+        .expect("in-memory memory engine"),
+    )
+}
+
+fn seed_record(engine: &crate::memory::MemoryEngine, content: &str, summary: &str) {
+    engine
+        .save(&crate::memory::model::NewMemory {
+            category: crate::memory::model::MemoryCategory::Core,
+            content: content.to_string(),
+            summary: Some(summary.to_string()),
+            tags: vec!["arch".to_string()],
+            source: crate::memory::model::MemorySource::new(
+                crate::memory::model::SourceKind::UserInstruction,
+            ),
+            project: Some("nanomite".to_string()),
+            confidence: Some(1.0),
+            importance: Some(0.8),
+            expires_at: None,
+            sensitivity: Some(crate::memory::model::Sensitivity::Internal),
+            mirror_markdown: false,
+        })
+        .expect("seed memory");
+}
+
+#[tokio::test]
+async fn memory_picker_lists_records_and_opens_the_body() {
+    let mut app = test_app().await;
+    let engine = in_memory_engine();
+    seed_record(
+        &engine,
+        "nanomite keeps memory in sqlite",
+        "memory lives in sqlite",
+    );
+    app.attach_memory_for_test(engine);
+
+    app.run_command(crate::commands::Command::Memory, "");
+    let text = frame_text(&mut app, 92, 24);
+    // Still loading: the rows come from the background task.
+    assert!(text.contains("memory entries"), "picker missing:\n{text}");
+
+    for _ in 0..200 {
+        app.pump_engine();
+        if let Some(Overlay::Picker(p)) = &app.overlay {
+            if !p.items.is_empty() {
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        text.contains("memory lives in sqlite"),
+        "row missing:\n{text}"
+    );
+    assert!(text.contains("core"), "category missing:\n{text}");
+    assert!(text.contains("nanomite"), "project missing:\n{text}");
+
+    app.on_key(ratatui::crossterm::event::KeyEvent {
+        code: ratatui::crossterm::event::KeyCode::Enter,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        kind: ratatui::crossterm::event::KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    });
+    assert_eq!(
+        app.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Memory)
+    );
+    let text = frame_text(&mut app, 92, 30);
+    assert!(text.contains("memory"), "overlay title missing:\n{text}");
+    assert!(
+        text.contains("keeps memory in sqlite"),
+        "record body missing:\n{text}"
+    );
+
+    // Esc closes it.
+    app.on_key(ratatui::crossterm::event::KeyEvent {
+        code: ratatui::crossterm::event::KeyCode::Esc,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        kind: ratatui::crossterm::event::KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    });
+    assert!(app.overlay.is_none(), "esc must close the record overlay");
+}
+
+#[tokio::test]
+async fn memory_picker_closes_on_esc_without_rows() {
+    let mut app = test_app().await;
+    app.attach_memory_for_test(in_memory_engine());
+    app.open_memory_picker();
+    assert!(matches!(app.overlay, Some(Overlay::Picker(_))));
+    app.on_key(ratatui::crossterm::event::KeyEvent {
+        code: ratatui::crossterm::event::KeyCode::Esc,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        kind: ratatui::crossterm::event::KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    });
+    assert!(app.overlay.is_none());
+}
+
+#[tokio::test]
+async fn memory_picker_without_an_engine_explains_itself() {
+    let mut app = test_app().await;
+    assert!(!app.memory_attached());
+    app.open_memory_picker();
+    assert!(app.overlay.is_none(), "no engine, no picker");
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("memory not available"), "no hint:\n{text}");
+}

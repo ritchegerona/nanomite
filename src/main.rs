@@ -82,7 +82,17 @@ fn run_control(
     control: Control,
     app: &mut App,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // OSC 52 needs no suspension: the sequence is consumed by the terminal,
+    // not painted, so the alternate screen and raw mode stay exactly as they
+    // were.
+    if let Control::Copy(text) = control {
+        return write_clipboard(&text);
+    }
+
     let (target, seed) = match &control {
+        // Handled above; kept explicit so a new control variant cannot fall
+        // through to the editor path by accident.
+        Control::Copy(_) => return Ok(()),
         Control::EditComposer(text) => {
             let path =
                 std::env::temp_dir().join(format!("nanomite-prompt-{}.md", std::process::id()));
@@ -104,6 +114,7 @@ fn run_control(
     resume(terminal)?;
 
     match control {
+        Control::Copy(_) => {}
         Control::EditComposer(_) => {
             let text = std::fs::read_to_string(&target).unwrap_or_default();
             let _ = std::fs::remove_file(&target);
@@ -116,6 +127,19 @@ fn run_control(
         }
         Control::EditFile(_) => app.on_editor_result(None),
     }
+    Ok(())
+}
+
+/// Writes an OSC 52 clipboard sequence straight to the terminal.
+///
+/// `\x1b]52;c;<base64>\x07`: terminals that support it copy the payload onto
+/// the system clipboard; the rest ignore the sequence, so this is safe to emit
+/// unconditionally and needs no clipboard binary.
+fn write_clipboard(text: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use std::io::Write;
+    let mut stdout = io::stdout();
+    stdout.write_all(nanomite::app::osc52(text).as_bytes())?;
+    stdout.flush()?;
     Ok(())
 }
 

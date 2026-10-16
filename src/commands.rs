@@ -135,7 +135,7 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/memory",
         aliases: &["/mem"],
-        hint: "persistent memory status",
+        hint: "browse stored memories",
         kind: Command::Memory,
     },
     Entry {

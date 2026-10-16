@@ -13,6 +13,9 @@ use ratatui::text::Line;
 use ratatui::Frame;
 use theme::Theme;
 
+/// Nominal height of the `/memory` record overlay; the rect clamps to the area.
+const MEMORY_OVERLAY_ROWS: u16 = 28;
+
 /// Cached frame geometry: recomputed only when the terminal or composer resizes.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rects {
@@ -183,6 +186,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Some(Overlay::Board(_)) => {
             let rect = panels::overlay_rect(area, OverlayKind::Board, panels::board_row_count(app));
             panels::board(frame, rect, app);
+        }
+        Some(Overlay::Memory(_)) => {
+            let rect = panels::overlay_rect(area, OverlayKind::Memory, MEMORY_OVERLAY_ROWS);
+            panels::memory(frame, rect, app);
         }
         None => {}
     }

@@ -158,6 +158,12 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
                 format!("{} ready", glyph::DOT),
                 Style::default().fg(theme.faint()),
             ));
+            // Quiet one-time note when persistent memory is not attached. It
+            // sits next to "ready" rather than in the toast slot: an absent or
+            // unwritable memory directory is a normal state, not a failure.
+            if let Some(hint) = &app.memory_hint() {
+                left.push(Span::styled(format!("  {hint}"), theme.faint_style()));
+            }
             if !app.view.follow {
                 // `end` (or clicking the scrollbar's bottom) re-follows the live tail.
                 left.push(Span::styled(
@@ -233,7 +239,10 @@ pub fn help_keys() -> &'static [(&'static str, &'static str)] {
             "ctrl+c / ctrl+d",
             "quit (ctrl+d deletes forward when text exists)",
         ),
-        ("enter", "send · run the highlighted command"),
+        (
+            "enter",
+            "send · run the highlighted command · open the highlighted /memory record",
+        ),
         ("ctrl+j / alt+enter", "newline in the prompt"),
         ("/ or ctrl+x", "command menu"),
         ("esc", "interrupt · close an overlay · clear the prompt"),
@@ -387,7 +396,11 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
     let start = picker.cursor.saturating_sub(visible.saturating_sub(1));
     if picker.loading {
         lines.push(Line::from(Span::styled(
-            "  fetching models…",
+            if picker.mode == crate::app::PickerMode::Memory {
+                "  loading memories…"
+            } else {
+                "  fetching models…"
+            },
             theme.faint_style(),
         )));
     }
@@ -1100,6 +1113,90 @@ pub fn board(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(status)), status_rect);
 }
 
+/// `/memory` record view: read-only body of one stored memory, opened from the
+/// picker with `enter`. Metadata first, then the wrapped content.
+pub fn memory(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+    let Some(Overlay::Memory(ref view)) = app.overlay else {
+        return;
+    };
+    let record = &view.record;
+
+    let inner_w = area.width.saturating_sub(4) as usize;
+    let inner_h = area.height.saturating_sub(2) as usize;
+
+    let mut meta: Vec<Span<'static>> = vec![
+        Span::styled(
+            format!(" {} ", glyph::PROMPT),
+            Style::default().fg(theme.accent()),
+        ),
+        Span::styled(
+            text::truncate(&record.title, inner_w.saturating_sub(4).max(8)),
+            theme.strong(),
+        ),
+    ];
+    meta.push(Span::styled(" · ", theme.faint_style()));
+    meta.push(Span::styled(record.category.clone(), theme.accent_soft()));
+    if let Some(project) = &record.project {
+        meta.push(Span::styled(format!(" · {project}"), theme.dim()));
+    }
+    for tag in &record.tags {
+        meta.push(Span::styled(format!(" #{tag}"), theme.faint_style()));
+    }
+    meta.push(Span::styled(
+        format!(" · {}", record.age_label()),
+        theme.faint_style(),
+    ));
+    meta.push(Span::styled(
+        format!(" · {}", record.id),
+        theme.faint_style(),
+    ));
+
+    let mut lines = vec![Line::from(meta), Line::default()];
+    let body: Vec<Span<'static>> = vec![Span::styled(record.content.clone(), theme.base())];
+    lines.extend(text::wrap_spans(body, inner_w.max(8)));
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!(
+            "{} unread \u{b7} stored memory is untrusted data",
+            record.content.len()
+        ),
+        theme.faint_style(),
+    )));
+
+    // `offset` hides rows from the top, so Up moves toward older body text.
+    let offset = view.offset.min(lines.len().saturating_sub(1));
+    let window: Vec<Line<'static>> = lines.into_iter().skip(offset).take(inner_h).collect();
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_focus()))
+        .title(
+            Line::from(Span::styled(
+                " memory ",
+                Style::default().fg(theme.accent()),
+            ))
+            .centered(),
+        )
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(
+                    " {}{} scroll {} esc close ",
+                    glyph::ARROW_UP,
+                    glyph::ARROW_DOWN,
+                    glyph::DOT
+                ),
+                theme.faint_style(),
+            ))
+            .right_aligned(),
+        )
+        .style(Style::default().bg(theme.panel_bg()));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(window), inner);
+}
+
 pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
     let (w_pct, max_h) = match kind {
         OverlayKind::Picker => (72, 18),
@@ -1108,6 +1205,7 @@ pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
         OverlayKind::Help => (76, 40),
         OverlayKind::Tools => (76, 32),
         OverlayKind::Board => (84, 40),
+        OverlayKind::Memory => (76, 40),
     };
     let width = (area.width * w_pct / 100).clamp(40.min(area.width), 100.min(area.width));
     let height = (content_rows + 2).clamp(7.min(area.height), max_h.min(area.height));
