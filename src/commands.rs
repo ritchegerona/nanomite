@@ -29,6 +29,7 @@ pub enum Command {
     ProviderMenu,
     Tools,
     Panel,
+    Improve,
 }
 
 pub struct Entry {
@@ -180,6 +181,12 @@ pub const COMMANDS: &[Entry] = &[
         hint: "convene the agent board - /panel <topic>",
         kind: Command::Panel,
     },
+    Entry {
+        command: "/improve",
+        aliases: &[],
+        hint: "review self-edit proposals",
+        kind: Command::Improve,
+    },
 ];
 
 pub fn lookup(word: &str) -> Option<&'static Entry> {
@@ -243,6 +250,7 @@ mod tests {
             "/exit",
             "/export",
             "/help",
+            "/improve",
             "/init",
             "/memory",
             "/models",

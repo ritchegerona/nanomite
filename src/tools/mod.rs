@@ -2,10 +2,12 @@ pub mod catalog;
 pub mod document_tools;
 pub mod exec_tools;
 pub mod file_tools;
+pub mod improve_tools;
 pub mod memory_tools;
 
 pub mod web_tools;
 
+use crate::improve::ImproveEngine;
 use crate::memory::MemoryEngine;
 use std::sync::Arc;
 
@@ -20,6 +22,13 @@ pub struct ToolSet {
     /// Persistent memory. `None` when the engine could not be opened (e.g. a
     /// read-only config directory): the agent keeps working, without memory.
     pub memory: Option<Arc<MemoryEngine>>,
+    /// Self-improvement engine. Always attached in production (opening it only
+    /// creates a data directory); the two self-edit tools are otherwise inert,
+    /// because staging a proposal changes nothing on disk.
+    pub improve: Option<Arc<ImproveEngine>>,
+    /// Anchor paths the engine validates against. Travels with the engine so
+    /// tool dispatch needs nothing from the runtime.
+    pub improve_roots: Option<crate::improve::Roots>,
 }
 
 impl ToolSet {
@@ -33,6 +42,8 @@ impl ToolSet {
                 max_file_bytes,
             ),
             memory: None,
+            improve: None,
+            improve_roots: None,
         }
     }
 }

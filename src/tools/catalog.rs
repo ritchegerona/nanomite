@@ -17,6 +17,7 @@ pub enum ToolCategory {
     Web,
     Memory,
     Document,
+    SelfImprove,
 }
 
 /// One tool in the inventory: stable name, one-line description.
@@ -28,11 +29,11 @@ pub struct ToolSpec {
 }
 
 impl ToolSet {
-    /// Every tool the runtime knows: the 15 dispatched today plus
+    /// Every tool the runtime knows: the 16 dispatched today plus
     /// `read_document`. Names are unique and match the schema list exactly
     /// (enforced by tests).
     pub fn catalog() -> Vec<ToolSpec> {
-        use ToolCategory::{Document, Exec, Files, Memory, Web};
+        use ToolCategory::{Document, Exec, Files, Memory, SelfImprove, Web};
         vec![
             ToolSpec {
                 name: "list_files",
@@ -114,6 +115,16 @@ impl ToolSet {
                 description: "List stored memories with optional category, project and tag filters.",
                 category: Memory,
             },
+            ToolSpec {
+                name: "propose_self_edit",
+                description: "Stage a proposed edit to your config, prompt file or a source file for the user to review in /improve.",
+                category: SelfImprove,
+            },
+            ToolSpec {
+                name: "list_self_edits",
+                description: "List self-edit proposals still waiting for the user's decision.",
+                category: SelfImprove,
+            },
         ]
     }
 }
@@ -122,6 +133,7 @@ impl ToolSet {
 mod tests {
     use super::*;
     use crate::agent::openai::tool_schemas;
+    use crate::tools::improve_tools::improve_tool_schemas;
     use crate::tools::memory_tools::memory_tool_schemas;
 
     /// The catalog is the single inventory: names must be unique.
@@ -132,7 +144,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate tool names in catalog");
-        assert_eq!(count, 16, "expected the full 16-tool inventory");
+        assert_eq!(count, 18, "expected the full 18-tool inventory");
     }
 
     /// Catalog and schemas must stay in step: the exact name set the model
@@ -142,6 +154,7 @@ mod tests {
         let mut schema_names: Vec<String> = tool_schemas()
             .into_iter()
             .chain(memory_tool_schemas())
+            .chain(improve_tool_schemas())
             .map(|t| t.function.name)
             .collect();
         let mut catalog_names: Vec<String> = ToolSet::catalog()

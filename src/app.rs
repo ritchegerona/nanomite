@@ -8,6 +8,9 @@ use crate::board::engine::{BoardEngine, CancelFlag};
 use crate::board::store::{BoardMessage, BoardStore};
 use crate::commands::{self, Command};
 use crate::config::{find_preset, host_of, Config, ProviderKind, ProviderPreset, PRESETS};
+use crate::improve::{
+    Actor, ApplyOutcome, CargoTestRunner, ImproveEngine, RegressionRunner, Roots, Status,
+};
 use crate::memory::policy::MemoryPolicy;
 use crate::memory::MemoryEngine;
 use crate::session::{self, StoredSession};
@@ -29,6 +32,17 @@ const BOARD_ROUNDS: usize = 2;
 const MEMORY_LIST_ROWS: usize = 100;
 /// Hard cap on the body one `/memory` record overlay will render.
 const MEMORY_BODY_CHARS: usize = 40_000;
+/// Proposals one `/improve` list shows; the engine listing is already bounded.
+const IMPROVE_LIST_ROWS: usize = 50;
+/// Hard cap on diff lines one `/improve` review view renders.
+const IMPROVE_REVIEW_LINES: usize = 400;
+/// Hard cap on the prompt file appended to the system prompt.
+const PROMPT_FILE_MAX_BYTES: usize = 16 * 1024;
+/// Failure-detail lines kept under a rolled-back proposal.
+pub const IMPROVE_DETAIL_LINES: usize = 8;
+/// What the production regression gate runs; shown while an approve is in
+/// flight so the user knows what they are waiting for.
+const REGRESSION_COMMAND: &str = "cargo test --lib";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryRole {
@@ -427,6 +441,7 @@ pub enum OverlayKind {
     Tools,
     Board,
     Memory,
+    Improve,
 }
 
 impl Overlay {
@@ -440,6 +455,7 @@ impl Overlay {
             Overlay::Tools(_) => OverlayKind::Tools,
             Overlay::Board(_) => OverlayKind::Board,
             Overlay::Memory(_) => OverlayKind::Memory,
+            Overlay::Improve(_) => OverlayKind::Improve,
         }
     }
 }
@@ -453,6 +469,70 @@ pub enum Overlay {
     Tools(ToolsState),
     Board(BoardState),
     Memory(MemoryView),
+    /// `/improve`: pending self-edit proposals, with a second-level review view
+    /// (`enter`) where the user approves (`a`) or rejects (`r`).
+    Improve(ImproveState),
+}
+
+/// One staged proposal as the `/improve` list shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImproveRow {
+    pub id: String,
+    /// `config`, `prompt` or `source`.
+    pub target: String,
+    pub path: String,
+    /// One line: why the agent wants this change.
+    pub rationale: String,
+    pub created_at: String,
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// Severity of the last `/improve` decision, mapped to a theme colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImproveLevel {
+    Info,
+    Success,
+    Warn,
+    Danger,
+}
+
+/// One status line under the `/improve` view (outcome, or the in-flight verify).
+#[derive(Debug, Clone)]
+pub struct ImproveStatus {
+    pub level: ImproveLevel,
+    pub message: String,
+}
+
+/// `/improve` overlay state. The list is loaded by a blocking task; `review`
+/// holds the diff of the highlighted proposal once the user opens it.
+#[derive(Debug, Clone, Default)]
+pub struct ImproveState {
+    pub rows: Vec<ImproveRow>,
+    pub cursor: usize,
+    /// `Some` while the diff of one proposal is open for review.
+    pub review: Option<ImproveReview>,
+    /// Diff rows hidden from the top of the review view.
+    pub offset: usize,
+    /// Id of the proposal whose regression run is in flight.
+    pub applying: Option<String>,
+    /// Outcome of the last decision, or the in-flight verify note.
+    pub status: Option<ImproveStatus>,
+    /// True until the first listing lands, so the view can say "loading".
+    pub loading: bool,
+}
+
+/// The diff of one proposal, already bounded and split into renderable lines.
+#[derive(Debug, Clone)]
+pub struct ImproveReview {
+    pub id: String,
+    pub path: String,
+    pub target: String,
+    pub rationale: String,
+    pub added: usize,
+    pub removed: usize,
+    /// Raw unified-diff lines; `ui::diff::DiffView` styles them.
+    pub lines: Vec<String>,
 }
 
 /// Read-only `/memory` record view: one stored memory, opened from the picker.
@@ -554,6 +634,21 @@ enum BoardEvent {
     },
 }
 
+/// `/improve` background results, all tagged with the overlay generation so a
+/// decision made in an older view can never repaint a newer one.
+enum ImproveEvent {
+    /// A freshly loaded pending list, optionally carrying the outcome of the
+    /// decision that triggered the reload.
+    Rows {
+        rows: Vec<ImproveRow>,
+        status: Option<ImproveStatus>,
+    },
+    /// The listing failed; `message` is shown verbatim.
+    Err(String),
+    /// One proposal's diff, loaded when the user opened the review view.
+    Review(ImproveReview),
+}
+
 pub struct App {
     pub cfg: Config,
     pub theme: Theme,
@@ -579,6 +674,23 @@ pub struct App {
     memory: Option<Arc<MemoryEngine>>,
     /// One-time footer hint: why memory is absent (never an error toast).
     memory_hint: Option<String>,
+    /// One-time footer hint: why the custom prompt file was not loaded.
+    prompt_hint: Option<String>,
+    /// Self-improvement engine. Opening it only creates a data directory, so it
+    /// is always attached in production.
+    improve: Option<Arc<ImproveEngine>>,
+    /// The engine's data directory, where staged `.diff` files live. Kept so the
+    /// UI can render a proposal's diff without reaching into engine internals.
+    improve_dir: PathBuf,
+    /// Anchor paths handed to the engine: which config and prompt files are
+    /// allowed, and which directory source edits must stay inside.
+    improve_roots: Roots,
+    /// Indirection over the regression gate, so tests never shell out to cargo.
+    regression_runner: Arc<dyn RegressionRunner + Send + Sync>,
+    improve_rx: UnboundedReceiver<(u64, ImproveEvent)>,
+    improve_tx: UnboundedSender<(u64, ImproveEvent)>,
+    /// Bumped on every `/improve` open and on every decision inside it.
+    improve_gen: u64,
     cancel: Option<Cancel>,
     rx: UnboundedReceiver<AgentEvent>,
     tx: UnboundedSender<AgentEvent>,
@@ -628,6 +740,7 @@ impl App {
         let (models_tx, models_rx) = unbounded_channel();
         let (board_tx, board_rx) = unbounded_channel();
         let (memory_tx, memory_rx) = unbounded_channel();
+        let (improve_tx, improve_rx) = unbounded_channel();
 
         // Persistent memory is opened before the runtime so the six memory tools
         // are live schemas and turn retrieval/capture run from the first prompt.
@@ -637,6 +750,19 @@ impl App {
             Some(engine) => runtime.with_memory(Arc::clone(engine)),
             None => runtime,
         };
+
+        // Self-improvement is attached unconditionally (opening the engine only
+        // creates a data directory), then the custom prompt file is appended so
+        // the model sees: base prompt → memory notice → user instructions. The
+        // prompt file is the same file a `prompt` self-edit rewrites, so the two
+        // are one loop: hand-written rules and agent-proposed rules land in the
+        // same place and the same review gate.
+        let (prompt_file, prompt_hint) = Self::read_prompt_file(&cfg);
+        let runtime = runtime.with_prompt_file(prompt_file);
+        let improve_dir = Self::improve_dir();
+        let improve_roots = Self::improve_roots(&cfg, &cwd);
+        let improve = Arc::new(ImproveEngine::new(improve_dir.clone()));
+        let runtime = runtime.with_improve(Arc::clone(&improve), improve_roots.clone());
 
         let mut app = Self {
             view: View::new(theme),
@@ -657,6 +783,14 @@ impl App {
             runtime,
             memory,
             memory_hint,
+            prompt_hint,
+            improve: Some(improve),
+            improve_dir,
+            improve_roots,
+            regression_runner: Arc::new(CargoTestRunner),
+            improve_rx,
+            improve_tx,
+            improve_gen: 0,
             cancel: None,
             rx,
             tx,
@@ -729,6 +863,64 @@ impl App {
         }
     }
 
+    /// Where staged proposals, their diffs and the audit trail live:
+    /// `~/.local/share/nanomite/improve`, alongside the session store.
+    fn improve_dir() -> PathBuf {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("nanomite")
+            .join("improve")
+    }
+
+    /// Anchor paths for the engine. `config`/`prompt` self-edits must name these
+    /// exact files; `source` edits must stay inside `repo_root`.
+    fn improve_roots(cfg: &Config, workspace: &std::path::Path) -> Roots {
+        Roots {
+            config_path: cfg
+                .store_path
+                .clone()
+                .unwrap_or_else(crate::config::default_store_path),
+            prompt_path: cfg
+                .prompt_file
+                .clone()
+                .unwrap_or_else(crate::config::default_prompt_path),
+            repo_root: workspace.to_path_buf(),
+        }
+    }
+
+    /// Reads the user's custom prompt file, bounded to
+    /// [`PROMPT_FILE_MAX_BYTES`]. A missing file is silent (the common case: the
+    /// user never wrote one); an unreadable file produces a quiet footer hint,
+    /// never a toast.
+    ///
+    /// Tests skip the read entirely so no test ever touches the real
+    /// `~/.config/nanomite/prompt.md`.
+    fn read_prompt_file(cfg: &Config) -> (String, Option<String>) {
+        if cfg!(test) {
+            return (String::new(), None);
+        }
+        let Some(path) = cfg.prompt_file.as_ref() else {
+            return (String::new(), None);
+        };
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                let mut text =
+                    String::from_utf8_lossy(&bytes[..bytes.len().min(PROMPT_FILE_MAX_BYTES)])
+                        .into_owned();
+                text.push('\n');
+                (text, None)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), None),
+            Err(e) => (
+                String::new(),
+                Some(format!(
+                    "prompt file unavailable · {}",
+                    crate::ui::text::truncate(&e.to_string(), 60)
+                )),
+            ),
+        }
+    }
+
     /// Attaches an engine the caller already owns. Tests use this with
     /// `MemoryEngine::open_in_memory`, so no test ever reads or writes the
     /// real `~/.config/nanomite/memory` tree.
@@ -737,6 +929,27 @@ impl App {
         self.memory_hint = None;
         self.memory = Some(engine.clone());
         self.runtime = self.runtime.clone().with_memory(engine);
+    }
+
+    /// Attaches a self-improvement engine rooted in a temp directory, plus the
+    /// regression runner the review view will use. Production wires
+    /// [`CargoTestRunner`]; tests pass a [`FakeRunner`] so no test ever shells
+    /// out to cargo.
+    #[cfg(test)]
+    pub fn attach_improve_for_test(
+        &mut self,
+        engine: Arc<ImproveEngine>,
+        roots: Roots,
+        runner: impl RegressionRunner + Send + Sync + 'static,
+    ) {
+        self.improve_dir = engine.data_dir().to_path_buf();
+        self.improve_roots = roots.clone();
+        self.improve = Some(Arc::clone(&engine));
+        self.regression_runner = Arc::new(runner);
+        self.runtime = self
+            .runtime
+            .clone()
+            .with_improve(Arc::clone(&engine), roots);
     }
 
     /// The context the next prompt is built from. Test-only: it is the exact
@@ -759,6 +972,25 @@ impl App {
         } else {
             self.memory_hint.as_deref()
         }
+    }
+
+    /// Quiet footer hint when the custom prompt file could not be read.
+    pub fn prompt_hint(&self) -> Option<&str> {
+        self.prompt_hint.as_deref()
+    }
+
+    /// Pending proposals as the `/improve` list shows them, read synchronously.
+    /// Test-only: the app itself loads them on a blocking worker.
+    #[cfg(test)]
+    pub fn improve_pending_rows(&self) -> Vec<ImproveRow> {
+        self.load_improve_rows()
+    }
+
+    /// The live tool set, so a test can dispatch a tool call through exactly the
+    /// layer a model turn uses.
+    #[cfg(test)]
+    pub fn tool_set_for_test(&self) -> Arc<crate::tools::ToolSet> {
+        self.runtime.tool_set()
     }
 
     fn control_send(&self, control: Control) {
@@ -838,6 +1070,12 @@ impl App {
             // newer thread's view.
             if gen == self.board_gen {
                 self.apply_board_event(event);
+            }
+        }
+        while let Ok((gen, event)) = self.improve_rx.try_recv() {
+            changed = true;
+            if gen == self.improve_gen {
+                self.apply_improve_event(event);
             }
         }
         if changed {
@@ -1155,6 +1393,7 @@ impl App {
             Command::Share => self.share_session(),
             Command::Themes => self.open_themes(),
             Command::Tools => self.open_tools(),
+            Command::Improve => self.open_improve(),
             Command::Thinking => {
                 self.show_thinking = !self.show_thinking;
                 self.toast(format!(
@@ -1851,6 +2090,249 @@ impl App {
         self.mark_dirty();
     }
 
+    // -- /improve -----------------------------------------------------------
+
+    /// Opens the self-edit review. The pending list is loaded by a blocking
+    /// task; the overlay renders immediately and fills in when it lands.
+    pub fn open_improve(&mut self) {
+        if self.improve.is_none() {
+            self.toast("self-improvement is not available in this build");
+            self.mark_dirty();
+            return;
+        }
+        self.improve_gen += 1;
+        self.overlay = Some(Overlay::Improve(ImproveState {
+            loading: true,
+            ..ImproveState::default()
+        }));
+        self.spawn_improve_list(None);
+        self.mark_dirty();
+    }
+
+    /// Pending proposals, oldest first, each with its diff size counted from the
+    /// staged `.diff` file. Blocking: only ever called on a blocking worker.
+    #[cfg(test)]
+    fn load_improve_rows(&self) -> Vec<ImproveRow> {
+        let Some(engine) = &self.improve else {
+            return Vec::new();
+        };
+        improve_rows_from(engine, &self.improve_dir).unwrap_or_default()
+    }
+
+    /// The staged unified diff for one proposal, read from the engine's data dir.
+    /// Blocking: only ever called on a blocking worker.
+    #[allow(dead_code)]
+    fn staged_diff(&self, id: &str) -> Option<String> {
+        std::fs::read_to_string(
+            self.improve_dir
+                .join("proposals")
+                .join(format!("{id}.diff")),
+        )
+        .ok()
+    }
+
+    /// Reloads the list in the background, optionally carrying the outcome of
+    /// the decision that triggered the reload.
+    fn spawn_improve_list(&mut self, status: Option<ImproveStatus>) {
+        let Some(engine) = self.improve.clone() else {
+            return;
+        };
+        self.improve_gen += 1;
+        let gen = self.improve_gen;
+        let dir = self.improve_dir.clone();
+        let tx = self.improve_tx.clone();
+        self.handle.spawn_blocking(move || {
+            let event = match improve_rows_from(&engine, &dir) {
+                Ok(rows) => ImproveEvent::Rows { rows, status },
+                Err(message) => ImproveEvent::Err(message),
+            };
+            let _ = tx.send((gen, event));
+        });
+    }
+
+    fn apply_improve_event(&mut self, event: ImproveEvent) {
+        // The toast is decided inside the borrow and fired after it, so the
+        // overlay state and the toast slot never alias.
+        let mut toast = None;
+        if let Some(Overlay::Improve(state)) = self.overlay.as_mut() {
+            match event {
+                ImproveEvent::Rows { rows, status } => {
+                    state.loading = false;
+                    state.rows = rows;
+                    state.applying = None;
+                    match status {
+                        Some(status) => {
+                            state.status = Some(status);
+                            // The reviewed proposal is gone (applied or rejected):
+                            // fall back to the list instead of a dead diff.
+                            if state
+                                .review
+                                .as_ref()
+                                .is_some_and(|r| !state.rows.iter().any(|row| row.id == r.id))
+                            {
+                                state.review = None;
+                                state.offset = 0;
+                            }
+                        }
+                        // A plain reload with nothing staged says so instead of
+                        // showing a blank sheet.
+                        None if state.rows.is_empty() => {
+                            toast = Some("no pending proposals".to_string())
+                        }
+                        None => {}
+                    }
+                }
+                ImproveEvent::Review(review) => {
+                    state.review = Some(review);
+                    state.offset = 0;
+                }
+                ImproveEvent::Err(message) => {
+                    state.loading = false;
+                    state.applying = None;
+                    state.status = Some(ImproveStatus {
+                        level: ImproveLevel::Danger,
+                        message,
+                    });
+                }
+            }
+        }
+        if let Some(message) = toast {
+            self.toast(message);
+        }
+    }
+
+    /// `enter` in the list: load the highlighted proposal's diff into the
+    /// review view.
+    fn open_improve_review(&mut self) {
+        let Some(Overlay::Improve(state)) = self.overlay.clone() else {
+            return;
+        };
+        let Some(row) = state.rows.get(state.cursor).cloned() else {
+            self.toast("no proposal selected");
+            self.mark_dirty();
+            return;
+        };
+        let dir = self.improve_dir.clone();
+        let tx = self.improve_tx.clone();
+        let gen = self.improve_gen;
+        self.handle.spawn_blocking(move || {
+            let diff =
+                std::fs::read_to_string(dir.join("proposals").join(format!("{}.diff", row.id)))
+                    .unwrap_or_default();
+            let mut lines: Vec<String> = diff.lines().map(str::to_string).collect();
+            if lines.len() > IMPROVE_REVIEW_LINES {
+                let hidden = lines.len() - IMPROVE_REVIEW_LINES;
+                lines.drain(..hidden);
+                lines.insert(0, format!("… {hidden} earlier diff lines elided"));
+            }
+            let _ = tx.send((
+                gen,
+                ImproveEvent::Review(ImproveReview {
+                    id: row.id,
+                    path: row.path,
+                    target: row.target,
+                    rationale: row.rationale,
+                    added: row.added,
+                    removed: row.removed,
+                    lines,
+                }),
+            ));
+        });
+        self.mark_dirty();
+    }
+
+    /// `a` in the review view: approve and apply one proposal.
+    ///
+    /// # Approval gate
+    ///
+    /// This is the **only** call path to [`ImproveEngine::apply`] in the
+    /// application. It is reachable from exactly one place: an explicit `a`
+    /// keypress while the review view of `/improve` is open. No tool, no model
+    /// output, no command and no timer can reach it - the agent can only stage a
+    /// proposal with `propose_self_edit`.
+    fn approve_improve(&mut self, id: &str) {
+        let Some(engine) = self.improve.clone() else {
+            return;
+        };
+        if let Some(Overlay::Improve(state)) = self.overlay.as_mut() {
+            if state.applying.is_some() {
+                self.toast("already verifying a proposal");
+                self.mark_dirty();
+                return;
+            }
+            state.applying = Some(id.to_string());
+            state.status = Some(ImproveStatus {
+                level: ImproveLevel::Info,
+                message: format!("verifying… ({REGRESSION_COMMAND})"),
+            });
+        }
+        let runner = Arc::clone(&self.regression_runner);
+        let roots = self.improve_roots.clone();
+        let tx = self.improve_tx.clone();
+        self.improve_gen += 1;
+        let gen = self.improve_gen;
+        let id = id.to_string();
+        // The regression runner shells out to `cargo test --lib`: never on the
+        // UI thread.
+        self.handle.spawn_blocking(move || {
+            let status = match engine.apply(&id, runner.as_ref(), &roots) {
+                Ok(outcome) => status_from_outcome(&outcome),
+                Err(e) => ImproveStatus {
+                    level: ImproveLevel::Danger,
+                    message: crate::ui::text::truncate(&e.to_string(), 120),
+                },
+            };
+            let event = match improve_rows_from(&engine, engine.data_dir()) {
+                Ok(rows) => ImproveEvent::Rows {
+                    rows,
+                    status: Some(status),
+                },
+                Err(message) => ImproveEvent::Err(message),
+            };
+            let _ = tx.send((gen, event));
+        });
+        self.mark_dirty();
+    }
+
+    /// `r` in the review view: reject one proposal. Nothing is written.
+    fn reject_improve(&mut self, id: &str) {
+        let Some(engine) = self.improve.clone() else {
+            return;
+        };
+        let id = id.to_string();
+        let user = Actor::User;
+        let tx = self.improve_tx.clone();
+        self.improve_gen += 1;
+        let gen = self.improve_gen;
+        self.handle.spawn_blocking(move || {
+            let status = match engine.reject(&id, user) {
+                Ok(proposal) => ImproveStatus {
+                    level: ImproveLevel::Info,
+                    message: format!("{} rejected", proposal.id),
+                },
+                Err(e) => ImproveStatus {
+                    level: ImproveLevel::Danger,
+                    message: crate::ui::text::truncate(&e.to_string(), 120),
+                },
+            };
+            let event = match improve_rows_from(&engine, engine.data_dir()) {
+                Ok(rows) => ImproveEvent::Rows {
+                    rows,
+                    status: Some(status),
+                },
+                Err(message) => ImproveEvent::Err(message),
+            };
+            let _ = tx.send((gen, event));
+        });
+        self.mark_dirty();
+    }
+
+    /// True while a regression run is in flight; the overlay shows a progress
+    /// note and refuses further decisions.
+    pub fn improve_applying(&self) -> bool {
+        matches!(&self.overlay, Some(Overlay::Improve(state)) if state.applying.is_some())
+    }
+
     fn apply_picker_value(&mut self, value: PickerValue) {
         match value {
             PickerValue::Action(action) => self.run_action(action),
@@ -2327,6 +2809,94 @@ impl App {
                 self.overlay = Some(Overlay::Memory(view));
                 self.mark_dirty();
             }
+            Overlay::Improve(mut state) => {
+                let applying = state.applying.is_some();
+                let has_review = state.review.is_some();
+                match key.code {
+                    // `esc` walks back out: review → list → closed.
+                    KeyCode::Esc => {
+                        drop(state);
+                        if has_review {
+                            if let Some(Overlay::Improve(state)) = self.overlay.as_mut() {
+                                state.review = None;
+                                state.offset = 0;
+                            }
+                        } else {
+                            self.close_overlay();
+                        }
+                        self.mark_dirty();
+                        return;
+                    }
+                    KeyCode::Enter if !has_review => {
+                        self.open_improve_review();
+                        return;
+                    }
+                    // Approval gate: `a` and `r` exist only in the review view,
+                    // and only `a` can change a file on disk.
+                    KeyCode::Char('a') if has_review && !applying => {
+                        let id = state.review.as_ref().map(|r| r.id.clone());
+                        drop(state);
+                        if let Some(id) = id {
+                            self.approve_improve(&id);
+                        }
+                        return;
+                    }
+                    KeyCode::Char('r') if has_review && !applying => {
+                        let id = state.review.as_ref().map(|r| r.id.clone());
+                        drop(state);
+                        if let Some(id) = id {
+                            self.reject_improve(&id);
+                        }
+                        return;
+                    }
+                    KeyCode::Up => {
+                        if has_review {
+                            state.offset = state.offset.saturating_add(1);
+                        } else {
+                            state.cursor = state.cursor.saturating_sub(1);
+                        }
+                    }
+                    KeyCode::Down => {
+                        if has_review {
+                            state.offset = state.offset.saturating_sub(1);
+                        } else if state.cursor + 1 < state.rows.len() {
+                            state.cursor += 1;
+                        }
+                    }
+                    KeyCode::PageUp => {
+                        if has_review {
+                            state.offset = state.offset.saturating_add(8);
+                        } else {
+                            state.cursor = state.cursor.saturating_sub(8);
+                        }
+                    }
+                    KeyCode::PageDown => {
+                        if has_review {
+                            state.offset = state.offset.saturating_sub(8);
+                        } else {
+                            state.cursor =
+                                (state.cursor + 8).min(state.rows.len().saturating_sub(1));
+                        }
+                    }
+                    KeyCode::Home => {
+                        if has_review {
+                            state.offset = usize::MAX / 2;
+                        } else {
+                            state.cursor = 0;
+                        }
+                    }
+                    KeyCode::End => {
+                        if has_review {
+                            state.offset = 0;
+                        } else {
+                            state.cursor = state.rows.len().saturating_sub(1);
+                        }
+                    }
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Improve(state));
+                self.mark_dirty();
+            }
             Overlay::Providers(mut state) => {
                 match key.code {
                     KeyCode::Esc => {
@@ -2407,6 +2977,68 @@ fn editor_available() -> bool {
 
 /// Where the board database lives: `NANOMITE_BOARD_DIR` overrides the
 /// directory (tests), else the platform data dir like `session.rs` uses.
+/// Pending self-edit proposals as the `/improve` list shows them. Blocking: the
+/// engine reads its proposal store from disk, so this only ever runs on a
+/// blocking worker.
+fn improve_rows_from(
+    engine: &ImproveEngine,
+    dir: &std::path::Path,
+) -> Result<Vec<ImproveRow>, String> {
+    let proposals = engine
+        .list(Some(Status::Pending))
+        .map_err(|e| crate::ui::text::truncate(&e.to_string(), 120))?;
+    Ok(proposals
+        .into_iter()
+        .take(IMPROVE_LIST_ROWS)
+        .map(|p| {
+            let diff =
+                std::fs::read_to_string(dir.join("proposals").join(format!("{}.diff", p.id)))
+                    .unwrap_or_default();
+            let (added, removed) = crate::tools::improve_tools::count_changes(&diff);
+            ImproveRow {
+                id: p.id.clone(),
+                target: p.target.as_str().to_string(),
+                path: p.path.to_string_lossy().to_string(),
+                rationale: crate::tools::improve_tools::summary(&p).rationale,
+                created_at: p.created_at,
+                added,
+                removed,
+            }
+        })
+        .collect())
+}
+
+/// Maps an apply outcome onto the overlay's status line: applied is success, a
+/// failed regression gate is a warning carrying the runner's tail, and a hard
+/// failure is a danger line.
+fn status_from_outcome(outcome: &ApplyOutcome) -> ImproveStatus {
+    match outcome.status {
+        Status::Applied => ImproveStatus {
+            level: ImproveLevel::Success,
+            message: format!("{} applied", outcome.id),
+        },
+        Status::RolledBack => ImproveStatus {
+            level: ImproveLevel::Warn,
+            message: format!(
+                "{} rolled back · {REGRESSION_COMMAND} failed\n{}",
+                outcome.id,
+                detail_tail(&outcome.detail)
+            ),
+        },
+        _ => ImproveStatus {
+            level: ImproveLevel::Danger,
+            message: format!("{} failed\n{}", outcome.id, detail_tail(&outcome.detail)),
+        },
+    }
+}
+
+/// Last [`IMPROVE_DETAIL_LINES`] lines of a runner failure tail.
+fn detail_tail(detail: &str) -> String {
+    let lines: Vec<&str> = detail.trim_end().lines().collect();
+    let start = lines.len().saturating_sub(IMPROVE_DETAIL_LINES);
+    lines[start..].join("\n")
+}
+
 fn board_store_path() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("NANOMITE_BOARD_DIR") {
         return Some(PathBuf::from(dir).join("board.db"));

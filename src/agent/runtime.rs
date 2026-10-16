@@ -173,6 +173,10 @@ impl AgentRuntime {
     /// model, an endpoint or a prompt format.
     pub fn with_memory(mut self, engine: Arc<crate::memory::MemoryEngine>) -> Self {
         let mut tools = ToolSet::new(self.workspace.clone(), self.max_file_bytes);
+        // Both builders rebuild the tool set, so each preserves the other's
+        // attachment: call order never silently drops a subsystem.
+        tools.improve = self.tools.improve.clone();
+        tools.improve_roots = self.tools.improve_roots.clone();
         tools.memory = Some(Arc::clone(&engine));
         self.tools = Arc::new(tools);
         let mut schemas = (*self.tools_schema).clone();
@@ -183,6 +187,52 @@ impl AgentRuntime {
              context from earlier sessions would help, and save durable facts, decisions \
              and preferences the user states - never credentials or secrets.",
         );
+        self
+    }
+
+    /// Attaches the self-improvement engine: `propose_self_edit` and
+    /// `list_self_edits` become available schemas, validated against the
+    /// caller-supplied roots.
+    ///
+    /// There is deliberately no agent-callable apply. The model can *stage* a
+    /// change; a human approves it in the `/improve` overlay, and only the UI's
+    /// explicit approve keypress ever calls [`crate::improve::ImproveEngine::apply`].
+    pub fn with_improve(
+        mut self,
+        engine: Arc<crate::improve::ImproveEngine>,
+        roots: crate::improve::Roots,
+    ) -> Self {
+        let mut tools = ToolSet::new(self.workspace.clone(), self.max_file_bytes);
+        tools.memory = self.tools.memory.clone();
+        tools.improve = Some(Arc::clone(&engine));
+        tools.improve_roots = Some(roots.clone());
+        self.tools = Arc::new(tools);
+        let mut schemas = (*self.tools_schema).clone();
+        schemas.extend(crate::tools::improve_tools::improve_tool_schemas());
+        self.tools_schema = Arc::new(filter_disabled_schemas(schemas, &self.disabled_tools));
+        self.system_prompt.push_str(
+            "\n\nYou may propose changes to your own config, prompt file or a workspace \
+             source file with propose_self_edit (list_self_edits shows what is staged). \
+             A proposal is staged for user review only: the user approves it in /improve, \
+             nothing is applied automatically, and you have no tool that applies one.",
+        );
+        self
+    }
+
+    /// Appends the user's custom prompt file to the system prompt. Call after
+    /// `with_memory` so the base prompt, the memory notice and then the custom
+    /// instructions reach the model in that order.
+    ///
+    /// The file the agent edits with `propose_self_edit { target: "prompt" }` is
+    /// this file: hand-written and agent-proposed instructions are the same loop.
+    pub fn with_prompt_file(mut self, text: String) -> Self {
+        let text = text.trim();
+        if text.is_empty() {
+            return self;
+        }
+        self.system_prompt
+            .push_str("\n\n# User instructions (prompt.md)\n\n");
+        self.system_prompt.push_str(text);
         self
     }
 
@@ -202,6 +252,13 @@ impl AgentRuntime {
 
     pub fn provider(&self) -> &Arc<dyn AgentProvider> {
         &self.provider
+    }
+
+    /// The live tool set, shared with the approval-path tests so they can drive
+    /// a tool call exactly as the turn loop does.
+    #[cfg(test)]
+    pub(crate) fn tool_set(&self) -> std::sync::Arc<ToolSet> {
+        std::sync::Arc::clone(&self.tools)
     }
 
     /// Appends bounded retrieved memory to the trusted system message, keeping
@@ -500,7 +557,7 @@ fn filter_disabled_schemas(
 /// `disabled` carries the configuration-disabled tool names (lowercased): a
 /// disabled tool is refused even though the schema list should already have
 /// hidden it - the model can still hallucinate a name.
-fn run_tool(
+pub(crate) fn run_tool(
     tools: &ToolSet,
     disabled: &[String],
     call: &ToolCall,
@@ -747,6 +804,43 @@ fn run_tool(
             let payload = serde_json::to_string(&result).unwrap_or_default();
             Ok((payload, summary))
         }
+        // Self-improvement. Staging only: these arms never call
+        // `ImproveEngine::apply`, which is reachable exclusively from the
+        // `/improve` overlay's explicit approve keypress.
+        "propose_self_edit" => {
+            let parsed: crate::tools::improve_tools::ProposeSelfEditArgs =
+                serde_json::from_value(args)
+                    .map_err(|e| format!("bad propose_self_edit arguments: {e}"))?;
+            let path = parsed.path.clone();
+            let result = improve_error(
+                tools.improve.as_ref(),
+                tools.improve_roots.as_ref(),
+                |engine, roots| crate::tools::improve_tools::propose(engine, parsed, roots),
+            )?;
+            let summary = format!(
+                "{} · {} · +{} −{}",
+                shorten(&result.id, 20),
+                shorten(&path, 40),
+                result.added,
+                result.removed
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "list_self_edits" => {
+            let result = improve_error(
+                tools.improve.as_ref(),
+                tools.improve_roots.as_ref(),
+                |engine, _roots| crate::tools::improve_tools::list_pending(engine),
+            )?;
+            let summary = if result.proposals.is_empty() {
+                "no pending proposals".to_string()
+            } else {
+                format!("{} pending", result.total)
+            };
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
         other => Err(format!("unknown tool `{other}`")),
     }
 }
@@ -774,6 +868,36 @@ where
     })
 }
 
+/// Runs a self-improvement tool when the engine is attached; reports a
+/// structured refusal otherwise. A safety denial is data for the model, never a
+/// crash, so the engine's own message is passed through verbatim.
+fn improve_error<T, F>(
+    engine: Option<&Arc<crate::improve::ImproveEngine>>,
+    roots: Option<&crate::improve::Roots>,
+    f: F,
+) -> Result<T, String>
+where
+    F: FnOnce(
+        &crate::improve::ImproveEngine,
+        &crate::improve::Roots,
+    ) -> Result<T, crate::improve::ImproveError>,
+{
+    let (Some(engine), Some(roots)) = (engine, roots) else {
+        return Err("self-improvement is not available in this session".to_string());
+    };
+    f(engine, roots).map_err(|e| {
+        format!(
+            "{{\"error\":{},\"code\":\"{}\"}}",
+            serde_json::to_string(&e.to_string()).unwrap_or_else(|_| "\"improve error\"".into()),
+            match e {
+                crate::improve::ImproveError::Policy(_) => "improve_policy",
+                crate::improve::ImproveError::Invalid(_) => "improve_invalid",
+                _ => "improve_error",
+            }
+        )
+    })
+}
+
 fn describe_args(call: &ToolCall) -> String {
     let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.arguments) else {
         return String::new();
@@ -794,7 +918,9 @@ fn describe_args(call: &ToolCall) -> String {
         .unwrap_or_default()
 }
 
-fn shorten(s: &str, max: usize) -> String {
+/// Shared with the tool layer: shortens a string to `max` characters with an
+/// ellipsis, used for one-line UI summaries and bounded payload previews.
+pub(crate) fn shorten(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {
@@ -872,6 +998,19 @@ fn preview_args(call: &ToolCall) -> Option<String> {
                 .map(|f| f.as_str())
                 .unwrap_or("document");
             Some(shorten(&format!("[{format}] {path}"), 120))
+        }
+        "propose_self_edit" => {
+            // The rationale is the "why" a reviewer wants to see first; the
+            // preview is built from arguments alone, like every other preview.
+            let rationale = args.get("rationale").and_then(|v| v.as_str())?;
+            if rationale.trim().is_empty() {
+                return None;
+            }
+            Some(bounded_preview(
+                rationale,
+                PREVIEW_MAX_LINES,
+                PREVIEW_MAX_CHARS,
+            ))
         }
         _ => None,
     }
@@ -1325,5 +1464,155 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// Self-improvement: two schemas, no apply, and the truth in the prompt.
+    fn improve_runtime(dir: &std::path::Path) -> AgentRuntime {
+        let roots = crate::improve::Roots {
+            config_path: dir.join("config.toml"),
+            prompt_path: dir.join("prompt.md"),
+            repo_root: dir.to_path_buf(),
+        };
+        let engine = Arc::new(crate::improve::ImproveEngine::new(dir.join(".improve")));
+        runtime_with(Arc::new(RecordingProvider::new()), None).with_improve(engine, roots)
+    }
+
+    #[tokio::test]
+    async fn the_custom_prompt_file_reaches_the_system_message() {
+        let provider = Arc::new(RecordingProvider::new());
+        let runtime = runtime_with(Arc::clone(&provider) as Arc<dyn AgentProvider>, None)
+            .with_prompt_file("  Always answer in metric units.  ".to_string());
+        run_turn(&runtime).await;
+        let system = provider.last_system();
+        assert!(
+            system.contains("Always answer in metric units."),
+            "prompt file content missing:\n{system}"
+        );
+        // It is appended after the base prompt, never replacing it.
+        assert!(system.contains("You are nanomite"), "{system}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_prompt_file_changes_nothing() {
+        let provider = Arc::new(RecordingProvider::new());
+        let base = runtime_with(Arc::clone(&provider) as Arc<dyn AgentProvider>, None);
+        run_turn(&base).await;
+        let plain = provider.last_system();
+        let provider = Arc::new(RecordingProvider::new());
+        let runtime = runtime_with(Arc::clone(&provider) as Arc<dyn AgentProvider>, None)
+            .with_prompt_file("   \n  ".to_string());
+        run_turn(&runtime).await;
+        assert_eq!(provider.last_system(), plain);
+    }
+
+    #[test]
+    fn improve_attaches_exactly_two_schemas_and_no_apply() {
+        let dir = std::env::temp_dir().join(format!("nanomite-improve-rt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let runtime = improve_runtime(&dir);
+        let names: Vec<&str> = runtime
+            .tools_schema
+            .iter()
+            .map(|t| t.function.name.as_str())
+            .collect();
+        assert!(names.contains(&"propose_self_edit"), "{names:?}");
+        assert!(names.contains(&"list_self_edits"), "{names:?}");
+        // Approval is a human action: there is deliberately no apply tool.
+        assert!(
+            !names.iter().any(|n| n.contains("apply")),
+            "no agent-callable apply may exist: {names:?}"
+        );
+        let system = runtime.system_prompt.clone();
+        assert!(
+            system.contains("staged for user review"),
+            "the prompt must say proposals need the user: {system}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn self_edit_tools_are_refused_without_the_engine() {
+        let runtime = runtime_with(Arc::new(RecordingProvider::new()), None);
+        let tools = runtime.tools.clone();
+        let err = run_tool(
+            &tools,
+            &[],
+            &ToolCall {
+                id: "t1".into(),
+                name: "list_self_edits".into(),
+                arguments: "{}".to_string(),
+                index: 0,
+            },
+        )
+        .expect_err("no engine, no self-edit tools");
+        assert!(err.contains("not available"), "{err}");
+    }
+
+    #[test]
+    fn propose_dispatches_through_the_tool_layer_and_never_applies() {
+        let dir =
+            std::env::temp_dir().join(format!("nanomite-improve-disp-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).expect("temp dir");
+        std::fs::write(dir.join("src/lib.rs"), "pub fn a() {}\n").expect("fixture");
+        let runtime = improve_runtime(&dir);
+        let tools = runtime.tools.clone();
+
+        let (payload, summary) = run_tool(
+            &tools,
+            &[],
+            &ToolCall {
+                id: "t1".into(),
+                name: "propose_self_edit".into(),
+                arguments: r#"{"target":"source","path":"src/lib.rs","new_content":"pub fn b() {}\n","rationale":"rename"}"#.to_string(),
+                index: 0,
+            },
+        )
+        .expect("propose via run_tool");
+        assert!(payload.contains("\"status\":\"pending\""), "{payload}");
+        assert!(summary.contains("+1"), "{summary}");
+
+        // Staging left the file exactly as it was.
+        assert_eq!(
+            std::fs::read_to_string(dir.join("src/lib.rs")).unwrap(),
+            "pub fn a() {}\n"
+        );
+
+        let (payload, summary) = run_tool(
+            &tools,
+            &[],
+            &ToolCall {
+                id: "t2".into(),
+                name: "list_self_edits".into(),
+                arguments: "{}".to_string(),
+                index: 0,
+            },
+        )
+        .expect("list via run_tool");
+        assert!(payload.contains("\"total\":1"), "{payload}");
+        assert!(payload.contains("rename"), "{payload}");
+        assert_eq!(summary, "1 pending");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn preview_args_shows_the_proposal_rationale() {
+        let preview = preview_args(&ToolCall {
+            id: "t1".into(),
+            name: "propose_self_edit".into(),
+            arguments: r#"{"target":"source","path":"src/lib.rs","new_content":"x","rationale":"speed up the parser"}"#.to_string(),
+            index: 0,
+        });
+        assert_eq!(preview.as_deref(), Some("speed up the parser"));
+        // No rationale means no preview rather than an empty row.
+        assert_eq!(
+            preview_args(&ToolCall {
+                id: "t2".into(),
+                name: "propose_self_edit".into(),
+                arguments: r#"{"target":"source","rationale":"  "}"#.to_string(),
+                index: 0,
+            }),
+            None
+        );
     }
 }

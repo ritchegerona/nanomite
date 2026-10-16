@@ -1,7 +1,9 @@
+use super::diff::DiffView;
 use super::text;
 use super::theme::{glyph, Theme};
 use crate::app::{
-    Action, App, BoardState, Overlay, OverlayKind, PickerItem, PickerValue, CONNECT_FIELDS,
+    Action, App, BoardState, ImproveLevel, ImproveReview, ImproveState, Overlay, OverlayKind,
+    PickerItem, PickerValue, CONNECT_FIELDS, IMPROVE_DETAIL_LINES,
 };
 use crate::commands::Command;
 
@@ -161,7 +163,7 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
             // Quiet one-time note when persistent memory is not attached. It
             // sits next to "ready" rather than in the toast slot: an absent or
             // unwritable memory directory is a normal state, not a failure.
-            if let Some(hint) = &app.memory_hint() {
+            if let Some(hint) = app.memory_hint().or_else(|| app.prompt_hint()) {
                 left.push(Span::styled(format!("  {hint}"), theme.faint_style()));
             }
             if !app.view.follow {
@@ -267,6 +269,10 @@ pub fn help_keys() -> &'static [(&'static str, &'static str)] {
         (
             "tab",
             "next picker row · next /connect field (shift+tab back)",
+        ),
+        (
+            "a / r",
+            "approve · reject the self-edit under review in /improve",
         ),
         ("f1", "this sheet"),
     ]
@@ -864,6 +870,7 @@ pub fn tools(frame: &mut Frame, area: Rect, app: &App) {
                         crate::tools::catalog::ToolCategory::Web => "web",
                         crate::tools::catalog::ToolCategory::Memory => "memory",
                         crate::tools::catalog::ToolCategory::Document => "document",
+                        crate::tools::catalog::ToolCategory::SelfImprove => "self-improve",
                     }
                 ),
                 Style::default()
@@ -1197,6 +1204,251 @@ pub fn memory(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(window), inner);
 }
 
+// ---------------------------------------------------------------------------
+// /improve — self-edit proposals
+// ---------------------------------------------------------------------------
+
+/// Rows the `/improve` sheet wants: summary, one line per proposal, a status
+/// line. Drives overlay sizing.
+pub fn improve_row_count(app: &App) -> u16 {
+    let Some(Overlay::Improve(ref state)) = app.overlay else {
+        return 16;
+    };
+    // In review the diff owns the height; the list is bounded and short.
+    if state.review.is_some() {
+        return 30;
+    }
+    ((state.rows.len() as u16) + 3).clamp(6, 24)
+}
+
+/// `/improve`: the pending self-edit proposals, or the review view of one of
+/// them. Nothing here applies anything - `a`/`r` only exist in the review view
+/// and the footer says so.
+pub fn improve(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(Overlay::Improve(ref state)) = app.overlay else {
+        return;
+    };
+    match &state.review {
+        Some(review) => improve_review(frame, area, app, state, review),
+        None => improve_list(frame, area, app, state),
+    }
+}
+
+/// The list half: id, target, path, size, rationale and timestamp per row, with
+/// the cursor on the row `enter` would open.
+fn improve_list(frame: &mut Frame, area: Rect, app: &App, state: &ImproveState) {
+    let theme = &app.theme;
+    let inner_w = area.width.saturating_sub(4) as usize;
+    let inner_h = area.height.saturating_sub(2) as usize;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if state.loading {
+        lines.push(Line::from(Span::styled(
+            "  loading proposals…",
+            theme.faint_style(),
+        )));
+    } else if state.rows.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  no pending proposals - ask the agent to propose a self-edit",
+            theme.faint_style(),
+        )));
+    }
+    let rationale_w = inner_w.saturating_sub(34).max(12);
+    for (i, row) in state.rows.iter().enumerate() {
+        let selected = i == state.cursor;
+        let cursor_marker = if selected { glyph::GUTTER } else { " " };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(" {cursor_marker} "),
+                Style::default().fg(theme.accent()),
+            ),
+            Span::styled(
+                format!("{:<8}", row.target),
+                if selected {
+                    Style::default().fg(theme.accent())
+                } else {
+                    theme.dim()
+                },
+            ),
+            Span::styled(
+                text::truncate_head(&row.path, inner_w.saturating_sub(12).max(16)),
+                if selected {
+                    Style::default().fg(theme.strong())
+                } else {
+                    theme.dim()
+                },
+            ),
+            Span::styled(
+                format!("  +{} −{}", row.added, row.removed),
+                theme.faint_style(),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("       ", theme.faint_style()),
+            Span::styled(
+                format!("{} ", text::truncate(&row.rationale, rationale_w)),
+                theme.faint_style(),
+            ),
+            Span::styled(format!("· {}", row.created_at), theme.faint_style()),
+        ]));
+    }
+
+    let visible = inner_h.saturating_sub(status_rows(state) as usize).max(1);
+    let window: Vec<Line<'static>> = lines.into_iter().take(visible).collect();
+    improve_block(
+        frame,
+        area,
+        theme,
+        " improve ",
+        " ↑↓ move · enter review · esc close ",
+        window,
+        status_line(state, theme, false),
+    );
+}
+
+/// The review half: metadata header plus the proposal's unified diff, styled by
+/// [`crate::ui::diff::DiffView`] so `+`/`-`/`@@` read exactly as elsewhere.
+fn improve_review(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    state: &ImproveState,
+    review: &ImproveReview,
+) {
+    let theme = &app.theme;
+    let inner_w = area.width.saturating_sub(4) as usize;
+
+    let diff_view = DiffView::with_theme(*theme);
+    let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
+        Span::styled(
+            format!(" {} ", glyph::PROMPT),
+            Style::default().fg(theme.accent()),
+        ),
+        Span::styled(
+            text::truncate(&review.path, inner_w.saturating_sub(24).max(16)),
+            theme.strong(),
+        ),
+        Span::styled(format!(" · {} ", review.target), theme.accent_soft()),
+        Span::styled(
+            format!("· +{} −{} · {}", review.added, review.removed, review.id),
+            theme.faint_style(),
+        ),
+    ])];
+    lines.push(Line::from(Span::styled(
+        format!("  {}", text::truncate(&review.rationale, inner_w.max(12))),
+        theme.dim(),
+    )));
+    lines.push(Line::default());
+    // The diff is styled by `DiffView` itself, so `+`/`-`/`@@` read exactly as
+    // they do in a transcript; the text is owned because the view is dropped.
+    lines.extend(
+        review
+            .lines
+            .iter()
+            .map(|line| Line::from(Span::styled(line.clone(), diff_view.style_for(line)))),
+    );
+
+    // `offset` hides rows from the top, so Up moves down the diff.
+    let offset = state.offset.min(lines.len().saturating_sub(1));
+    let visible = (area.height.saturating_sub(2 + status_rows(state)).max(1)) as usize;
+    let window: Vec<Line<'static>> = lines.into_iter().skip(offset).take(visible).collect();
+    improve_block(
+        frame,
+        area,
+        theme,
+        &format!(" review · {} ", text::truncate(&review.path, 40)),
+        " a approve · r reject · ↑↓ scroll · esc back ",
+        window,
+        status_line(state, theme, true),
+    );
+}
+
+/// One bottom line: the in-flight verify note, or the outcome of the last
+/// decision, colored by severity.
+fn status_line<'a>(state: &ImproveState, theme: &Theme, reviewing: bool) -> Option<Line<'a>> {
+    let Some(status) = &state.status else {
+        return None;
+    };
+    let style = match status.level {
+        ImproveLevel::Info => theme.dim(),
+        ImproveLevel::Success => Style::default().fg(theme.success()),
+        ImproveLevel::Warn => Style::default().fg(theme.warn()),
+        ImproveLevel::Danger => Style::default().fg(theme.danger()),
+    };
+    let marker = if state.applying.is_some() && reviewing {
+        format!("{} ", glyph::SPINNER[0])
+    } else {
+        match status.level {
+            ImproveLevel::Success => format!("{} ", glyph::CHECK),
+            ImproveLevel::Danger => format!("{} ", glyph::CROSS),
+            _ => format!("{} ", glyph::DOT),
+        }
+    };
+    Some(Line::from(vec![
+        Span::styled(marker, style),
+        Span::styled(status.message.clone(), style),
+    ]))
+}
+
+/// Lines the status note occupies at the bottom of the sheet.
+fn status_rows(state: &ImproveState) -> u16 {
+    let Some(status) = &state.status else {
+        return 0;
+    };
+    (status.message.lines().count() as u16).clamp(1, IMPROVE_DETAIL_LINES as u16)
+}
+
+/// Shared chrome for both halves of the overlay.
+fn improve_block(
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    title: &str,
+    keys: &str,
+    window: Vec<Line<'static>>,
+    status: Option<Line<'static>>,
+) {
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_focus()))
+        .title(
+            Line::from(Span::styled(
+                title.to_string(),
+                Style::default().fg(theme.accent()),
+            ))
+            .centered(),
+        )
+        .title_bottom(
+            Line::from(Span::styled(format!(" {keys} "), theme.faint_style())).right_aligned(),
+        )
+        .style(Style::default().bg(theme.panel_bg()));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let body_h = inner.height.saturating_sub(match &status {
+        Some(_) => 1,
+        None => 0,
+    });
+    frame.render_widget(
+        Paragraph::new(window),
+        Rect {
+            height: body_h,
+            ..inner
+        },
+    );
+    if let Some(status) = status {
+        frame.render_widget(
+            Paragraph::new(status),
+            Rect {
+                x: inner.x,
+                y: inner.y + inner.height.saturating_sub(1),
+                width: inner.width,
+                height: 1,
+            },
+        );
+    }
+}
+
 pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
     let (w_pct, max_h) = match kind {
         OverlayKind::Picker => (72, 18),
@@ -1206,6 +1458,7 @@ pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
         OverlayKind::Tools => (76, 32),
         OverlayKind::Board => (84, 40),
         OverlayKind::Memory => (76, 40),
+        OverlayKind::Improve => (80, 34),
     };
     let width = (area.width * w_pct / 100).clamp(40.min(area.width), 100.min(area.width));
     let height = (content_rows + 2).clamp(7.min(area.height), max_h.min(area.height));

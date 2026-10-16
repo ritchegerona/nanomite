@@ -300,6 +300,12 @@ pub struct Config {
     pub notice: Option<String>,
     /// Where the setup is persisted; `None` disables saving (tests, one-off runs).
     pub store_path: Option<PathBuf>,
+    /// Extra instructions appended to the system prompt on every turn.
+    ///
+    /// This is the same file the self-improvement engine edits
+    /// (`Target::Prompt`): hand-write it, or let the agent propose a change to
+    /// it in `/improve`. Defaults to `~/.config/nanomite/prompt.md`.
+    pub prompt_file: Option<PathBuf>,
 }
 
 /// The subset of settings persisted to disk; everything else stays env-driven.
@@ -312,6 +318,7 @@ struct Stored {
     reasoning: Option<String>,
     theme: Option<String>,
     disabled_tools: Option<String>,
+    prompt_file: Option<String>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
@@ -337,6 +344,7 @@ fn parse_stored(text: &str) -> Stored {
             "reasoning" => stored.reasoning = Some(value),
             "theme" => stored.theme = Some(value),
             "disabled_tools" => stored.disabled_tools = Some(value),
+            "prompt_file" => stored.prompt_file = Some(value),
             _ => {}
         }
     }
@@ -414,12 +422,18 @@ fn stored_text(cfg: &Config) -> String {
             quote(&cfg.disabled_tools.join(","))
         ));
     }
+    if let Some(path) = &cfg.prompt_file {
+        lines.push(format!(
+            "prompt_file = {}",
+            quote(&path.display().to_string())
+        ));
+    }
     lines.push(String::new());
     lines.join("\n")
 }
 
 /// Where the setup lives: `NANOMITE_CONFIG` wins, else `~/.config/nanomite/config.toml`.
-fn default_store_path() -> PathBuf {
+pub fn default_store_path() -> PathBuf {
     if let Some(path) = first_env_one("NANOMITE_CONFIG") {
         return PathBuf::from(path);
     }
@@ -427,6 +441,19 @@ fn default_store_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("nanomite")
         .join("config.toml")
+}
+
+/// Default location of the custom prompt file: `~/.config/nanomite/prompt.md`,
+/// overridable with `NANOMITE_PROMPT_FILE` or the persisted `prompt_file` key.
+/// The file is optional: a missing file is silent, not an error.
+pub fn default_prompt_path() -> PathBuf {
+    if let Some(path) = first_env_one("NANOMITE_PROMPT_FILE") {
+        return PathBuf::from(path);
+    }
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("nanomite")
+        .join("prompt.md")
 }
 
 /// Pre-rename location; read once so an existing setup (API key!) survives the rename.
@@ -581,6 +608,17 @@ impl Config {
             parse_disabled_tools(&raw)
         };
 
+        // Custom prompt file: the environment wins over the persisted path, and the
+        // default location is always resolved so callers can report it.
+        let prompt_file = (if use_env {
+            first_env_one("NANOMITE_PROMPT_FILE")
+        } else {
+            None
+        })
+        .map(PathBuf::from)
+        .or_else(|| stored.prompt_file.clone().map(PathBuf::from))
+        .or_else(|| Some(default_prompt_path()));
+
         Self {
             provider,
             preset,
@@ -622,6 +660,7 @@ impl Config {
             workspace,
             notice,
             store_path,
+            prompt_file,
         }
     }
 
@@ -771,7 +810,6 @@ fn num_env_u64(key: &str, default: u64) -> u64 {
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(default)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -926,5 +964,44 @@ mod tests {
         assert_eq!(cfg.provider, ProviderKind::Scripted);
         assert_eq!(cfg.model, "scripted-model");
         assert!(!cfg.apply_preset("nope"), "unknown ids must be rejected");
+    }
+
+    /// The custom prompt file defaults to the config dir, is overridable by the
+    /// environment, and round-trips through the persisted setup.
+    #[test]
+    fn prompt_file_default_env_precedence_and_persistence() {
+        let cfg = Config::from_env();
+        assert_eq!(
+            cfg.prompt_file,
+            Some(crate::config::default_prompt_path()),
+            "the default lives next to config.toml"
+        );
+
+        let path =
+            std::env::temp_dir().join(format!("nanomite-prompt-{}.toml", std::process::id()));
+        std::fs::write(&path, "prompt_file = \"/tmp/custom-prompt.md\"\n").unwrap();
+        assert_eq!(
+            Config::load_from(&path).prompt_file,
+            Some(std::path::PathBuf::from("/tmp/custom-prompt.md"))
+        );
+
+        // The environment wins over the persisted value, like every other field.
+        std::env::set_var("NANOMITE_PROMPT_FILE", "/tmp/env-prompt.md");
+        assert_eq!(
+            Config::from_env().prompt_file,
+            Some(std::path::PathBuf::from("/tmp/env-prompt.md"))
+        );
+        std::env::remove_var("NANOMITE_PROMPT_FILE");
+
+        // Saving keeps it, and the path survives a reload.
+        let mut saved = Config::from_env();
+        saved.prompt_file = Some(std::path::PathBuf::from("/tmp/saved-prompt.md"));
+        saved.store_path = Some(path.clone());
+        saved.save();
+        assert_eq!(
+            Config::load_from(&path).prompt_file,
+            Some(std::path::PathBuf::from("/tmp/saved-prompt.md"))
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -142,6 +142,13 @@ impl ImproveEngine {
         self.data_dir.join("proposals")
     }
 
+    /// The directory holding proposals, their diffs, backups and the audit
+    /// trail. The UI reads the staged `.diff` files from here to render the
+    /// review view.
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
+    }
+
     fn audit_log(&self) -> AuditLog {
         AuditLog::new(self.data_dir.join("audit.jsonl"))
     }

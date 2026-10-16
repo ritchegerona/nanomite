@@ -1,7 +1,10 @@
 use super::*;
 use crate::app::{App, Entry, EntryRole, Overlay, OverlayKind, Phase, PickerMode, ToolRow};
 use crate::commands;
+use crate::commands::Command;
 use crate::config::Config;
+use crate::improve::testing::{temp_dir, TempDir};
+use crate::improve::{FakeRunner, ImproveEngine, Roots};
 use ratatui::backend::TestBackend;
 use ratatui::style::{Color, Modifier};
 use ratatui::Terminal;
@@ -1482,4 +1485,470 @@ async fn memory_picker_without_an_engine_explains_itself() {
     assert!(app.overlay.is_none(), "no engine, no picker");
     let text = frame_text(&mut app, 92, 24);
     assert!(text.contains("memory not available"), "no hint:\n{text}");
+}
+
+// ---------------------------------------------------------------------------
+// /improve — self-edit proposals
+// ---------------------------------------------------------------------------
+
+/// A disposable tree for the self-improvement tests: the anchor files the engine
+/// binds to plus a source file inside `repo_root`. No test ever touches the real
+/// workspace or the user's config.
+fn improve_fixture(tag: &str) -> (TempDir, Roots) {
+    let temp = temp_dir(tag);
+    let root = &temp.path;
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn a() {}\n").unwrap();
+    std::fs::write(root.join("prompt.md"), "base instructions\n").unwrap();
+    std::fs::write(root.join("config.toml"), "model = \"test-model\"\n").unwrap();
+    let roots = Roots {
+        config_path: root.join("config.toml"),
+        prompt_path: root.join("prompt.md"),
+        repo_root: root.clone(),
+    };
+    (temp, roots)
+}
+
+/// Dispatches a tool call through the same layer a model turn uses.
+fn dispatch(app: &App, name: &str, args: serde_json::Value) -> Result<(String, String), String> {
+    let tools = app.tool_set_for_test();
+    crate::agent::runtime::run_tool(
+        &tools,
+        &[],
+        &crate::agent::provider::ToolCall {
+            id: "test-call".into(),
+            name: name.into(),
+            arguments: args.to_string(),
+            index: 0,
+        },
+    )
+}
+
+/// Stages a source edit the way `propose_self_edit` does, returning its id.
+fn stage_source_edit(app: &App, new_content: &str, rationale: &str) -> String {
+    let (payload, summary) = dispatch(
+        app,
+        "propose_self_edit",
+        serde_json::json!({
+            "target": "source",
+            "path": "src/lib.rs",
+            "new_content": new_content,
+            "rationale": rationale,
+        }),
+    )
+    .expect("propose_self_edit dispatched");
+    let value: serde_json::Value = serde_json::from_str(&payload).expect("payload is json");
+    assert_eq!(value["status"], "pending", "{payload}");
+    assert!(
+        value["notice"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("staged for user review"),
+        "the model must be told nothing is applied automatically: {payload}"
+    );
+    assert!(
+        summary.contains("imp-") && summary.contains("+1"),
+        "summary missing id and size: {summary}"
+    );
+    value["id"].as_str().expect("proposal id").to_string()
+}
+
+/// Keypress with no modifiers; the `/improve` paths under test never need any.
+fn improve_key(app: &mut App, code: ratatui::crossterm::event::KeyCode) {
+    app.on_key(ratatui::crossterm::event::KeyEvent {
+        code,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        kind: ratatui::crossterm::event::KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    });
+}
+
+/// Pumps until `ready` holds, so an async list/apply result can land.
+async fn pump_until(app: &mut App, what: &str, mut ready: impl FnMut(&App) -> bool) {
+    for _ in 0..200 {
+        app.pump_engine();
+        if ready(app) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    app.pump_engine();
+    panic!("{what} never arrived");
+}
+
+fn improve_state(app: &App) -> crate::app::ImproveState {
+    match app.overlay.as_ref() {
+        Some(Overlay::Improve(state)) => state.clone(),
+        _ => panic!("the /improve overlay is not open"),
+    }
+}
+
+#[tokio::test]
+async fn proposed_self_edits_reach_the_improve_list() {
+    let mut app = test_app().await;
+    let (_temp, roots) = improve_fixture("ui-improve-list");
+    let engine = std::sync::Arc::new(ImproveEngine::new(roots.repo_root.join(".improve-data")));
+    app.attach_improve_for_test(
+        engine,
+        roots.clone(),
+        FakeRunner {
+            passed: true,
+            detail: String::new(),
+        },
+    );
+
+    let id = stage_source_edit(&app, "pub fn b() {}\n", "rename the entry point");
+    app.run_command(Command::Improve, "");
+    assert_eq!(
+        app.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Improve)
+    );
+    pump_until(&mut app, "the pending list", |app| {
+        !improve_state(app).rows.is_empty()
+    })
+    .await;
+
+    let state = improve_state(&app);
+    assert_eq!(state.rows.len(), 1);
+    assert_eq!(state.rows[0].id, id);
+    assert_eq!(state.rows[0].target, "source");
+    assert_eq!((state.rows[0].added, state.rows[0].removed), (1, 1));
+    assert_eq!(state.rows[0].rationale, "rename the entry point");
+    // Staging changed nothing on disk.
+    assert_eq!(
+        std::fs::read_to_string(roots.repo_root.join("src/lib.rs")).unwrap(),
+        "pub fn a() {}\n"
+    );
+
+    let text = frame_text(&mut app, 100, 28);
+    assert!(text.contains("improve"), "overlay title missing:\n{text}");
+    assert!(text.contains("source"), "target missing:\n{text}");
+    assert!(
+        text.contains("rename the entry point"),
+        "rationale missing:\n{text}"
+    );
+    assert!(text.contains("+1"), "diff size missing:\n{text}");
+}
+
+#[tokio::test]
+async fn improve_review_view_renders_the_staged_diff() {
+    let mut app = test_app().await;
+    let (_temp, roots) = improve_fixture("ui-improve-review");
+    let engine = std::sync::Arc::new(ImproveEngine::new(roots.repo_root.join(".improve-data")));
+    app.attach_improve_for_test(
+        engine,
+        roots.clone(),
+        FakeRunner {
+            passed: true,
+            detail: String::new(),
+        },
+    );
+    stage_source_edit(&app, "pub fn b() {}\n", "rename the entry point");
+
+    app.run_command(Command::Improve, "");
+    pump_until(&mut app, "the pending list", |app| {
+        !improve_state(app).rows.is_empty()
+    })
+    .await;
+
+    improve_key(&mut app, ratatui::crossterm::event::KeyCode::Enter);
+    pump_until(&mut app, "the review diff", |app| {
+        improve_state(app).review.is_some()
+    })
+    .await;
+
+    let review = improve_state(&app).review.expect("review view");
+    assert_eq!((review.added, review.removed), (1, 1));
+    assert!(review
+        .lines
+        .iter()
+        .any(|l| l.starts_with('-') && l.contains("pub fn a()")));
+    assert!(review
+        .lines
+        .iter()
+        .any(|l| l.starts_with('+') && l.contains("pub fn b()")));
+    assert!(review.lines.iter().any(|l| l.starts_with("@@")));
+
+    let text = frame_text(&mut app, 100, 30);
+    assert!(
+        text.contains("-pub fn a() {}"),
+        "removal line missing:\n{text}"
+    );
+    assert!(
+        text.contains("+pub fn b() {}"),
+        "addition line missing:\n{text}"
+    );
+    assert!(text.contains("a approve"), "approve hint missing:\n{text}");
+    assert!(text.contains("r reject"), "reject hint missing:\n{text}");
+}
+
+#[tokio::test]
+async fn approving_a_proposal_applies_it_when_the_regression_gate_passes() {
+    let mut app = test_app().await;
+    let (_temp, roots) = improve_fixture("ui-improve-approve");
+    let engine = std::sync::Arc::new(ImproveEngine::new(roots.repo_root.join(".improve-data")));
+    app.attach_improve_for_test(
+        engine,
+        roots.clone(),
+        FakeRunner {
+            passed: true,
+            detail: "test result: ok".into(),
+        },
+    );
+    stage_source_edit(&app, "pub fn b() {}\n", "rename the entry point");
+
+    app.run_command(Command::Improve, "");
+    pump_until(&mut app, "the pending list", |app| {
+        !improve_state(app).rows.is_empty()
+    })
+    .await;
+    improve_key(&mut app, ratatui::crossterm::event::KeyCode::Enter);
+    pump_until(&mut app, "the review diff", |app| {
+        improve_state(app).review.is_some()
+    })
+    .await;
+
+    improve_key(&mut app, ratatui::crossterm::event::KeyCode::Char('a'));
+    // The verify runs off the UI thread and says so while it is in flight.
+    let in_flight = improve_state(&app);
+    assert!(app.improve_applying());
+    assert_eq!(
+        in_flight.status.as_ref().map(|s| s.message.as_str()),
+        Some("verifying… (cargo test --lib)")
+    );
+    pump_until(&mut app, "the apply outcome", |app| {
+        !app.improve_applying() && improve_state(app).status.is_some()
+    })
+    .await;
+
+    let state = improve_state(&app);
+    let status = state.status.expect("a status line");
+    assert_eq!(status.level, crate::app::ImproveLevel::Success);
+    assert!(status.message.contains("applied"), "{}", status.message);
+    // The regression gate passed, so the change is on disk.
+    assert_eq!(
+        std::fs::read_to_string(roots.repo_root.join("src/lib.rs")).unwrap(),
+        "pub fn b() {}\n"
+    );
+    // And the applied proposal left the queue.
+    assert!(state.rows.is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_regression_gate_rolls_the_change_back_byte_for_byte() {
+    let mut app = test_app().await;
+    let (_temp, roots) = improve_fixture("ui-improve-rollback");
+    let engine = std::sync::Arc::new(ImproveEngine::new(roots.repo_root.join(".improve-data")));
+    app.attach_improve_for_test(
+        engine,
+        roots.clone(),
+        FakeRunner {
+            passed: false,
+            detail: "test result: FAILED. 1 failed\nthread 'x' panicked".into(),
+        },
+    );
+    stage_source_edit(&app, "pub fn b() {}\n", "break it on purpose");
+    let original = std::fs::read(roots.repo_root.join("src/lib.rs")).unwrap();
+
+    app.run_command(Command::Improve, "");
+    pump_until(&mut app, "the pending list", |app| {
+        !improve_state(app).rows.is_empty()
+    })
+    .await;
+    improve_key(&mut app, ratatui::crossterm::event::KeyCode::Enter);
+    pump_until(&mut app, "the review diff", |app| {
+        improve_state(app).review.is_some()
+    })
+    .await;
+    improve_key(&mut app, ratatui::crossterm::event::KeyCode::Char('a'));
+    pump_until(&mut app, "the rollback outcome", |app| {
+        !app.improve_applying() && improve_state(app).status.is_some()
+    })
+    .await;
+
+    let state = improve_state(&app);
+    let status = state.status.expect("a status line");
+    assert_eq!(status.level, crate::app::ImproveLevel::Warn);
+    assert!(status.message.contains("rolled back"), "{}", status.message);
+    assert!(
+        status.message.contains("panicked"),
+        "the failure tail must reach the user: {}",
+        status.message
+    );
+    assert_eq!(
+        std::fs::read(roots.repo_root.join("src/lib.rs")).unwrap(),
+        original,
+        "a rolled-back proposal must restore the original bytes"
+    );
+    // The list reloads with the failed proposal gone from the queue.
+    assert!(state.rows.is_empty());
+}
+
+#[tokio::test]
+async fn rejecting_a_proposal_leaves_the_file_alone() {
+    let mut app = test_app().await;
+    let (_temp, roots) = improve_fixture("ui-improve-reject");
+    let engine = std::sync::Arc::new(ImproveEngine::new(roots.repo_root.join(".improve-data")));
+    app.attach_improve_for_test(
+        engine,
+        roots.clone(),
+        FakeRunner {
+            passed: true,
+            detail: String::new(),
+        },
+    );
+    stage_source_edit(&app, "pub fn b() {}\n", "never mind");
+
+    app.run_command(Command::Improve, "");
+    pump_until(&mut app, "the pending list", |app| {
+        !improve_state(app).rows.is_empty()
+    })
+    .await;
+    improve_key(&mut app, ratatui::crossterm::event::KeyCode::Enter);
+    pump_until(&mut app, "the review diff", |app| {
+        improve_state(app).review.is_some()
+    })
+    .await;
+    improve_key(&mut app, ratatui::crossterm::event::KeyCode::Char('r'));
+    pump_until(&mut app, "the rejection outcome", |app| {
+        improve_state(app).status.is_some()
+    })
+    .await;
+
+    let state = improve_state(&app);
+    assert!(
+        state
+            .status
+            .as_ref()
+            .expect("status")
+            .message
+            .contains("rejected"),
+        "{:?}",
+        state.status
+    );
+    assert!(
+        state.rows.is_empty(),
+        "a rejected proposal leaves the queue"
+    );
+    assert!(
+        state.review.is_none(),
+        "the review view closes once the proposal is gone"
+    );
+    assert_eq!(
+        std::fs::read_to_string(roots.repo_root.join("src/lib.rs")).unwrap(),
+        "pub fn a() {}\n",
+        "rejecting must never write"
+    );
+}
+
+#[tokio::test]
+async fn approve_and_reject_are_unreachable_from_the_list_view() {
+    let mut app = test_app().await;
+    let (_temp, roots) = improve_fixture("ui-improve-gate");
+    let engine = std::sync::Arc::new(ImproveEngine::new(roots.repo_root.join(".improve-data")));
+    app.attach_improve_for_test(
+        engine,
+        roots.clone(),
+        FakeRunner {
+            passed: true,
+            detail: String::new(),
+        },
+    );
+    stage_source_edit(&app, "pub fn b() {}\n", "should not be applied");
+
+    app.run_command(Command::Improve, "");
+    pump_until(&mut app, "the pending list", |app| {
+        !improve_state(app).rows.is_empty()
+    })
+    .await;
+    // No review open: `a` is inert, so no approval can happen.
+    improve_key(&mut app, ratatui::crossterm::event::KeyCode::Char('a'));
+    improve_key(&mut app, ratatui::crossterm::event::KeyCode::Char('r'));
+    assert!(!app.improve_applying());
+    assert_eq!(
+        std::fs::read_to_string(roots.repo_root.join("src/lib.rs")).unwrap(),
+        "pub fn a() {}\n"
+    );
+    assert_eq!(improve_state(&app).rows.len(), 1, "nothing was decided");
+}
+
+#[tokio::test]
+async fn an_empty_queue_says_so() {
+    let mut app = test_app().await;
+    let (_temp, roots) = improve_fixture("ui-improve-empty");
+    let engine = std::sync::Arc::new(ImproveEngine::new(roots.repo_root.join(".improve-data")));
+    app.attach_improve_for_test(
+        engine,
+        roots.clone(),
+        FakeRunner {
+            passed: true,
+            detail: String::new(),
+        },
+    );
+
+    app.run_command(Command::Improve, "");
+    pump_until(&mut app, "the pending list", |app| {
+        !improve_state(app).loading
+    })
+    .await;
+    assert!(
+        app.toast
+            .as_ref()
+            .is_some_and(|(msg, _)| msg.contains("no pending proposals")),
+        "{:?}",
+        app.toast
+    );
+    let text = frame_text(&mut app, 100, 28);
+    assert!(
+        text.contains("no pending proposals"),
+        "empty state missing:\n{text}"
+    );
+}
+
+#[tokio::test]
+async fn the_denylist_is_enforced_before_anything_is_staged() {
+    let mut app = test_app().await;
+    let (_temp, roots) = improve_fixture("ui-improve-denylist");
+    let engine = std::sync::Arc::new(ImproveEngine::new(roots.repo_root.join(".improve-data")));
+    app.attach_improve_for_test(
+        engine,
+        roots.clone(),
+        FakeRunner {
+            passed: true,
+            detail: String::new(),
+        },
+    );
+    std::fs::create_dir_all(roots.repo_root.join("src/memory")).unwrap();
+    std::fs::write(
+        roots.repo_root.join("src/memory/policy.rs"),
+        "pub fn safe() {}\n",
+    )
+    .unwrap();
+
+    let err = dispatch(
+        &app,
+        "propose_self_edit",
+        serde_json::json!({
+            "target": "source",
+            "path": "src/memory/policy.rs",
+            "new_content": "pub fn unsafe() {}\n",
+            "rationale": "loosen a rule",
+        }),
+    )
+    .expect_err("the safety layer must stay off limits");
+    assert!(err.contains("improve_policy"), "{err}");
+    assert!(app.improve_pending_rows().is_empty());
+}
+
+#[tokio::test]
+async fn the_help_sheet_lists_the_improve_command() {
+    let mut app = test_app().await;
+    app.open_help();
+    let text = frame_text(&mut app, 92, 30);
+    assert!(text.contains("/improve"), "command row missing:\n{text}");
+    let help = frame_text(&mut app, 92, 44);
+    assert!(
+        help.contains("review self-edit proposals"),
+        "hint missing:\n{help}"
+    );
 }
