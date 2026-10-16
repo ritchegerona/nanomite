@@ -1004,3 +1004,164 @@ async fn connect_form_masks_the_key() {
     );
     assert!(text.contains("enter save"), "hints missing:\n{text}");
 }
+
+/// Every frame cell is painted inside the terminal and no cell holds a NUL.
+fn assert_frame_well_formed(text: &str, width: u16, height: u16) {
+    assert_eq!(
+        text.lines().count(),
+        height as usize,
+        "expected {height} rows"
+    );
+    for line in text.lines() {
+        assert!(
+            line.chars().count() <= width as usize,
+            "row overflowed {width} cols: {line:?}"
+        );
+        assert!(!line.contains('\u{0}'), "scrambled cells: {line:?}");
+    }
+}
+
+#[tokio::test]
+async fn narrow_30x12_overlays_render_cleanly() {
+    let mut app = test_app().await;
+    app.entries.push(Entry::new(EntryRole::User, "hello"));
+    app.entries.push(assistant("hi there"));
+
+    app.open_help();
+    let text = frame_text(&mut app, 30, 12);
+    assert_frame_well_formed(&text, 30, 12);
+    assert!(text.contains("keyboard"), "help title missing:\n{text}");
+    app.close_overlay();
+
+    app.open_palette();
+    let text = frame_text(&mut app, 30, 12);
+    assert_frame_well_formed(&text, 30, 12);
+    assert!(text.contains('❯'), "picker search row missing:\n{text}");
+    app.close_overlay();
+
+    app.open_provider_menu();
+    let text = frame_text(&mut app, 30, 12);
+    assert_frame_well_formed(&text, 30, 12);
+    assert!(
+        text.contains("connect a provider"),
+        "providers title missing:\n{text}"
+    );
+    app.close_overlay();
+
+    app.open_connect();
+    let text = frame_text(&mut app, 30, 12);
+    assert_frame_well_formed(&text, 30, 12);
+    assert!(text.contains("connect"), "connect title missing:\n{text}");
+    assert!(text.contains("api key"), "connect fields missing:\n{text}");
+    app.close_overlay();
+    assert!(app.overlay.is_none());
+}
+
+#[test]
+fn help_sheet_lists_every_on_key_binding() {
+    // Audit harness: the sheet must mention every binding `App::on_key`
+    // implements (spot-check well beyond the required five).
+    let sheet: String = panels::help_keys()
+        .iter()
+        .map(|(k, d)| format!("{k} {d} | "))
+        .collect();
+    for binding in [
+        "ctrl+c",
+        "ctrl+d",
+        "enter",
+        "ctrl+j",
+        "alt+enter",
+        "/ or ctrl+x",
+        "esc",
+        "ctrl+t",
+        "ctrl+l",
+        "ctrl+r",
+        "ctrl+p",
+        "ctrl+n",
+        "ctrl+a",
+        "ctrl+e",
+        "ctrl+w",
+        "ctrl+u",
+        "ctrl+k",
+        "backspace",
+        "delete",
+        "left",
+        "right",
+        "ctrl or alt",
+        "up",
+        "down",
+        "pgup",
+        "pgdn",
+        "home",
+        "end",
+        "ctrl+home",
+        "ctrl+end",
+        "mouse wheel",
+        "tab",
+        "f1",
+    ] {
+        assert!(
+            sheet.contains(binding),
+            "help sheet missing `{binding}`:\n{sheet}"
+        );
+    }
+    // The stale, inaccurate rows must not come back: plain home/end move the
+    // caret, they do not scroll the transcript.
+    assert!(!sheet.contains("pgup / pgdn / home / end"));
+    assert!(!sheet.contains("(with ctrl)"));
+}
+
+#[tokio::test]
+async fn edit_file_preview_uses_the_diff_renderer() {
+    fn fg_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<Color> {
+        for y in 0..buffer.area.height {
+            let mut row = String::new();
+            for x in 0..buffer.area.width {
+                row.push_str(buffer[(x, y)].symbol());
+            }
+            if let Some(x) = row.find(needle) {
+                return Some(buffer[(x as u16, y)].fg);
+            }
+        }
+        None
+    }
+
+    let mut app = test_app().await;
+    app.entries.push(Entry::new(EntryRole::User, "fix it"));
+    let mut reply = assistant("editing");
+    let mut tool = with_tool("edit_file", "calculator.py", true);
+    tool.preview = Some("- return a - b\n+ return a + b\n… +9 more lines".into());
+    reply.tools.push(tool);
+    app.entries.push(reply);
+
+    let mut terminal = Terminal::new(TestBackend::new(92, 24)).unwrap();
+    terminal.draw(|f| render(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    // The -/+ rows carry the diff roles, proving the shared DiffView renderer
+    // drove the styling instead of the old ad-hoc success/danger spans.
+    assert_eq!(
+        fg_of(&buffer, "- return a - b"),
+        Some(app.theme.diff_delete()),
+        "removal must render with the diff-delete role"
+    );
+    assert_eq!(
+        fg_of(&buffer, "+ return a + b"),
+        Some(app.theme.diff_add()),
+        "addition must render with the diff-add role"
+    );
+    // The elision marker is preview chatter, not diff data: faint.
+    assert_eq!(
+        fg_of(&buffer, "… +9 more lines"),
+        Some(app.theme.faint()),
+        "elision marker must render faint"
+    );
+
+    // `/details` off still collapses the whole preview.
+    app.show_tool_details = false;
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        !text.contains("return a"),
+        "preview must hide with /details off:\n{text}"
+    );
+}

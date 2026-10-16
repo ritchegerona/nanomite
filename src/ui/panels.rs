@@ -182,8 +182,8 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
     };
     let meter = format!(
         "[{}{}] ",
-        "\u{2588}".repeat(filled),
-        "\u{2591}".repeat(meter_cells - filled)
+        glyph::BLOCK.repeat(filled),
+        glyph::BLOCK_LIGHT.repeat(meter_cells - filled)
     );
     // A real budget readout: absolute tokens over the limit, so the bar is
     // never the only signal (and an empty-looking bar still carries numbers).
@@ -220,16 +220,17 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
     app.view.footer = Some((key, Line::from(left)));
 }
 
-/// Keyboard sheet: command registry first, then keybindings.
-pub fn help(frame: &mut Frame, area: Rect, app: &App) {
-    let theme = &app.theme;
-    let offset = match &app.overlay {
-        Some(Overlay::Help(state)) => state.offset,
-        _ => 0,
-    };
-    let inner_width = area.width.saturating_sub(4) as usize;
-    let keys: &[(&str, &str)] = &[
-        ("ctrl+c / ctrl+d", "quit (ctrl+d only on an empty prompt)"),
+/// Keys table shown at the bottom of the sheet. Cross-checked against
+/// `App::on_key` (src/app.rs): every row here describes a binding that key
+/// handling actually implements, and every binding handled there appears
+/// below. Plain `home`/`end` move the prompt caret; only `ctrl+home`/`ctrl+end`
+/// jump the transcript.
+pub fn help_keys() -> &'static [(&'static str, &'static str)] {
+    &[
+        (
+            "ctrl+c / ctrl+d",
+            "quit (ctrl+d deletes forward when text exists)",
+        ),
         ("enter", "send · run the highlighted command"),
         ("ctrl+j / alt+enter", "newline in the prompt"),
         ("/ or ctrl+x", "command menu"),
@@ -242,13 +243,33 @@ pub fn help(frame: &mut Frame, area: Rect, app: &App) {
             "ctrl+w / ctrl+u / ctrl+k",
             "delete word · clear line · delete to end",
         ),
-        ("left / right (with ctrl)", "move by word"),
+        (
+            "backspace / delete",
+            "delete the char before · after the caret",
+        ),
+        ("left / right", "move the caret · by word with ctrl or alt"),
         ("up / down", "cursor within a multi-row prompt, else scroll"),
-        ("pgup / pgdn / home / end", "scroll the transcript"),
+        ("pgup / pgdn", "scroll the transcript"),
+        ("home / end", "prompt start · prompt end"),
+        ("ctrl+home / ctrl+end", "transcript top · bottom"),
         ("mouse wheel", "scroll the transcript"),
-        ("tab", "next picker row (shift+tab back)"),
+        (
+            "tab",
+            "next picker row · next /connect field (shift+tab back)",
+        ),
         ("f1", "this sheet"),
-    ];
+    ]
+}
+
+/// Keyboard sheet: command registry first, then keybindings.
+pub fn help(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+    let offset = match &app.overlay {
+        Some(Overlay::Help(state)) => state.offset,
+        _ => 0,
+    };
+    let inner_width = area.width.saturating_sub(4) as usize;
+    let keys = help_keys();
 
     let commands = crate::commands::COMMANDS;
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(commands.len() + keys.len() + 5);
@@ -382,7 +403,7 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
         let selected = i == picker.cursor;
         let marker = if selected { glyph::GUTTER } else { " " };
         // Reserve the check column so hints stay aligned whether or not a row is current.
-        let check = if item.current { "✓" } else { " " };
+        let check = if item.current { glyph::CHECK } else { " " };
         let label = format!("{check} {}", item.label);
         // The label is never squeezed: on a tight row the hint gives up its head
         // (the host) and keeps its tail (the key name) instead.
@@ -419,7 +440,13 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
         )
         .title_bottom(
             Line::from(Span::styled(
-                " ↑↓ move · enter apply · esc close ",
+                format!(
+                    " {}{} move {} enter apply {} esc close ",
+                    glyph::ARROW_UP,
+                    glyph::ARROW_DOWN,
+                    glyph::DOT,
+                    glyph::DOT
+                ),
                 theme.faint_style(),
             ))
             .right_aligned(),
@@ -476,7 +503,7 @@ pub fn connect(frame: &mut Frame, area: Rect, app: &App) {
             (
                 format!(
                     "{}{}",
-                    "•".repeat(raw.chars().count().saturating_sub(4)),
+                    glyph::BULLET.repeat(raw.chars().count().saturating_sub(4)),
                     tail
                 ),
                 Style::default().fg(theme.text()),
@@ -495,7 +522,7 @@ pub fn connect(frame: &mut Frame, area: Rect, app: &App) {
             (raw.clone(), Style::default().fg(theme.text()))
         };
 
-        let caret = if focused { "▏" } else { " " };
+        let caret = if focused { glyph::CARET } else { " " };
         lines.push(Line::from(vec![
             Span::styled(
                 format!(" {caret} {label:<label_w$}"),
@@ -533,7 +560,13 @@ pub fn connect(frame: &mut Frame, area: Rect, app: &App) {
         )
         .title_bottom(
             Line::from(Span::styled(
-                " ↑↓ field · enter save · esc cancel ",
+                format!(
+                    " {}{} field {} enter save {} esc cancel ",
+                    glyph::ARROW_UP,
+                    glyph::ARROW_DOWN,
+                    glyph::DOT,
+                    glyph::DOT
+                ),
                 theme.faint_style(),
             ))
             .right_aligned(),
@@ -650,7 +683,7 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
             last_popular = Some(row.popular);
         }
         row_lines.push(lines.len());
-        let check = if row.current { "✓" } else { " " };
+        let check = if row.current { glyph::CHECK } else { " " };
         let label = format!("{check} {}", row.label);
         let hint = if row.hint.is_empty() {
             String::new()
@@ -690,7 +723,13 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
             )
             .title_bottom(
                 Line::from(Span::styled(
-                    " \u{2191}\u{2193} move \u{b7} enter apply \u{b7} esc close ",
+                    format!(
+                        " {}{} move {} enter apply {} esc close ",
+                        glyph::ARROW_UP,
+                        glyph::ARROW_DOWN,
+                        glyph::DOT,
+                        glyph::DOT
+                    ),
                     Style::default().fg(theme.faint()),
                 ))
                 .right_aligned(),
@@ -733,7 +772,13 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
         )
         .title_bottom(
             Line::from(Span::styled(
-                " \u{2191}\u{2193} move \u{b7} enter apply \u{b7} esc close ",
+                format!(
+                    " {}{} move {} enter apply {} esc close ",
+                    glyph::ARROW_UP,
+                    glyph::ARROW_DOWN,
+                    glyph::DOT,
+                    glyph::DOT
+                ),
                 Style::default().fg(theme.faint()),
             ))
             .right_aligned(),

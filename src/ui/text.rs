@@ -1,4 +1,4 @@
-use super::theme::Theme;
+use super::theme::{glyph, Theme};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::path::Path;
@@ -168,7 +168,7 @@ pub fn markdown(src: &str, max_width: usize, st: &MarkdownStyles) -> Vec<Line<'s
         if let Some(lang) = fence_marker(trimmed) {
             if in_fence {
                 in_fence = false;
-                out.push(Line::from(Span::styled("▏", st.fence)));
+                out.push(Line::from(Span::styled(glyph::CARET, st.fence)));
             } else {
                 flush(&mut paragraph, &mut out);
                 in_fence = true;
@@ -450,7 +450,7 @@ fn list_item(line: &str) -> Option<(String, usize, &str)> {
     let indent = line.len() - line.trim_start().len();
     let rest = line.trim_start();
     if let Some(tail) = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("* ")) {
-        return Some(("•".into(), indent, tail));
+        return Some((glyph::BULLET.to_string(), indent, tail));
     }
     if let Some(dot) = rest.find(". ") {
         if dot > 0 && rest[..dot].chars().all(|c| c.is_ascii_digit()) {

@@ -50,7 +50,9 @@ impl DiffView {
 
     /// Style for one diff line, following unified-diff precedence: file headers
     /// (`---`/`+++`) must be matched before the bare `-`/`+` content markers.
-    fn style_for(&self, entry: &str) -> Style {
+    /// A leading `…` is the bounded-preview elision marker ("… +N more lines")
+    /// rather than diff data, so it renders faint like the chatter it is.
+    pub fn style_for(&self, entry: &str) -> Style {
         if entry.starts_with("+++") || entry.starts_with("---") {
             Style::default()
                 .fg(self.theme.accent_soft())
@@ -61,19 +63,26 @@ impl DiffView {
             Style::default().fg(self.theme.diff_add())
         } else if entry.starts_with('-') {
             Style::default().fg(self.theme.diff_delete())
+        } else if entry.starts_with('…') {
+            Style::default().fg(self.theme.faint())
         } else {
             self.theme.base()
         }
     }
 
+    /// Styled lines for embedding the diff inside another cached text (e.g. a
+    /// transcript entry) instead of painting a standalone widget.
+    pub fn styled_lines(&self) -> Vec<Line<'_>> {
+        self.entries
+            .iter()
+            .map(|entry| Line::from(Span::styled(entry.as_str(), self.style_for(entry))))
+            .collect()
+    }
+
     /// Draws the diff. Context and hunk lines are rendered in the base style,
     /// additions green, removals red, file and hunk headers accented.
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        let lines: Vec<Line<'_>> = self
-            .entries
-            .iter()
-            .map(|entry| Line::from(Span::styled(entry.as_str(), self.style_for(entry))))
-            .collect();
+        let lines = self.styled_lines();
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -151,6 +160,27 @@ mod tests {
             Style::default().fg(v.theme.diff_add())
         );
         assert_eq!(v.style_for(" fn main() {}"), v.theme.base());
+    }
+
+    #[test]
+    fn elision_marker_renders_faint_not_as_content() {
+        let v = view();
+        // `… +N more lines` is preview chatter, not diff data.
+        assert_eq!(
+            v.style_for("… +3 more lines"),
+            Style::default().fg(v.theme.faint())
+        );
+    }
+
+    #[test]
+    fn styled_lines_match_the_render_styles() {
+        let v = view();
+        let lines = v.styled_lines();
+        assert_eq!(lines.len(), 6);
+        assert_eq!(lines[0].spans[0].style, v.style_for("--- a/src/lib.rs"));
+        assert_eq!(lines[4].spans[0].style, v.style_for("-let x = 1;"));
+        assert_eq!(lines[4].spans[0].content, "-let x = 1;");
+        assert_eq!(lines[5].spans[0].style, v.style_for("+let x = 2;"));
     }
 
     #[test]

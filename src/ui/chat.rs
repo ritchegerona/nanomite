@@ -1,3 +1,4 @@
+use super::diff::DiffView;
 use super::text::{self, wrap_spans};
 use super::theme::{glyph, Theme};
 use crate::app::{Entry, EntryRole, Phase, Rendered};
@@ -159,12 +160,18 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
     // Molecule mark: a honeycomb cluster beside the wordmark.
     let hex = Style::default().fg(theme.accent());
     let logo = vec![
-        Line::from(Span::styled("    \u{2b21}\u{2b21}\u{2b21}", hex)),
+        Line::from(Span::styled(
+            format!("    {}", glyph::HEX_FILL.repeat(3)),
+            hex,
+        )),
         Line::from(vec![
-            Span::styled("   \u{2b21}\u{2b21}\u{2b21}\u{2b21}\u{2b21}  ", hex),
+            Span::styled(format!("   {}  ", glyph::HEX_FILL.repeat(5)), hex),
             Span::styled("nanomite", theme.bold()),
         ]),
-        Line::from(Span::styled("    \u{2b21}\u{2b21}\u{2b21}", hex)),
+        Line::from(Span::styled(
+            format!("    {}", glyph::HEX_FILL.repeat(3)),
+            hex,
+        )),
         Line::from(Span::styled("  the microscopic agent", theme.faint_style())),
     ];
     let lines: Vec<Line<'static>> = logo
@@ -178,16 +185,11 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
         }))
         .chain(std::iter::once(Line::default()))
         .chain(std::iter::once(Line::from(Span::styled(
-            format!("{} ask anything to begin", glyph::PROMPT),
+            format!("  {} ask anything to begin", glyph::PROMPT),
             theme.accent_style(),
         ))))
         .chain(std::iter::once(Line::from(Span::styled(
-            format!(
-                "  {} /help · {} /new · {} /themes",
-                glyph::DOT,
-                glyph::DOT,
-                glyph::DOT
-            ),
+            format!("  /help {} /new {} /themes", glyph::CHEVRON, glyph::CHEVRON),
             theme.faint_style(),
         ))))
         .collect();
@@ -449,24 +451,45 @@ impl Entry {
                     // the row while the tool runs. `/details` off collapses it.
                     if details {
                         if let Some(preview) = &tool.preview {
-                            for raw in preview.split('\n') {
-                                let style = if raw.starts_with("- ") {
-                                    Style::default().fg(theme.danger())
-                                } else if raw.starts_with("+ ") {
-                                    Style::default().fg(theme.success())
-                                } else if raw.starts_with('…') {
-                                    Style::default().fg(theme.faint())
-                                } else {
-                                    Style::default().fg(theme.muted())
-                                };
-                                let shown = text::truncate(raw, inner.saturating_sub(4));
-                                if shown.is_empty() {
-                                    lines.push(Line::from(Span::raw("    ")));
-                                } else {
-                                    lines.push(Line::from(Span::styled(
-                                        format!("    {shown}"),
-                                        style,
-                                    )));
+                            if tool.name == "edit_file" {
+                                // Diffs go through the shared renderer so the
+                                // -/+ lines carry the diff roles, not the
+                                // success/danger signal colours.
+                                let mut diff = DiffView::with_theme(*theme);
+                                for raw in preview.split('\n') {
+                                    diff.push_diff(raw.to_string());
+                                }
+                                for line in diff.styled_lines() {
+                                    let content: String =
+                                        line.spans.iter().map(|s| s.content.as_ref()).collect();
+                                    let style =
+                                        line.spans.first().map(|s| s.style).unwrap_or_default();
+                                    let shown = text::truncate(&content, inner.saturating_sub(4));
+                                    if shown.is_empty() {
+                                        lines.push(Line::from(Span::raw("    ")));
+                                    } else {
+                                        lines.push(Line::from(Span::styled(
+                                            format!("    {shown}"),
+                                            style,
+                                        )));
+                                    }
+                                }
+                            } else {
+                                for raw in preview.split('\n') {
+                                    let style = if raw.starts_with('…') {
+                                        Style::default().fg(theme.faint())
+                                    } else {
+                                        Style::default().fg(theme.muted())
+                                    };
+                                    let shown = text::truncate(raw, inner.saturating_sub(4));
+                                    if shown.is_empty() {
+                                        lines.push(Line::from(Span::raw("    ")));
+                                    } else {
+                                        lines.push(Line::from(Span::styled(
+                                            format!("    {shown}"),
+                                            style,
+                                        )));
+                                    }
                                 }
                             }
                         }
@@ -490,7 +513,7 @@ impl Entry {
                             s.content = chars.into_iter().collect();
                         }
                         last.spans.push(Span::styled(
-                            "\u{258d}",
+                            glyph::CURSOR,
                             Style::default().fg(theme.accent()),
                         ));
                     }

@@ -308,14 +308,16 @@ impl Layout {
             let len = row_len(&lines[row]);
             let end = start + len;
             if cursor_idx >= *start && cursor_idx < end {
-                cursor = (row, cursor_idx - start);
+                // The column is a *display* column: wide (CJK) glyphs occupy two
+                // cells, so measuring by char count would park the caret early.
+                cursor = (row, prefix_width(&lines[row], cursor_idx - start));
                 break;
             }
             if cursor_idx == end {
                 let next_start = row_starts.get(row + 1).copied();
                 cursor = match next_start {
                     Some(next) if next == cursor_idx => (row + 1, 0),
-                    _ => (row, len),
+                    _ => (row, row_width(&lines[row])),
                 };
                 break;
             }
@@ -338,15 +340,51 @@ impl Layout {
         Some(self.cursor)
     }
 
-    /// Best-effort char index for a visual row/column.
+    /// Best-effort char index for a visual row/column. `col` is a display
+    /// column, so wide glyphs count two cells; a column landing inside a wide
+    /// glyph snaps to that glyph.
     pub fn char_index_at(&self, row: usize, col: usize) -> Option<usize> {
-        let start = self.row_starts.get(row)?;
-        Some(start + col.min(row_len(&self.lines[row])))
+        let start = *self.row_starts.get(row)?;
+        let line = self.lines.get(row)?;
+        let mut acc = 0usize;
+        for (i, ch) in line
+            .spans
+            .iter()
+            .flat_map(|s| s.content.chars())
+            .enumerate()
+        {
+            if acc >= col {
+                return Some(start + i);
+            }
+            acc += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        }
+        Some(start + row_len(line))
     }
 }
 
 fn row_len(line: &Line<'_>) -> usize {
     line.spans.iter().map(|s| s.content.chars().count()).sum()
+}
+
+/// Display width of a row (wide glyphs count two cells).
+fn row_width(line: &Line<'_>) -> usize {
+    line.spans.iter().map(|s| text::width(&s.content)).sum()
+}
+
+/// Display width of the first `chars` characters of a row.
+fn prefix_width(line: &Line<'_>, chars: usize) -> usize {
+    let mut width = 0usize;
+    let mut left = chars;
+    for span in &line.spans {
+        for ch in span.content.chars() {
+            if left == 0 {
+                return width;
+            }
+            width += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            left -= 1;
+        }
+    }
+    width
 }
 
 /// Greedy word wrap expressed as char-index ranges into `line`.
@@ -430,9 +468,13 @@ pub fn render(
     // hints on the bottom one. The border itself separates transcript from
     // input, so every inner row belongs to the prompt text.
     let hint_text = if busy {
-        "esc interrupts \u{b7} type to queue the next turn"
+        format!("esc interrupts {} type to queue the next turn", glyph::DOT)
     } else {
-        "enter send \u{b7} ctrl+j newline \u{b7} / commands"
+        format!(
+            "enter send {} ctrl+j newline {} / commands",
+            glyph::DOT,
+            glyph::DOT
+        )
     };
     let path_w = (area.width as usize).saturating_sub(6).max(8);
     let hint_w = (area.width as usize).saturating_sub(4);
@@ -455,7 +497,7 @@ pub fn render(
         )))
         .title_bottom(
             Line::from(Span::styled(
-                text::truncate(hint_text, hint_w),
+                text::truncate(&hint_text, hint_w),
                 theme.faint_style(),
             ))
             .right_aligned(),
@@ -609,5 +651,42 @@ mod tests {
         assert_eq!(layout.rows(), 2);
         // The caret rests on the empty row after the newline.
         assert_eq!(layout.cursor, (1, 0));
+    }
+
+    #[test]
+    fn cursor_column_counts_wide_glyphs_as_two_cells() {
+        let mut c = Composer::new();
+        c.insert_str("日本語");
+        let layout = c.layout(20, Style::default());
+        // Three glyphs of width 2: the caret must sit at cell 6, not char 3.
+        assert_eq!(layout.cursor, (0, 6));
+
+        // Two move_lefts land after 日: display column 2, not char 1.
+        c.move_left();
+        c.move_left();
+        let layout = c.layout(20, Style::default());
+        assert_eq!(layout.cursor, (0, 2));
+
+        // And back: the display column maps onto the right char index.
+        assert_eq!(layout.char_index_at(0, 6), Some(3));
+        assert_eq!(layout.char_index_at(0, 2), Some(1));
+    }
+
+    #[test]
+    fn row_move_keeps_display_column_over_wide_text() {
+        let mut c = Composer::new();
+        c.insert_str("日本語");
+        c.newline();
+        c.insert_str("abcdef");
+        let layout = c.layout(20, Style::default());
+        assert_eq!(layout.cursor, (1, 6), "caret ends after abcdef");
+        // Up lands after 語: display column 6 == char index 3 on a wide row.
+        c.move_row(&layout, -1);
+        assert_eq!(c.cursor(), 3);
+        let layout = c.layout(20, Style::default());
+        assert_eq!(layout.cursor, (0, 6));
+        // And back down to where it started: char 10 = after 'f'.
+        c.move_row(&layout, 1);
+        assert_eq!(c.cursor(), 10);
     }
 }

@@ -400,6 +400,8 @@ impl Theme {
 pub mod glyph {
     pub const PROMPT: &str = "❯";
     pub const HEX: &str = "⬡";
+    /// Filled hexagon, used by the welcome-card molecule mark.
+    pub const HEX_FILL: &str = "⬣";
     pub const GUTTER: &str = "▌";
     pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     pub const CHECK: &str = "✓";
@@ -410,6 +412,15 @@ pub mod glyph {
     pub const ARROW_UP: &str = "↑";
     pub const ARROW_DOWN: &str = "↓";
     pub const HOURGLASS: &str = "◐";
+    /// Insertion caret used by form fields.
+    pub const CARET: &str = "▏";
+    /// Live-stream cursor appended to a reply while it streams.
+    pub const CURSOR: &str = "▍";
+    /// Mask character for secrets in the /connect form.
+    pub const BULLET: &str = "•";
+    /// Context-meter cells: filled and empty.
+    pub const BLOCK: &str = "█";
+    pub const BLOCK_LIGHT: &str = "░";
 }
 
 #[cfg(test)]
