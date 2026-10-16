@@ -30,6 +30,7 @@ pub enum Command {
     Tools,
     Panel,
     Improve,
+    ImproveFromBoard,
 }
 
 pub struct Entry {
@@ -186,6 +187,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "review self-edit proposals",
         kind: Command::Improve,
+    },
+    Entry {
+        command: "/improve-from-board",
+        aliases: &[],
+        hint: "stage the board's chair synthesis as an improve proposal",
+        kind: Command::ImproveFromBoard,
     },
 ];
 

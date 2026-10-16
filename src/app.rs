@@ -9,7 +9,7 @@ use crate::board::store::{BoardMessage, BoardStore};
 use crate::commands::{self, Command};
 use crate::config::{find_preset, host_of, Config, ProviderKind, ProviderPreset, PRESETS};
 use crate::improve::{
-    Actor, ApplyOutcome, CargoTestRunner, ImproveEngine, RegressionRunner, Roots, Status,
+    Actor, ApplyOutcome, CargoTestRunner, ImproveEngine, RegressionRunner, Roots, Status, Target,
 };
 use crate::memory::policy::MemoryPolicy;
 use crate::memory::MemoryEngine;
@@ -1394,6 +1394,7 @@ impl App {
             Command::Themes => self.open_themes(),
             Command::Tools => self.open_tools(),
             Command::Improve => self.open_improve(),
+            Command::ImproveFromBoard => { let _ = self.stage_board_proposal(); },
             Command::Thinking => {
                 self.show_thinking = !self.show_thinking;
                 self.toast(format!(
@@ -2107,6 +2108,59 @@ impl App {
         }));
         self.spawn_improve_list(None);
         self.mark_dirty();
+    }
+
+    /// Stage the board's chair synthesis as an improve::propose(Target::Prompt)
+    /// proposal. The proposal appears in the `/improve` overlay as `Pending`; the
+    /// user can review and approve/reject through the normal `/improve` flow.
+    ///
+    /// Requires: a board overlay is open and its convene has completed (running=false).
+    /// The chair synthesis is taken from the last BoardMessage (persona = "Chair")
+    /// in the board's message store.
+    fn stage_board_proposal(&mut self) -> bool {
+        let Some(Overlay::Board(board)) = self.overlay.as_ref() else {
+            self.toast("no board overlay open");
+            return false;
+        };
+        if board.running {
+            self.toast("board is still convening — wait for it to finish");
+            return false;
+        }
+        let Some(chair_msg) = board.messages.iter().rev().find(|m| m.persona == "Chair") else {
+            self.toast("no chair synthesis found in board messages");
+            return false;
+        };
+        let Some(improve) = &self.improve else {
+            self.toast("self-improvement not available in this build");
+            return false;
+        };
+        let new_content = chair_msg.body.trim().to_string();
+        if new_content.is_empty() {
+            self.toast("chair synthesis is empty");
+            return false;
+        }
+        // Build roots from the app's improve roots (already computed at startup).
+        let roots = &self.improve_roots;
+        // Propose as Target::Prompt so the review view renders the chair text.
+        match improve.propose(
+            Actor::Agent,
+            Target::Prompt,
+            self.improve_dir.join("prompt.md"),
+            new_content,
+            "staged from board chair synthesis".to_string(),
+            roots,
+        ) {
+            Ok(proposal) => {
+                self.toast(format!("improve proposal staged (id={}), review with /improve", proposal.id));
+                // Open the improve overlay so the user can review immediately.
+                self.open_improve();
+                true
+            }
+            Err(err) => {
+                self.toast(format!("failed to stage proposal: {err}"));
+                false
+            }
+        }
     }
 
     /// Pending proposals, oldest first, each with its diff size counted from the
