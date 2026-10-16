@@ -9,6 +9,7 @@ pub mod app;
 pub mod commands;
 pub mod config;
 pub mod extract;
+pub mod improve;
 // The memory engine exposes a deliberate API superset of what the TUI consumes
 // today (backup/restore, consolidation, listing helpers); unused members of a
 // published library surface are not dead code.
