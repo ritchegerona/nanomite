@@ -439,7 +439,13 @@ pub fn render(
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(if focused {
-            theme.border_focus()
+            if busy {
+                // While the turn runs the composer reads as "still yours": the
+                // soft accent draws the eye without the alarm of border_focus.
+                theme.accent_soft()
+            } else {
+                theme.border_focus()
+            }
         } else {
             theme.border()
         }))
@@ -496,7 +502,13 @@ pub fn render(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 text::truncate(hint, text_w as usize),
-                theme.faint_style(),
+                // The placeholder keeps the accent tone at low intensity so the
+                // empty composer still reads as "yours" without shouting.
+                if busy {
+                    theme.faint_style()
+                } else {
+                    Style::default().fg(theme.accent_soft())
+                },
             )),
             Rect {
                 x: text_x,

@@ -84,6 +84,11 @@ pub fn format_duration(d: Duration) -> String {
     }
 }
 
+/// `3 steps` / `1 step` — count with a pluralised noun, no format-string drift.
+pub fn plural(n: usize, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct MarkdownStyles {
     pub link: Style,
@@ -734,6 +739,13 @@ mod tests {
         assert_eq!(format_tokens(1_500), "1.5k");
         assert_eq!(format_duration(Duration::from_millis(250)), "250ms");
         assert_eq!(format_duration(Duration::from_millis(1_250)), "1.2s");
+    }
+
+    #[test]
+    fn pluralises_counts() {
+        assert_eq!(plural(1, "step"), "1 step");
+        assert_eq!(plural(3, "step"), "3 steps");
+        assert_eq!(plural(0, "tool"), "0 tools");
     }
 
     #[test]

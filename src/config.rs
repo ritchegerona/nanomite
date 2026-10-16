@@ -283,6 +283,8 @@ pub struct Config {
     /// Model used when switching back to a preset that has one.
     pub default_model: String,
     pub reasoning: Reasoning,
+    /// UI skin persisted across sessions (`mono`, `umbrella`, …).
+    pub theme: String,
     /// Token budget used for the context gauge in the status bar.
     pub context_limit: usize,
     pub max_steps: usize,
@@ -304,6 +306,7 @@ struct Stored {
     api_key: Option<String>,
     model: Option<String>,
     reasoning: Option<String>,
+    theme: Option<String>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
@@ -327,6 +330,7 @@ fn parse_stored(text: &str) -> Stored {
             "api_key" => stored.api_key = Some(value),
             "model" => stored.model = Some(value),
             "reasoning" => stored.reasoning = Some(value),
+            "theme" => stored.theme = Some(value),
             _ => {}
         }
     }
@@ -383,6 +387,7 @@ fn stored_text(cfg: &Config) -> String {
     }
     lines.push(format!("model = {}", quote(&cfg.model)));
     lines.push(format!("reasoning = {}", quote(cfg.reasoning.as_str())));
+    lines.push(format!("theme = {}", quote(&cfg.theme)));
     lines.push(String::new());
     lines.join("\n")
 }
@@ -530,6 +535,13 @@ impl Config {
             _ => Reasoning::Medium,
         };
 
+        let theme = env_str(&["NANOMITE_THEME"])
+            .or_else(|| stored.theme.clone())
+            .and_then(|label| {
+                crate::ui::theme::ThemeId::from_label(&label).map(|id| id.label().to_string())
+            })
+            .unwrap_or_else(|| crate::ui::theme::ThemeId::Mono.label().to_string());
+
         Self {
             provider,
             preset,
@@ -538,6 +550,7 @@ impl Config {
             model,
             default_model,
             reasoning,
+            theme,
             context_limit: {
                 let raw = if use_env {
                     num_env("NANOMITE_CONTEXT_LIMIT", 200_000)
@@ -765,6 +778,32 @@ mod tests {
         assert_eq!(loaded.api_key.as_deref(), Some("sk-test-123"));
         assert_eq!(loaded.reasoning, Reasoning::High);
         assert_eq!(loaded.provider_label(), "DeepSeek");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn theme_roundtrips_and_unknown_labels_fall_back() {
+        let mut cfg = Config::from_env();
+        cfg.theme = "umbrella".into();
+        let path = std::env::temp_dir().join(format!("nanomite-theme-{}.toml", std::process::id()));
+        cfg.save_to(&path);
+        let loaded = Config::load_from(&path);
+        assert_eq!(loaded.theme, "umbrella");
+        let _ = fs::remove_file(&path);
+
+        // An unknown or hand-mangled theme label degrades to the default skin
+        // instead of poisoning the config.
+        fs::write(
+            &path,
+            "provider = \"openai\"\nbase_url = \"https://api.openai.com/v1\"\nmodel = \"gpt-4o-mini\"\nreasoning = \"low\"\ntheme = \"seventies-neon\"\n",
+        )
+        .expect("write config");
+        let loaded = Config::load_from(&path);
+        assert_eq!(
+            loaded.theme,
+            crate::ui::theme::ThemeId::Mono.label(),
+            "unknown label must fall back"
+        );
         let _ = fs::remove_file(&path);
     }
 

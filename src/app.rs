@@ -69,6 +69,9 @@ pub struct Entry {
     pub started: Instant,
     pub elapsed: Option<Duration>,
     pub usage: Option<Usage>,
+    /// Agent steps taken this turn (one per tool round-trip). Shown live in
+    /// the status strip so long runs are visibly making progress.
+    pub steps: usize,
     pub(crate) rev: u64,
     pub(crate) cache: Option<Rendered>,
 }
@@ -84,6 +87,7 @@ impl Entry {
             started: Instant::now(),
             elapsed: None,
             usage: None,
+            steps: 0,
             rev: 1,
             cache: None,
         }
@@ -428,7 +432,8 @@ pub struct App {
     models_tx: UnboundedSender<ModelsResult>,
     handle: tokio::runtime::Handle,
     history: Vec<ChatMessage>,
-    active: Option<usize>,
+    /// Index of the in-flight transcript entry while a turn runs.
+    pub(crate) active: Option<usize>,
     dirty: bool,
     quit: bool,
     /// Painted composer text width, synced each frame by `ui::render`.
@@ -440,7 +445,7 @@ impl App {
         cfg: Config,
         handle: tokio::runtime::Handle,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let theme = Theme::detect();
+        let theme = Theme::with_id(ThemeId::from_label(&cfg.theme).unwrap_or(ThemeId::Mono));
         let cwd = cfg.workspace.clone();
 
         let provider: Arc<dyn crate::agent::provider::AgentProvider> = match cfg.provider {
@@ -613,6 +618,12 @@ impl App {
                 }
                 if self.view.follow {
                     self.view.scroll_from_bottom = 0;
+                }
+            }
+            AgentEvent::Step { index: _ } => {
+                if let Some(entry) = self.entries.get_mut(index) {
+                    entry.steps += 1;
+                    entry.touch();
                 }
             }
             AgentEvent::ToolStart {
@@ -1042,12 +1053,13 @@ impl App {
 
     // -- /themes ------------------------------------------------------------
 
-    fn open_themes(&mut self) {
+    pub(crate) fn open_themes(&mut self) {
         let rows = ThemeId::ALL
             .iter()
             .map(|id| PickerItem {
                 label: id.label().to_string(),
-                hint: String::new(),
+                // Describe the skin so the picker teaches the palette.
+                hint: theme_descriptor(*id).to_string(),
                 value: PickerValue::Theme(*id),
                 current: *id == self.theme.id,
             })
@@ -1056,12 +1068,15 @@ impl App {
         self.mark_dirty();
     }
 
-    fn apply_theme(&mut self, id: ThemeId) {
+    pub(crate) fn apply_theme(&mut self, id: ThemeId) {
         if self.theme.id == id {
             self.toast(format!("theme: {}", id.label()));
             return;
         }
         self.theme = Theme::with_id(id);
+        // The skin is part of the persisted setup, like the model and the key.
+        self.cfg.theme = id.label().to_string();
+        self.cfg.save();
         self.invalidate_transcript();
         self.toast(format!("theme: {}", id.label()));
     }
@@ -1775,6 +1790,17 @@ fn editor_available() -> bool {
     std::env::var("EDITOR")
         .ok()
         .is_some_and(|e| !e.trim().is_empty())
+}
+
+/// One-line palette description shown beside each theme in `/themes`.
+fn theme_descriptor(id: ThemeId) -> &'static str {
+    match id {
+        ThemeId::Mono => "single hue · high contrast",
+        ThemeId::Opencode => "warm gold on near-black",
+        ThemeId::Midnight => "cool slate · periwinkle accent",
+        ThemeId::Graphite => "teal · orange on deep charcoal",
+        ThemeId::Umbrella => "blood red · clinical white",
+    }
 }
 
 fn on_off(value: bool) -> &'static str {

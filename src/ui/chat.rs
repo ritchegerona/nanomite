@@ -150,12 +150,13 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
     let rows: Vec<(String, String)> = vec![
         ("model".into(), app.model_label()),
         ("provider".into(), app.provider_label()),
-        ("tools".into(), "files · shell · ssh · web".into()),
+        ("workspace".into(), text::display_path(&app.cwd, 42)),
+        ("tools".into(), "files · shell · ssh · web · memory".into()),
         ("commands".into(), "/ or ctrl+x opens the menu".into()),
     ];
 
-    let card_w = (area.width as usize).saturating_sub(8).clamp(20, 52);
-    // Molecule mark: a honeycomb cluster beside the wordmark (Option C).
+    let card_w = (area.width as usize).saturating_sub(8).clamp(20, 54);
+    // Molecule mark: a honeycomb cluster beside the wordmark.
     let hex = Style::default().fg(theme.accent());
     let logo = vec![
         Line::from(Span::styled("    \u{2b21}\u{2b21}\u{2b21}", hex)),
@@ -169,17 +170,25 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
     let lines: Vec<Line<'static>> = logo
         .into_iter()
         .chain(std::iter::once(Line::default()))
-        .chain(std::iter::once(Line::default()))
         .chain(rows.into_iter().map(|(k, v)| {
             Line::from(vec![
                 Span::styled(format!("  {k:<10}"), Style::default().fg(theme.faint())),
-                Span::styled(text::truncate(&v, card_w.saturating_sub(12)), theme.dim()),
+                Span::styled(text::truncate(&v, card_w.saturating_sub(14)), theme.dim()),
             ])
         }))
         .chain(std::iter::once(Line::default()))
         .chain(std::iter::once(Line::from(Span::styled(
-            format!("{} ask anything to begin", glyph::CHEVRON),
+            format!("{} ask anything to begin", glyph::PROMPT),
             theme.accent_style(),
+        ))))
+        .chain(std::iter::once(Line::from(Span::styled(
+            format!(
+                "  {} /help · {} /new · {} /themes",
+                glyph::DOT,
+                glyph::DOT,
+                glyph::DOT
+            ),
+            theme.faint_style(),
         ))))
         .collect();
 
@@ -217,7 +226,7 @@ fn status_line(entry: &Entry, theme: &Theme, spinner: usize) -> Option<Line<'sta
     match entry.phase {
         Phase::Streaming => {
             let elapsed = entry.elapsed.unwrap_or_else(|| entry.started.elapsed());
-            Some(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!("{} ", glyph::SPINNER[spinner % glyph::SPINNER.len()]),
                     Style::default().fg(theme.accent()),
@@ -227,7 +236,22 @@ fn status_line(entry: &Entry, theme: &Theme, spinner: usize) -> Option<Line<'sta
                     format!("  {}", text::format_duration(elapsed)),
                     Style::default().fg(theme.faint()),
                 ),
-            ]))
+            ];
+            // Steps · tools finished so far, when there is anything to show.
+            let done_tools = entry.tools.iter().filter(|t| !t.running).count();
+            if entry.steps > 0 || done_tools > 0 {
+                spans.push(Span::styled(
+                    format!("  · {}", text::plural(entry.steps, "step")),
+                    Style::default().fg(theme.faint()),
+                ));
+                if done_tools > 0 {
+                    spans.push(Span::styled(
+                        format!(" · {}", text::plural(done_tools, "tool")),
+                        Style::default().fg(theme.faint()),
+                    ));
+                }
+            }
+            Some(Line::from(spans))
         }
         Phase::Failed => {
             let msg = entry.error.clone().unwrap_or_else(|| "failed".into());
@@ -346,10 +370,10 @@ impl Entry {
                 )));
             }
             EntryRole::User => {
-                // opencode-minimal prompt: quote marker, dimmed text, indented.
-                // Roles are carried by alignment and tone - no label rows.
-                let marker = Style::default().fg(theme.faint());
-                let style = Style::default().fg(theme.muted());
+                // opencode-minimal prompt: accent caret, full-strength text,
+                // indented. Roles are carried by alignment and tone - no labels.
+                let marker = Style::default().fg(theme.accent());
+                let style = Style::default().fg(theme.strong());
                 let wrap_w = inner.saturating_sub(2).max(8);
                 let mut first = true;
                 for raw in self.text.split('\n') {
@@ -366,7 +390,11 @@ impl Entry {
                                 }
                                 let mut spans: Vec<Span> = Vec::with_capacity(l.spans.len() + 2);
                                 spans.push(Span::styled(
-                                    if first { "\u{203a} " } else { "  " },
+                                    if first {
+                                        format!("{} ", glyph::PROMPT)
+                                    } else {
+                                        "  ".to_string()
+                                    },
                                     marker,
                                 ));
                                 first = false;

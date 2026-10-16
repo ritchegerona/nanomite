@@ -231,6 +231,13 @@ impl ThemeId {
             ThemeId::Umbrella => &UMBRELLA,
         }
     }
+
+    /// Resolves a saved label (config `theme = "umbrella"`) back to a theme.
+    /// Unknown labels fall through to `None`, letting the caller keep the default.
+    pub fn from_label(label: &str) -> Option<ThemeId> {
+        let label = label.trim().to_ascii_lowercase();
+        Self::ALL.into_iter().find(|id| id.label() == label)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -250,6 +257,13 @@ impl Theme {
     pub fn detect() -> Self {
         // mono is the NANOMITE default: a single-hue high contrast theme.
         Self::with_id(ThemeId::Mono)
+    }
+
+    /// True when this terminal advertises 24-bit colour. The palettes are
+    /// authored in truecolor; on ANSI-only terminals the per-role fallbacks
+    /// from [`Theme::pick`] take over instead.
+    pub fn is_truecolor(&self) -> bool {
+        self.depth == ColorDepth::Rgb
     }
 
     fn detect_depth() -> ColorDepth {
@@ -401,6 +415,17 @@ pub mod glyph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_label_round_trips_every_theme() {
+        for id in ThemeId::ALL {
+            assert_eq!(ThemeId::from_label(id.label()), Some(id));
+        }
+        // Case and surrounding space are tolerated, unknown labels are not.
+        assert_eq!(ThemeId::from_label("  UMBRELLA "), Some(ThemeId::Umbrella));
+        assert_eq!(ThemeId::from_label("nope"), None);
+        assert_eq!(ThemeId::from_label(""), None);
+    }
 
     #[test]
     fn every_theme_declares_a_complete_palette() {

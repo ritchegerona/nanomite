@@ -138,8 +138,8 @@ async fn renders_a_turn_with_tools_and_markdown() {
     assert!(text.contains("fn main()"), "code block missing:\n{text}");
     assert!(text.contains("✓"), "tool success marker missing:\n{text}");
     assert!(text.contains("✗"), "tool failure marker missing:\n{text}");
-    // The opencode-minimal quote marker identifies the user turn.
-    assert!(text.contains('\u{203a}'), "user marker missing:\n{text}");
+    // The `❯` caret identifies the user turn.
+    assert!(text.contains('❯'), "user marker missing:\\n{text}");
 }
 
 #[tokio::test]
@@ -183,14 +183,8 @@ async fn edit_preview_shows_old_and_new_lines() {
     app.entries.push(reply);
 
     let text = frame_text(&mut app, 92, 24);
-    assert!(
-        text.contains("- return a - b"),
-        "old line missing:\n{text}"
-    );
-    assert!(
-        text.contains("+ return a + b"),
-        "new line missing:\n{text}"
-    );
+    assert!(text.contains("- return a - b"), "old line missing:\n{text}");
+    assert!(text.contains("+ return a + b"), "new line missing:\n{text}");
 }
 
 #[tokio::test]
@@ -466,6 +460,97 @@ async fn wide_unicode_content_wraps_without_overflow() {
     for line in text.lines() {
         assert!(line.chars().count() <= 40, "row overflowed: {line:?}");
     }
+}
+
+#[tokio::test]
+async fn header_shows_workspace_and_status() {
+    let mut app = test_app().await;
+    app.cwd = std::path::PathBuf::from("/tmp/nanomite/header-demo");
+    let text = frame_text(&mut app, 100, 24);
+    // Brand, workspace path and the model/effort block all live in the header.
+    assert!(text.contains("nanomite"), "brand missing:\n{text}");
+    assert!(
+        text.contains("header-demo"),
+        "workspace missing from header:\n{text}"
+    );
+    assert!(
+        text.contains("medium"),
+        "reasoning effort missing from header:\n{text}"
+    );
+    // A tiny terminal keeps the brand row without the path.
+    let narrow = frame_text(&mut app, 30, 12);
+    assert!(narrow.contains("nanomite"), "brand missing:\n{narrow}");
+}
+
+#[tokio::test]
+async fn footer_reports_the_token_budget() {
+    let mut app = test_app().await;
+    app.usage.prompt_tokens = 12_000;
+    app.usage.completion_tokens = 3_000;
+    app.usage.total_tokens = 15_000;
+    let text = frame_text(&mut app, 100, 24);
+    // Absolute readout over the limit, not just a percentage.
+    assert!(
+        text.contains("15.0k/200.0k"),
+        "budget readout missing:\n{text}"
+    );
+    assert!(text.contains("7%"), "percentage missing:\n{text}");
+}
+
+#[tokio::test]
+async fn theme_switch_persists_and_updates_config() {
+    let mut app = test_app().await;
+    app.cfg.store_path =
+        Some(std::env::temp_dir().join(format!("nanomite-ui-theme-{}.toml", std::process::id())));
+    app.apply_theme(crate::ui::theme::ThemeId::Umbrella);
+    assert_eq!(app.theme.id, crate::ui::theme::ThemeId::Umbrella);
+    assert_eq!(app.cfg.theme, "umbrella");
+    let path = app.cfg.store_path.clone().unwrap();
+    let stored = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        stored.contains("theme = \"umbrella\""),
+        "theme not persisted: {stored}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn theme_picker_lists_skins_with_descriptors() {
+    let mut app = test_app().await;
+    app.open_themes();
+    let text = frame_text(&mut app, 92, 26);
+    assert!(text.contains("themes"), "picker title missing:\n{text}");
+    for skin in ["mono", "opencode", "midnight", "graphite", "umbrella"] {
+        assert!(text.contains(skin), "skin {skin} missing:\n{text}");
+    }
+    assert!(text.contains("single hue"), "descriptor missing:\n{text}");
+    app.close_overlay();
+}
+
+#[tokio::test]
+async fn busy_footer_shows_step_and_tool_progress() {
+    let mut app = test_app().await;
+    app.composer.insert_str("hello");
+    app.submit();
+    for _ in 0..200 {
+        app.pump_engine();
+        if app.entries[1].tools.iter().any(|t| !t.running) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    // The completed entry itself carries the step counter the status strip reads.
+    let entry = &app.entries[1];
+    assert!(
+        entry.steps > 0,
+        "steps not counted: {:?} / {:?}",
+        entry.steps,
+        entry.tools
+    );
+    assert!(
+        !app.is_busy(),
+        "the scripted turn should have finished by now"
+    );
 }
 
 #[tokio::test]

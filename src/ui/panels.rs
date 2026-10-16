@@ -8,17 +8,58 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
-/// One row: the brand on the left, model + effort on the right. No path noise.
+/// One row: brand + workspace on the left, model · effort · status on the right.
+/// The model label is truncated with its tail kept visible (`…/gpt-oss-20b`),
+/// so long ids never push the status off a narrow terminal.
 pub fn header(frame: &mut Frame, area: Rect, app: &App) {
     let theme = &app.theme;
-    let model_label = format!("{} · {}", app.model_label(), app.cfg.reasoning.label());
-    let left = Line::from(vec![
+    let width = area.width as usize;
+
+    let mut left = vec![
         Span::styled(glyph::HEX, Style::default().fg(theme.accent())),
         Span::styled(" nanomite", theme.bold()),
-    ]);
-    let right = Line::from(vec![Span::styled(model_label, theme.dim())]).right_aligned();
-    frame.render_widget(Paragraph::new(left), area);
+    ];
+    let path_budget = width.saturating_sub(24).min(40);
+    if path_budget >= 6 {
+        let path = text::display_path(&app.cwd, path_budget);
+        left.push(Span::styled(
+            format!(" {} ", glyph::CHEVRON),
+            Style::default().fg(theme.faint()),
+        ));
+        left.push(Span::styled(path, theme.faint_style()));
+    }
+    frame.render_widget(Paragraph::new(Line::from(left)), area);
+
+    // Right side: spinner while a turn runs, a quiet ready dot otherwise.
+    let mark = if app.is_busy() {
+        glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()]
+    } else {
+        glyph::DOT
+    };
+    let fixed = glyph::DOT.width() + 2 * glyph::CHEVRON.width() + 2;
+    let model_budget = width
+        .saturating_sub(fixed + app.cfg.reasoning.label().len() + 2)
+        .max(8);
+    let model = text::truncate_head(&app.model_label(), model_budget);
+    let right = Line::from(vec![
+        Span::styled(
+            format!("{mark} "),
+            if app.is_busy() {
+                Style::default().fg(theme.accent())
+            } else {
+                Style::default().fg(theme.faint())
+            },
+        ),
+        Span::styled(model, theme.dim()),
+        Span::styled(
+            format!(" {} ", glyph::CHEVRON),
+            Style::default().fg(theme.faint()),
+        ),
+        Span::styled(app.cfg.reasoning.label(), theme.faint_style()),
+    ])
+    .right_aligned();
     frame.render_widget(Paragraph::new(right), area);
 }
 
@@ -75,6 +116,10 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
             left.push(Span::styled(msg.clone(), theme.dim()));
         }
         _ if app.is_busy() => {
+            let elapsed = app
+                .turn_started
+                .map(|t| text::format_duration(t.elapsed()))
+                .unwrap_or_default();
             left.push(Span::styled(
                 format!(
                     "{} ",
@@ -83,11 +128,28 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
                 Style::default().fg(theme.accent()),
             ));
             left.push(Span::styled("working", Style::default().fg(theme.muted())));
-            let elapsed = app
-                .turn_started
-                .map(|t| text::format_duration(t.elapsed()))
-                .unwrap_or_default();
-            left.push(Span::styled(format!("  {elapsed}"), theme.faint_style()));
+            left.push(Span::styled(format!(" {elapsed}"), theme.faint_style()));
+            // Steps and tool calls so far this turn, when there are any.
+            let (steps, tools) = app
+                .active
+                .and_then(|i| app.entries.get(i))
+                .map(|e| (e.steps, e.tools.iter().filter(|t| !t.running).count()))
+                .unwrap_or((0, 0));
+            if steps > 0 || tools > 0 {
+                left.push(Span::styled(
+                    format!(" · {steps} step{}", if steps == 1 { "" } else { "s" }),
+                    theme.faint_style(),
+                ));
+                if tools > 0 {
+                    left.push(Span::styled(
+                        format!(" · {tools} tool{}", if tools == 1 { "" } else { "s" }),
+                        theme.faint_style(),
+                    ));
+                }
+            }
+            if app.pending_editor {
+                left.push(Span::styled(" · editor open", theme.faint_style()));
+            }
         }
         _ => {
             left.push(Span::styled(
@@ -95,8 +157,9 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
                 Style::default().fg(theme.faint()),
             ));
             if !app.view.follow {
+                // `end` (or clicking the scrollbar's bottom) re-follows the live tail.
                 left.push(Span::styled(
-                    format!("  {} scrolled up (ctrl+end)", glyph::ARROW_UP),
+                    format!("  {} scrolled up (end)", glyph::ARROW_UP),
                     Style::default().fg(theme.warn()),
                 ));
             }
@@ -107,7 +170,7 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
     let limit = app.cfg.context_limit.max(1);
     let ctx = usage.min(limit);
     let pct = (usage * 100 / limit).min(999);
-    // Context meter: solid bar, amber past 80%, red past 95%.
+    // Context meter: proportional solid bar, amber past 80%, red past 95%.
     let meter_cells = 10usize;
     let filled = (ctx * meter_cells / limit).min(meter_cells);
     let meter_style = if pct >= 95 {
@@ -122,7 +185,14 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
         "\u{2588}".repeat(filled),
         "\u{2591}".repeat(meter_cells - filled)
     );
-    let ctx_tail = format!("{}% ctx", pct);
+    // A real budget readout: absolute tokens over the limit, so the bar is
+    // never the only signal (and an empty-looking bar still carries numbers).
+    let ctx_tail = format!(
+        "{}/{} · {}%",
+        text::format_tokens(ctx as u64),
+        text::format_tokens(limit as u64),
+        pct
+    );
     let right = Line::from(vec![
         Span::styled(format!("{} ", glyph::ARROW_UP), theme.faint_style()),
         Span::styled(
@@ -159,7 +229,7 @@ pub fn help(frame: &mut Frame, area: Rect, app: &App) {
     };
     let inner_width = area.width.saturating_sub(4) as usize;
     let keys: &[(&str, &str)] = &[
-        ("ctrl+c / ctrl+d", "quit"),
+        ("ctrl+c / ctrl+d", "quit (ctrl+d only on an empty prompt)"),
         ("enter", "send · run the highlighted command"),
         ("ctrl+j / alt+enter", "newline in the prompt"),
         ("/ or ctrl+x", "command menu"),
@@ -167,9 +237,16 @@ pub fn help(frame: &mut Frame, area: Rect, app: &App) {
         ("ctrl+t / ctrl+l", "new session · clear transcript"),
         ("ctrl+r", "cycle reasoning effort"),
         ("ctrl+p / ctrl+n", "previous · next prompt from history"),
-        ("ctrl+w / ctrl+u / ctrl+k", "delete word · clear line"),
+        ("ctrl+a / ctrl+e", "prompt home · prompt end"),
+        (
+            "ctrl+w / ctrl+u / ctrl+k",
+            "delete word · clear line · delete to end",
+        ),
+        ("left / right (with ctrl)", "move by word"),
+        ("up / down", "cursor within a multi-row prompt, else scroll"),
         ("pgup / pgdn / home / end", "scroll the transcript"),
         ("mouse wheel", "scroll the transcript"),
+        ("tab", "next picker row (shift+tab back)"),
         ("f1", "this sheet"),
     ];
 
@@ -215,7 +292,7 @@ pub fn help(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .map(|(k, _)| k.chars().count())
         .max()
-        .unwrap_or(20)
+        .unwrap_or(24)
         .min(28);
     for (key, desc) in keys {
         lines.push(Line::from(vec![
@@ -313,15 +390,18 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
         let avail = inner_w.saturating_sub(3 + label_chars + 2);
         let hint = text::truncate_head(&item.hint, avail);
         let label_w = inner_w.saturating_sub(3 + text::width(&hint));
+        let label_style = if selected {
+            Style::default().fg(theme.strong())
+        } else if item.current {
+            Style::default().fg(theme.accent_soft())
+        } else {
+            theme.dim()
+        };
         lines.push(Line::from(vec![
             Span::styled(format!(" {marker} "), Style::default().fg(theme.accent())),
             Span::styled(
                 format!("{:<label_w$}", text::truncate(&label, label_w)),
-                if selected {
-                    Style::default().fg(theme.strong())
-                } else {
-                    theme.dim()
-                },
+                label_style,
             ),
             Span::styled(hint, theme.faint_style()),
         ]));
@@ -430,12 +510,14 @@ pub fn connect(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     lines.push(Line::default());
-    let key_hint = match &app.cfg.api_key {
-        Some(_) => "key is session-only",
-        None => "no key set",
+    let key_hint = match (&app.cfg.api_key, &app.cfg.store_path) {
+        // The form itself persists on save; say where, honestly.
+        (Some(_), Some(path)) => format!("saved to {}", path.display()),
+        (Some(_), None) => "key loaded from the environment".to_string(),
+        (None, _) => "no key set - keyless endpoints still work".to_string(),
     };
     lines.push(Line::from(Span::styled(
-        format!(" {key_hint} · saved from NANOMITE_API_KEY / OPENAI_API_KEY"),
+        text::truncate(&key_hint, inner_w.saturating_sub(2)),
         theme.faint_style(),
     )));
 
@@ -532,7 +614,10 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
 
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
-            Span::styled(" ❯ ", Style::default().fg(theme.accent())),
+            Span::styled(
+                format!(" {} ", glyph::PROMPT),
+                Style::default().fg(theme.accent()),
+            ),
             Span::styled(
                 if query.is_empty() {
                     "search".to_string()
@@ -558,7 +643,9 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
             }
             lines.push(Line::from(Span::styled(
                 format!(" {} ", if row.popular { "Popular" } else { "Providers" }),
-                Style::default().fg(theme.accent()),
+                Style::default()
+                    .fg(theme.accent())
+                    .add_modifier(ratatui::style::Modifier::BOLD),
             )));
             last_popular = Some(row.popular);
         }

@@ -48,6 +48,11 @@ impl Default for AgentConfig {
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     Started,
+    /// One agent step is about to start (`index` is the 1-based step number),
+    /// so the UI can show live progress on long tool-using turns.
+    Step {
+        index: usize,
+    },
     Delta(String),
     ToolStart {
         name: String,
@@ -265,6 +270,7 @@ impl AgentRuntime {
                 return None;
             }
             steps += 1;
+            let _ = tx.send(AgentEvent::Step { index: steps });
 
             let stream = match tokio::select! {
                 biased;
@@ -734,7 +740,11 @@ fn preview_args(call: &ToolCall) -> Option<String> {
             if content.trim().is_empty() {
                 return None;
             }
-            Some(bounded_preview(content, PREVIEW_MAX_LINES, PREVIEW_MAX_CHARS))
+            Some(bounded_preview(
+                content,
+                PREVIEW_MAX_LINES,
+                PREVIEW_MAX_CHARS,
+            ))
         }
         "edit_file" => {
             let old = args.get("old_string").and_then(|v| v.as_str())?;

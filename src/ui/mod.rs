@@ -128,8 +128,8 @@ impl View {
 
 /// Rough line count of the help sheet, used for scrolling and sizing.
 pub fn help_row_count() -> usize {
-    // 1 commands header + N command rows + 1 blank + 1 keys header + 12 key rows.
-    crate::commands::COMMANDS.len() + 15
+    // 1 commands header + N command rows + 1 blank + 1 keys header + 16 key rows.
+    crate::commands::COMMANDS.len() + 19
 }
 
 /// Draws the whole frame.
