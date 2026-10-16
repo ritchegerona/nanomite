@@ -88,6 +88,17 @@ impl View {
         self.follow = false;
     }
 
+    /// Scroll so that entry `entry_index` sits at the top of the viewport.
+    /// Uses cached offsets from the last render; no-op if offsets are stale.
+    pub fn scroll_to_entry_index(&mut self, entry_index: usize) {
+        if entry_index < self.offsets.len().saturating_sub(1) {
+            let entry_top = self.offsets[entry_index];
+            let max_scroll = self.max_scroll();
+            self.scroll_from_bottom = max_scroll.saturating_sub(entry_top);
+            self.follow = self.scroll_from_bottom == 0;
+        }
+    }
+
     fn max_scroll(&self) -> u16 {
         self.content_height.saturating_sub(self.offset_view)
     }

@@ -714,6 +714,8 @@ pub struct App {
     turn_history: Vec<usize>,
     /// Index of the in-flight transcript entry while a turn runs.
     pub(crate) active: Option<usize>,
+    /// Index of the current turn for browsing (0 = latest, increments toward older).
+    turn_index: usize,
     dirty: bool,
     quit: bool,
     /// Painted composer text width, synced each frame by `ui::render`.
@@ -807,6 +809,7 @@ impl App {
             history: Vec::new(),
             turn_history: Vec::new(),
             active: None,
+            turn_index: 0,
             dirty: true,
             quit: false,
             // Pre-first-frame fallback; `ui::render` syncs it to the painted width.
@@ -1394,7 +1397,9 @@ impl App {
             Command::Themes => self.open_themes(),
             Command::Tools => self.open_tools(),
             Command::Improve => self.open_improve(),
-            Command::ImproveFromBoard => { let _ = self.stage_board_proposal(); },
+            Command::ImproveFromBoard => {
+                let _ = self.stage_board_proposal();
+            }
             Command::Thinking => {
                 self.show_thinking = !self.show_thinking;
                 self.toast(format!(
@@ -1405,6 +1410,8 @@ impl App {
             }
             Command::Undo => self.undo(),
             Command::Unshare => self.toast("nothing shared - sessions never leave this machine"),
+            Command::Prev => self.prev_turn(),
+            Command::Next => self.next_turn(),
         }
         self.mark_dirty();
     }
@@ -1463,6 +1470,47 @@ impl App {
             let prompt = "Summarise the session above in at most 15 bullet points: decisions, files touched, and open questions.";
             runtime.run(prompt.to_string(), &history, cancel, tx).await;
         });
+        self.mark_dirty();
+    }
+
+    // -- /prev, /next (turn browsing) ---------------------------------------
+
+    fn prev_turn(&mut self) {
+        if self.turn_history.is_empty() {
+            self.toast("no turns to browse yet");
+            return;
+        }
+        let max_index = self.turn_history.len() - 1;
+        if self.turn_index < max_index {
+            self.turn_index += 1;
+        }
+        self.scroll_to_turn();
+    }
+
+    fn next_turn(&mut self) {
+        if self.turn_history.is_empty() {
+            self.toast("no turns to browse yet");
+            return;
+        }
+        if self.turn_index > 0 {
+            self.turn_index -= 1;
+        }
+        self.scroll_to_turn();
+    }
+
+    fn scroll_to_turn(&mut self) {
+        // turn_history stores per-turn entry counts; turn_index 0 = latest turn.
+        let turns_back = self.turn_index;
+        let n = self.turn_history.len();
+        let skip: usize = self.turn_history[n.saturating_sub(turns_back + 1)..]
+            .iter()
+            .sum();
+        let target = self.entries.len().saturating_sub(skip);
+        self.view.scroll_to_entry_index(target);
+        self.view.follow = false;
+        let total = n;
+        let current = n - self.turn_index;
+        self.toast(format!("turn {} of {}", current, total));
         self.mark_dirty();
     }
 
@@ -2151,7 +2199,10 @@ impl App {
             roots,
         ) {
             Ok(proposal) => {
-                self.toast(format!("improve proposal staged (id={}), review with /improve", proposal.id));
+                self.toast(format!(
+                    "improve proposal staged (id={}), review with /improve",
+                    proposal.id
+                ));
                 // Open the improve overlay so the user can review immediately.
                 self.open_improve();
                 true

@@ -31,6 +31,8 @@ pub enum Command {
     Panel,
     Improve,
     ImproveFromBoard,
+    Prev,
+    Next,
 }
 
 pub struct Entry {
@@ -163,6 +165,18 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "remove any shared copy",
         kind: Command::Unshare,
+    },
+    Entry {
+        command: "/prev",
+        aliases: &[],
+        hint: "browse to previous conversation turn",
+        kind: Command::Prev,
+    },
+    Entry {
+        command: "/next",
+        aliases: &[],
+        hint: "browse to next conversation turn",
+        kind: Command::Next,
     },
     Entry {
         command: "/copy",
