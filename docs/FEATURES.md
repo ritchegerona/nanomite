@@ -1,6 +1,7 @@
 # Features
 
-Honest capability inventory as of 2026-10-14. Levels: **L0** not implemented ·
+Honest capability inventory, updated 2026-10-16 (original audit 2026-10-14).
+Levels: **L0** not implemented ·
 **L1** implemented, not adequately verified · **L2** tested under defined
 conditions · **L3** integrated and regression-tested · **L4**
 benchmark-validated and monitored. Evidence in `docs/AUDIT-2026-10-14.md`.
@@ -9,34 +10,48 @@ benchmark-validated and monitored. Evidence in `docs/AUDIT-2026-10-14.md`.
 
 - Streaming chat with any OpenAI-compatible endpoint (L2) — 21 presets,
   keyless localhost support, `/provider` `/models` `/connect` menus.
-- Bounded agent loop with 9 tools, interrupts, usage accounting (L3).
+- Bounded agent loop with 18 tools, interrupts, usage accounting (L3).
 - Workspace-sandboxed file tools; shell + key-only SSH; web fetch/search (L2,
   L2, L1) — see `docs/TOOLS.md`.
 - Ratatui TUI: virtualized transcript, markdown, 4 themes (default
-  `umbrella`, red-on-black), pickers, overlays, resize-safe (L3).
+  `umbrella`, red-on-black, persisted), pickers, overlays, resize-safe down to
+  30×12 (L3).
 - Config persistence (`~/.config/nanomite/config.toml`, `0600`), sessions
   with persist/resume/markdown export (L3/L2).
+- Persistent memory attached in production: SQLite + FTS5 + markdown
+  projection + the six `memory_*` tools, retrieval before each turn and capture
+  after (L3) — see `docs/MEMORY.md`.
+- Multi-agent board: `/panel <topic>` convenes four personas plus a chair,
+  streamed live, persisted in SQLite (L3) — see `docs/ARCHITECTURE.md`.
+- Tool library `/tools` (18 tools, ✓/✗, persisted; disabled tools are filtered
+  from the schema list and refused at dispatch) (L3).
+- Self-improvement `/improve`: propose → review diff → approve (with `.bak`,
+  `cargo test --lib` gate and byte-exact rollback) or reject; append-only JSONL
+  audit log; hard self-edit denylist (L3) — see `docs/SECURITY.md`.
+- File-intelligence extractors + the `read_document` tool; library-crate split
+  (`src/lib.rs`) and the `benches/perf` harness (L3).
 
-## Landing (concurrent workstream — verify before claiming)
+## Landing (verify before claiming)
 
-- Persistent memory: SQLite + FTS5 + markdown projection + `memory_*` tools
-  (currently L1; 1 open test failure, integration in flight).
-- File-intelligence extractors/index (`extract`, `index`, `html` modules +
-  optional format deps: CSV/XML/TOML/YAML/ZIP/DOCX/PDF).
-- Library-crate split (`src/lib.rs`) and `benches/perf` harness.
+- Token budgeting and `/compact` summarization quality (unmeasured).
+- Offline mode with status + gating — still L0 (`docs/OFFLINE_MODE.md`).
 
 ## Planned (L0 — not started)
 
-Reasoning/execution modes · token budgeting and compaction · measured
-performance work · offline mode with status + gating · capability registry ·
-evolution lifecycle (propose → approve → experiment → evaluate → release →
-rollback) · authenticated self-update · audit logging.
+Reasoning/execution modes · evolution lifecycle beyond `/improve` (experiment
+→ evaluate → release) · authenticated self-update.
 
 ## Known limitations
 
-- No central tool authorization; destructive core-tool calls are not confirmed.
+- No central tool authorization engine; destructive core-tool calls are not
+  confirmed. Per-subsystem gates exist instead: memory authorizes itself,
+  `disabled_tools` refuses dispatch, `/improve` requires human approval.
+- Board messages and memory records are untrusted data and cannot authorize
+  anything.
+- The self-improvement regression gate runs `cargo test --lib`, so it is only
+  meaningful inside a checkout.
 - Web tools have no offline behavior; the app has no offline indicator.
 - `/compact` summarization quality is unmeasured; context savings are unclaimed.
 - Release installation is manual; no signature infrastructure.
-- The working tree does not build at audit close (missing `benches/perf.rs`
-  manifest target); last green baseline is git `d59f2ef` at 55 tests.
+- Verification snapshot: `cargo test --lib` **370 passed / 0 failed**
+  (fully offline) plus `tests/production_attach.rs` (1 integration test).

@@ -42,16 +42,31 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
   environment variables)
 - **Persistent memory** — durable, searchable, model-independent memory
   (SQLite + human-readable markdown) that survives restarts and provider
-  changes (see [Persistent memory](#persistent-memory))
-- **15 built-in tools** — file access, a workspace shell, SSH, web access and
-  six memory tools (see [Tools](#tools))
+  changes. It is on by default: records are retrieved before every turn and
+  captured after, per policy (see [Persistent memory](#persistent-memory))
+- **18 built-in tools** — file access, document extraction, a workspace shell,
+  SSH, web access, six memory tools and two self-improvement tools
+  (see [Tools](#tools))
+- **Tool library** — `/tools` lists every tool grouped by category and lets you
+  enable or disable any of them; disabled tools are hidden from the model and
+  refused at dispatch
+- **Self-improvement with a human in the loop** — the agent can propose an edit
+  to its config, its prompt file or a source file; `/improve` shows the diff,
+  and only you can approve it — behind a diff gate, a `.bak` backup, a
+  `cargo test` regression check and automatic rollback on failure
+- **Agent board** — `/panel <topic>` convenes four personas in parallel
+  (Architect, Engineer, Scientist, Critic) plus a chair that synthesizes their
+  answers, streamed live into an overlay
 - **Professional TUI** — virtualized transcript that stays fast with thousands
-  of messages, markdown rendering, live tool-call rows, context meter
+  of messages, markdown rendering, live tool-call rows, unified diffs in edit
+  previews, context meter, CJK/wide-character-safe composer
 - **4 themes** — Umbrella Corp (default, Resident Evil–inspired red), midnight,
-  graphite and mono
-- **Persistent setup** — provider, key and model are saved to
-  `~/.config/nanomite/config.toml` and survive restarts
-- **Offline-capable test suite** — 261 tests, zero network required
+  graphite and mono; the choice is persisted across sessions
+- **Your own prompt** — drop extra instructions in `~/.config/nanomite/prompt.md`
+  and they are appended to the system prompt on every turn
+- **Persistent setup** — provider, key, model, theme and tool toggles are saved
+  to `~/.config/nanomite/config.toml` and survive restarts
+- **Offline-capable test suite** — 370 tests, zero network required
 
 ## Installation
 
@@ -110,6 +125,9 @@ base_url = "https://integrate.api.nvidia.com/v1"
 api_key = "your-key-here"          # never printed, 0600 perms
 model = "openai/gpt-oss-20b"
 reasoning = "medium"
+theme = "umbrella"                 # persists your /themes choice
+disabled_tools = "ssh_run,web_search"   # /tools toggles land here
+prompt_file = "~/.config/nanomite/prompt.md"
 ```
 
 Precedence: **built-in defaults < config file < environment variables**.
@@ -126,12 +144,18 @@ Precedence: **built-in defaults < config file < environment variables**.
 | `NANOMITE_MAX_TOOL_CALLS` | unlimited | Tool calls per turn |
 | `NANOMITE_MAX_FILE_BYTES` | `200000` | Tool read cap |
 | `NANOMITE_STEP_TIMEOUT_MS` | `120000` | Per-step ceiling |
+| `NANOMITE_THEME` | `umbrella` | Startup palette (`umbrella`, `midnight`, `graphite`, `mono`) |
+| `NANOMITE_DISABLED_TOOLS` | – | Comma-separated tool names to hide and refuse (overrides the config file) |
+| `NANOMITE_PROMPT_FILE` | `~/.config/nanomite/prompt.md` | Extra instructions appended to the system prompt |
+| `NANOMITE_BOARD_DIR` | `~/.local/share/nanomite/board` | Where the multi-agent board keeps its SQLite store |
 | `NANOMITE_CONFIG` | `~/.config/nanomite/config.toml` | Alternate config path |
 
 ## Tools
 
-The model sees these as callable functions. Everything file-shaped is
-sandboxed to the workspace root — paths that escape are refused.
+The model sees these as callable functions — 18 in all, defined once in
+`src/tools/catalog.rs` and rendered as OpenAI-function schemas. Everything
+file-shaped is sandboxed to the workspace root — paths that escape are refused.
+`/tools` turns any of them off.
 
 | Tool | What it does |
 |---|---|
@@ -140,6 +164,7 @@ sandboxed to the workspace root — paths that escape are refused.
 | `write_file` | Write or append content to a file |
 | `edit_file` | Replace a string with another (first or all occurrences) |
 | `search` | Recursive case-insensitive text search with hit caps |
+| `read_document` | Read a PDF, DOCX, ODT, XLSX, ODS, RTF, CSV, Markdown or JSON document as bounded text via the `extract/` registry |
 | `run_command` | Shell command via `sh -c` inside the workspace — builds, git, package managers, any Linux tooling. Hard timeout, output capped |
 | `ssh_run` | Run a command on a remote host (`user@host`), key-based auth only, `BatchMode=yes` so it never hangs on a password prompt |
 | `web_fetch` | GET an http(s) URL and return readable text (HTML stripped, entities decoded, size-capped) |
@@ -150,6 +175,17 @@ sandboxed to the workspace root — paths that escape are refused.
 | `memory_update` | Update fields of an existing memory (omitted fields stay) |
 | `memory_delete` | Delete a memory — requires `confirm: true` |
 | `memory_list` | List memories, newest or most important first |
+| `propose_self_edit` | Stage a proposed change to the config, prompt file or a source file for you to review in `/improve` |
+| `list_self_edits` | List proposals still waiting for your decision |
+
+**Tool library**
+
+`/tools` lists all 18 tools grouped by category (files · exec · web · memory ·
+document · self-improve) with ✓ enabled / ✗ disabled. Toggles are written to
+`disabled_tools` in `~/.config/nanomite/config.toml` and survive restarts;
+`NANOMITE_DISABLED_TOOLS` overrides the file. A disabled tool is filtered out of
+the schema list before it is ever sent to the provider *and* refused again at
+dispatch, so it cannot be reached by guessing a call.
 
 **Security notes**
 
@@ -159,9 +195,13 @@ sandboxed to the workspace root — paths that escape are refused.
   (`BatchMode`) so a bad host fails instead of hanging the agent
 - `web_fetch`/`web_search` only speak http(s); bodies are truncated before
   they reach the model
+- `read_document` is read-only and workspace-confined, with bounded output
 - The API key is stored with `0600` permissions and is never logged
 - Memory tools authorize inside the engine; `memory_delete` needs an explicit
   confirmation, and credential-shaped content is refused on the way in
+- `propose_self_edit` **cannot apply anything**: it only stages a proposal, and
+  the safety-critical sources (`src/memory/security.rs`, `src/memory/policy.rs`,
+  `src/main.rs`) are on a hard denylist. You approve in `/improve` or not at all
 
 ## Persistent memory
 
@@ -227,9 +267,14 @@ outcomes, lessons) · `decision` (decisions with rationale) · `session`
 
 ### Managing memory
 
-- `/memory` — one-line status: record count, index type, storage path
+- `/memory` — open the memory browser: recent records with category, project
+  and time; select one to read its full body in an overlay. It runs async, so
+  the UI never blocks on the database
 - Ask the agent: "search your memory for X", "save that we deploy on
   fridays", "forget the note about Y" (it will ask before deleting)
+- Memory attaches at startup by default. If it cannot, nanomite keeps running
+  and says so in the footer — it never fails the launch. Set
+  `NANOMITE_MEMORY=0` to run without it
 - Backups: `MemoryEngine::backup()` writes a validated timestamped snapshot
   into `~/.local/share/nanomite/memory/backups/`; restore swaps a
   integrity-checked copy in only after validation, so a bad backup can never
@@ -270,7 +315,8 @@ to `LIKE` search, reporting the index in use honestly.
 | `ctrl+r` | Cycle reasoning effort |
 | `ctrl+p` / `ctrl+n` | Previous · next prompt from history |
 | `ctrl+w` / `ctrl+u` / `ctrl+k` | Delete word · clear line · delete to end |
-| `pgup` / `pgdn` / `home` / `end` | Scroll the transcript |
+| `pgup` / `pgdn` / `ctrl+home` / `ctrl+end` | Scroll the transcript |
+| `home` / `end` | Jump to the start / end of the prompt |
 | `ctrl+c` / `ctrl+d` | Quit (ctrl+d only when the prompt is empty) |
 | `f1` | This keysheet |
 
@@ -290,7 +336,12 @@ Type `/` to open the command menu (aliases included):
 | `/new` | `/clear` | Start a new session |
 | `/sessions` | `/resume`, `/continue` | List and switch sessions |
 | `/reasoning` | `/effort` | Cycle minimal · low · medium · high |
-| `/themes` | `/theme` | Switch colour theme |
+| `/themes` | `/theme` | Switch colour theme (persisted) |
+| `/tools` | | Tool library — list, enable and disable the agent's tools |
+| `/panel` | | Convene the agent board on a topic (`/panel <topic>`) |
+| `/improve` | | Review self-edit proposals — `a` approve (with regression gate), `r` reject |
+| `/memory` | `/mem` | Browse persistent memory |
+| `/copy` | | Copy the last assistant message to the clipboard |
 | `/details` | | Toggle tool output details |
 | `/thinking` | | Toggle the thinking indicator |
 | `/editor` | | Compose the prompt in `$EDITOR` |
@@ -315,6 +366,7 @@ src/
 ├── lib.rs           library root: runtime, tools and memory are testable
 ├── app.rs           state machine: keys, overlays, view model, command router
 ├── config.rs        defaults <- config file <- environment
+├── commands.rs      the slash-command table
 ├── session.rs       session persistence + markdown export
 ├── extract/         universal file intelligence: per-format text extraction
 │   ├── mod.rs       the extraction interface, limits, deadlines
@@ -326,6 +378,7 @@ src/
 │   ├── provider.rs  the provider trait: stream_chat, tool types
 │   ├── openai.rs    OpenAI-compatible streaming client + SSE decoder
 │   ├── runtime.rs   the agent loop: steps, tool dispatch, interrupts
+│   ├── swarm.rs     parallel chat across several providers
 │   └── testdouble.rs scripted provider (test builds only)
 ├── memory/
 │   ├── mod.rs       the engine: paths, writes, mirroring, backups, reindexing
@@ -335,17 +388,30 @@ src/
 │   ├── context.rs   retrieval for prompts + post-task capture policy
 │   ├── policy.rs    limits, sensitivity ceilings, the authorization gate
 │   └── security.rs  credential detection, path confinement, atomic IO
+├── board/
+│   ├── personas.rs  Architect, Engineer, Scientist, Critic + Chair
+│   ├── engine.rs    convene(): parallel discussion rounds, then synthesis
+│   └── store.rs     SQLite board_messages (untrusted content, verbatim)
+├── improve/
+│   ├── proposal.rs  proposals + validation, including the self-edit denylist
+│   ├── diff.rs      unified diff artifacts
+│   ├── runner.rs    .bak backup, regression check, byte-exact rollback
+│   └── audit.rs     append-only JSONL decision log
 ├── tools/
+│   ├── catalog.rs   the 18-tool inventory as data (name, description, category)
 │   ├── file_tools.rs  list/read/write/edit/search (workspace-sandboxed)
+│   ├── document_tools.rs  read_document over the extract/ registry
 │   ├── exec_tools.rs  run_command, ssh_run
 │   ├── web_tools.rs   web_fetch, web_search
-│   └── memory_tools.rs  the six memory_* tools (JSON in, bounded JSON out)
+│   ├── memory_tools.rs  the six memory_* tools (JSON in, bounded JSON out)
+│   └── improve_tools.rs  propose_self_edit, list_self_edits (stage only)
 └── ui/
     ├── mod.rs       frame layout
     ├── chat.rs      virtualized transcript + markdown
-    ├── composer.rs  multi-line input with cursor math
+    ├── composer.rs  multi-line input, display-column caret math
     ├── panels.rs    header, footer, overlays, pickers
-    ├── theme.rs     the 4 palettes
+    ├── diff.rs      unified diff view (edit previews, /improve review)
+    ├── theme.rs     the 4 palettes + shared glyph constants
     └── text.rs      wrapping, truncation, markdown renderer
 ```
 
@@ -361,7 +427,7 @@ src/
 ## Development
 
 ```bash
-cargo test --lib     # 261 tests, fully offline
+cargo test --lib     # 370 tests, fully offline
 cargo run            # dev build against your config
 cargo build --release
 ```

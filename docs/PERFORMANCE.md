@@ -26,6 +26,12 @@ Startup (3–6 ms), TUI rendering (dirty-flagged with cached renders), and the
 SQLite memory store (WAL + `synchronous=NORMAL`) were inspected and left
 alone — already fast by design.
 
+The self-improvement gate (`/improve` → approve) shells out to
+`cargo test --lib` as its regression check. That is a full test run, not a
+microbenchmark: it runs on a background task, never on the UI thread, and a
+non-zero exit rolls the change back byte-exactly. Budget for "seconds, not
+milliseconds" when deciding to approve.
+
 ## Rules
 
 1. **Profile before optimizing.** Keep the tokio runtime, the sync

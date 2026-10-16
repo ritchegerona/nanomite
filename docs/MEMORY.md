@@ -5,11 +5,38 @@ authoritative store; Markdown documents are a one-way human-readable
 projection. Nothing in `src/memory/` knows about any AI provider — records
 are plain serde data, so changing models never touches stored knowledge.
 
-Status: **L1** (implemented, repair in progress). Compiles; ~79 unit tests,
-majority green; one failing test (`consolidation_merges_exact_duplicates_only`,
-open); a store-wide `export()` deadlock was found and fixed during the
-2026-10-14 audit. Runtime/UI integration is landing via `memory_tools.rs`
-(concurrent workstream, unverified).
+Status: **L3** (updated 2026-10-16). Integrated and regression-tested in the
+370-test suite; `tests/production_attach.rs` covers the real startup attach
+path. The `consolidation_merges_exact_duplicates_only` failure noted in the
+2026-10-14 audit is fixed, and the `export()` deadlock found then is fixed.
+Runtime/UI integration is live: `MemoryEngine` attaches at startup and the six
+`memory_*` tools are callable.
+
+## Production activation
+
+`MemoryEngine` is attached at startup, so:
+
+- **Retrieval** — a bounded, ranked set of memories is injected before every
+  model request as framed, untrusted reference data (never instructions).
+- **Capture** — after a finished turn, the policy stores explicit user
+  directives, a session checkpoint and, for tool-using turns, an outcome digest.
+  Assistant prose is never stored.
+- **Failure is not fatal.** If the engine cannot attach, nanomite starts anyway
+  and shows a quiet hint in the footer; it never raises an error on launch.
+
+Policy switches (all honored at attach time):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `NANOMITE_MEMORY` | `1` | `0` disables the subsystem entirely |
+| `NANOMITE_MEMORY_DIR` | platform | Markdown knowledge root |
+| `NANOMITE_MEMORY_DB` | platform | SQLite database file |
+| `NANOMITE_MEMORY_READONLY` | `0` | `1` refuses writes (and bulk operations) |
+| `NANOMITE_MEMORY_AUTO` | `1` | `0` disables automatic post-turn capture |
+| `NANOMITE_MEMORY_MARKDOWN` | `1` | `0` disables markdown mirroring |
+
+`/memory` is an async browser over the store: recent records, with a record-body
+overlay for the selected one.
 
 ## Data model
 
@@ -57,3 +84,6 @@ output unless a caller explicitly opts in above the ceiling.
   tests (including negative tests), and a CHANGELOG entry.
 - Retrieval budgets (`max_inject_records/chars`) are ceilings, not targets;
   injection must pass `MemoryOp::Inject` authorization.
+- `src/memory/security.rs` and `src/memory/policy.rs` are on the self-edit
+  denylist (`docs/SECURITY.md`): the gate and the guards around it are never
+  editable by the agent, at any level.

@@ -1,17 +1,20 @@
 # Architecture
 
-Single-crate Rust binary (`nanomite`, edition 2021). The binary owns the
-terminal; a concurrent workstream is extracting a library crate (`src/lib.rs`,
-incomplete at last audit — modules `context`, `extract`, `html`, `index`,
-`telemetry` declared but absent).
+Single-crate Rust binary (`nanomite`, edition 2021) over a library crate:
+`src/main.rs` owns the terminal, everything testable lives in `src/lib.rs`,
+which declares `agent`, `app`, `board`, `commands`, `config`, `extract`,
+`improve`, `memory` (behind a deliberate `#[allow(dead_code)]` for its API
+superset), `session`, `tools`, `ui`. Updated 2026-10-16.
 
 ```
 src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::render
        │                                │
        │                          AgentRuntime ──▶ AgentProvider ──▶ HTTPS
        │                                │              (openai.rs: any /v1 endpoint)
-       │                          ToolSet ──▶ files / exec / web
-       │                                            └─▶ memory* (landing)
+       │                          ToolSet ──▶ files / document / exec / web
+       │                                            ├─▶ memory*   (policy-gated)
+       │                                            └─▶ improve*  (stage only)
+       │                          Swarm ──▶ BoardEngine (src/board/)
        └─ Config (defaults <- config.toml <- env)   Session (JSON v1)
 ```
 
@@ -24,34 +27,58 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
   `text.rs` wrapping + minimal markdown. All state lives in `App`; rendering is
   a pure function of `&App` per frame, redrawn only when dirty.
 - **App (`src/app.rs`)** — the state machine: key handling, overlay stack,
-  provider/model pickers, command router (`src/commands.rs`, 20 commands
-  including the newly added `/memory`, all parsed locally), session
-  persist/restore, engine pump. Agent turns run as
+  provider/model pickers, command router (`src/commands.rs`, 24 commands
+  including `/memory`, `/copy`, `/tools`, `/panel`, `/improve`, all parsed
+  locally), session persist/restore, engine pump. Agent turns run as
   background tasks feeding `AgentEvent`s; the UI never blocks.
 - **Agent (`src/agent/`)** — `provider.rs` defines the `AgentProvider` trait
   (`stream_chat`, `list_models`, `chat_completion` helper) and the streaming
   event model (`Delta` / `ToolCall` / `Usage` / `Done`) with a fragment
   accumulator for out-of-order tool-call chunks. `runtime.rs` runs one turn:
-  system prompt + history + input → stream → dispatch tools via
-  `spawn_blocking` → append results → repeat, bounded by `max_steps` (12),
-  `max_tool_calls` (24), per-step timeout, and cooperative `Cancel`.
-- **Tools (`src/tools/`)** — three groups behind `ToolSet`. File tools resolve
-  every path against the workspace root and refuse escapes. Exec tools run
-  `sh -c` in the workspace with a hard timeout and capped output; SSH is
-  key-only with `BatchMode=yes`. Web tools speak http(s) only and truncate
-  before returning text to the model. Dispatch is a `match` in
-  `runtime.rs::run_tool` — there is **no central policy engine** (see
-  `docs/SECURITY.md`).
+  system prompt (+ the user's `prompt_file` appendix) + history + input →
+  stream → dispatch tools via `spawn_blocking` → append results → repeat,
+  bounded by `max_steps` and `max_tool_calls` (both unlimited by default,
+  overridable by env), a per-step timeout, and cooperative `Cancel`.
+  `swarm.rs` runs several providers in parallel and is what the board convenes
+  on.
+- **Tools (`src/tools/`)** — `catalog.rs` holds the inventory as data
+  (`ToolSpec { name, description, category }`); tests pin it to the exposed
+  schema list. File tools resolve every path against the workspace root and
+  refuse escapes; `document_tools.rs` (`read_document`) reuses the bounded
+  `extract/` pipeline. Exec tools run `sh -c` in the workspace with a hard
+  timeout and capped output; SSH is key-only with `BatchMode=yes`. Web tools
+  speak http(s) only and truncate before returning text to the model. Dispatch
+  is a `match` in `runtime.rs::run_tool` — there is **no central policy engine**
+  (see `docs/SECURITY.md`), but a tool named in `disabled_tools` is filtered out
+  of the schema list *and* refused at dispatch.
+- **Board (`src/board/`)** — `personas.rs` defines Architect, Engineer,
+  Scientist and Critic plus a Chair; `BoardEngine::convene` runs two rounds of
+  parallel discussion through `Swarm` and then a chair synthesis, checking for
+  cancellation between rounds; `store.rs` persists `board_messages` in SQLite
+  under `~/.local/share/nanomite/board/` (`NANOMITE_BOARD_DIR`). Opened with
+  `/panel <topic>`, streamed live into an overlay, `esc` cancels.
+- **Self-improvement (`src/improve/`)** — `proposal.rs` validates staged
+  proposals (size, extension, content-difference, root confinement) and
+  enforces the hard self-edit denylist (`src/memory/security.rs`,
+  `src/memory/policy.rs`, `src/main.rs`); `diff.rs` builds unified diff
+  artifacts; `runner.rs` writes `.bak` backups, runs `cargo test --lib` and
+  rolls back byte-exactly on failure; `audit.rs` appends every decision to a
+  JSONL log. The agent can only stage (`propose_self_edit`); applying requires
+  the user pressing `a` in `/improve`.
 - **Providers (`src/config.rs` + `src/agent/openai.rs`)** — one HTTP client
   serves every preset (17 cloud + ollama/lmstudio/vllm/llamacpp + `custom`).
   Setup persists to `~/.config/nanomite/config.toml` (atomic write, `0600`);
-  precedence is built-in defaults < file < environment (`NANOMITE_*`).
+  precedence is built-in defaults < file < environment (`NANOMITE_*`). The
+  file also carries `theme`, `disabled_tools` and `prompt_file`.
 - **Sessions (`src/session.rs`)** — `StoredSession` v1 JSON: provider, model,
   cwd, transcript entries. Markdown export for `/export` and `/share`.
 - **Memory (`src/memory/`)** — SQLite (bundled) is authoritative; markdown
   documents under the memory root are a one-way, block-scoped human-readable
-  projection. FTS5 is probed at runtime with a LIKE fallback. Details in
-  `docs/MEMORY.md`. Integration into the agent loop/UI is in progress.
+  projection. FTS5 is probed at runtime with a LIKE fallback. **Attached in
+  production**: `MemoryEngine` is created at startup, retrieval runs before each
+  request and capture after each turn, all through `MemoryPolicy`; a failed
+  attach degrades to a footer hint instead of an error. Details in
+  `docs/MEMORY.md`.
 
 ## Invariants
 
@@ -61,13 +88,19 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
 2. File tools cannot escape the workspace root (`..`, absolute paths, and
    symlinks are contained; memory has its own root confinement).
 3. The API key is never logged and is stored `0600`.
-4. Model output, memory records, files, and tool results are **untrusted
-   data**; none of them can authorize privileged operations (enforced by
-   code structure today, not by a policy engine — closing that gap is
-   Milestone 2 work).
+4. Model output, memory records, board messages, files, and tool results are
+   **untrusted data**; none of them can authorize privileged operations.
+   Enforcement today is structural — per-subsystem gates (`MemoryPolicy`,
+   `disabled_tools`, the `/improve` proposal gate), not a central policy engine;
+   closing that gap is Milestone 2 work.
+5. A self-edit may never target the safety layer: `src/memory/security.rs`,
+   `src/memory/policy.rs`, `src/main.rs`. And apply is reachable only from the
+   user's `/improve` approval, never from a tool call.
 
-## What is deliberately absent (2026-10-14)
+## What is deliberately absent (2026-10-16)
 
-Central authorization, capability registry, evolution/update machinery,
-telemetry, benchmarks, file index — see `docs/AUDIT-2026-10-14.md` §5 and
-`docs/EVOLUTION.md`.
+Central authorization, the evolution lifecycle beyond `/improve`
+(experiment → evaluate → release), telemetry, file index, authenticated
+self-update — see `docs/AUDIT-2026-10-14.md` §5 and `docs/EVOLUTION.md`.
+Performance measurement does exist: `benches/perf.rs` (`cargo bench`) — see
+`docs/PERFORMANCE.md`.

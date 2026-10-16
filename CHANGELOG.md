@@ -93,7 +93,83 @@ never listed as released.
 
 ## [Unreleased]
 
-Nothing pending.
+### Added
+
+- **Multi-agent board** (`src/board/`): `/panel <topic>` convenes four personas
+  in parallel — Architect, Engineer, Scientist and Critic — for two rounds of
+  discussion, then a Chair synthesizes their answers into one recommendation.
+  Messages stream live into an overlay with a spinner; `esc` cancels a running
+  convene and the engine is cancel-aware between rounds. History is kept
+  verbatim in SQLite under `~/.local/share/nanomite/board/board.db`
+  (`NANOMITE_BOARD_DIR` overrides it). `Swarm` (parallel chat across several
+  providers) is now real, and the board runs on it.
+- **Self-improvement, gated on you** (`src/improve/`): the agent can stage a
+  proposed change to its config, its prompt file or a source file with
+  `propose_self_edit`, and list what is pending with `list_self_edits`.
+  `/improve` shows the staged diff; `a` approves (running the regression gate on
+  a background task) and `r` rejects. **There is deliberately no agent-callable
+  apply** — human approval is the only path to disk. Every apply writes a `.bak`
+  backup, runs `cargo test --lib`, and rolls back byte-exactly if the suite goes
+  red; every decision is appended to a JSONL audit log. A hard denylist
+  (`src/memory/security.rs`, `src/memory/policy.rs`, `src/main.rs`) keeps the
+  safety and permission layer from rewriting itself.
+- **Tool library** (`/tools`): all 18 tools listed by category with ✓/✗ toggles,
+  persisted to `disabled_tools` in `config.toml`. A disabled tool is filtered
+  out of the schema list before it is sent to the provider *and* refused again at
+  dispatch, so it cannot be reached by guessing. `NANOMITE_DISABLED_TOOLS`
+  overrides the file.
+- **`read_document`**: the agent can read PDF, DOCX, ODT, XLSX, ODS, RTF, CSV,
+  Markdown and JSON through the `extract/` registry — bounded output,
+  workspace-confined, read-only.
+- **Unified tool catalog** (`src/tools/catalog.rs`): the inventory is one list
+  of `ToolSpec { name, description, category }` driving the schema list, the
+  `/tools` overlay and the dispatch refusal, with tests pinning catalog and
+  schemas together. `search` gained the schema it was missing, so every tool the
+  runtime can dispatch is actually callable.
+- **Custom system prompt**: `~/.config/nanomite/prompt.md`
+  (`NANOMITE_PROMPT_FILE`) is appended to the system prompt on every turn — and
+  it is the file the self-improvement engine may propose to edit.
+- **Theme persistence**: the `/themes` choice is saved to the config `theme` key
+  and restored at startup (`ThemeId::from_label`), and every glyph now comes
+  from the `theme::glyph` constants instead of scattered literals.
+- **Header shows the workspace path** plus a busy/ready status; the footer
+  carries live step and tool-call progress.
+
+### Changed
+
+- **Persistent memory is live in production.** `MemoryEngine` attaches at
+  startup, so the six `memory_*` tools are callable and retrieval and capture
+  run per policy on every turn. All `NANOMITE_MEMORY*` knobs are honored (`0` on
+  the master switch disables the subsystem; `_DIR`, `_DB`, `_READONLY`, `_AUTO`,
+  `_MARKDOWN` included). If memory cannot attach, nanomite keeps running and
+  says so in the footer — a quiet hint, never an error.
+- `/memory` is now a working async browser (recent records plus a record-body
+  overlay) instead of a one-line status line.
+
+### Fixed
+
+- `edit_file` previews render a real unified diff (`diff_add`/`diff_delete`
+  roles via `ui/diff.rs`) instead of a flat replacement blob.
+- Composer caret math is measured in display columns, so CJK and other wide
+  characters no longer drift the cursor.
+- `/copy` actually copies the last assistant message, via OSC 52.
+- `/undo` and `/redo` cut the transcript at exact message boundaries.
+- The help sheet now matches the real key handling: `home`/`end` move the prompt
+  caret, `ctrl+home`/`ctrl+end` scroll the transcript.
+- Narrow terminals (30×12) are covered by golden frame tests.
+- Deleted the dead `src/agent/trivial.rs`.
+
+### Known limitations
+
+- Board messages are stored verbatim and are **untrusted data**: nothing a
+  persona writes can authorize a tool call.
+- The self-improvement regression gate runs `cargo test --lib`, so it is only
+  meaningful inside a checkout; a failed run rolls back automatically, but the
+  gate cannot prove anything outside the repo.
+
+Verified on `ed60936`: `cargo test --lib` **370 passed / 0 failed** (fully
+offline), `cargo test --test production_attach` 1 passed, clippy `--all-targets
+-D warnings` clean, `cargo fmt --check` clean.
 
 ## [0.1.0] — 2026-10-13 (prior work, per git history)
 
