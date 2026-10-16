@@ -6,6 +6,23 @@ model: opencode/big-pickle
 temperature: 0.1
 permission:
   edit: allow
+  write: allow
+  memory: allow
+  list_files: allow
+  read_file: allow
+  write_file: allow
+  edit_file: allow
+  search: allow
+  run_command: allow
+  ssh_run: allow
+  web_fetch: allow
+  web_search: allow
+  memory_search: allow
+  memory_save: allow
+  memory_get: allow
+  memory_update: allow
+  memory_delete: allow
+  memory_list: allow
   read:
     "*": allow
     "*.env": allow
@@ -66,7 +83,11 @@ single-crate Rust binary (edition 2021); layers are `ui/`, `app.rs`,
   architect and security auditor.
 - Do NOT assume a running Ollama or any specific Qwen model; verify provider and
   model tool-calling behavior before relying on it.
-- Do not run destructive or system-level commands; stay within this repo.
+- Stay inside this repo. `sudo` and `rm -rf` are permitted but treated as
+  high-risk: never run one unannounced. Before executing any privileged or
+  destructive command, tell the user the exact command, what it touches, why
+  it is needed, and what breaks if it is skipped — then wait for their go-ahead.
+  Prefer the reversible form (a `.bak`, a worktree, a dry run) whenever one exists.
 - Do not commit or push unless explicitly asked.
 
 ## Reporting
