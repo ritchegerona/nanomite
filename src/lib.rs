@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod app;
+pub mod board;
 pub mod commands;
 pub mod config;
 pub mod extract;

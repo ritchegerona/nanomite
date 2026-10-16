@@ -183,7 +183,6 @@ pub trait AgentProvider: Send + Sync {
     }
 
     /// Non-streaming convenience wrapper: drains [`AgentProvider::stream_chat`].
-    #[allow(dead_code)]
     async fn chat_completion(
         &self,
         messages: Vec<ChatMessage>,
