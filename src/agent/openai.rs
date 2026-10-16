@@ -418,6 +418,19 @@ pub fn tool_schemas() -> Vec<Tool> {
             }),
         ),
         Tool::new(
+            "search",
+            "Search workspace text files for a case-insensitive substring and return matching lines with paths and line numbers.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Text to search for (case-insensitive)" },
+                    "path": { "type": "string", "description": "Workspace-relative directory to search (defaults to the workspace root)" }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
             "write_file",
             "Write content to a file inside the workspace.",
             json!({
@@ -443,6 +456,18 @@ pub fn tool_schemas() -> Vec<Tool> {
                     "replace_all": { "type": "boolean", "description": "Whether to replace all occurrences (default: false)" }
                 },
                 "required": ["path", "old_string", "new_string"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "read_document",
+            "Extract text from a document in the workspace (pdf, docx, xlsx, odt, ods, rtf, csv, plus text/markdown/json/yaml/xml/html). Returns the detected format, section count and bounded text.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Workspace-relative document path" }
+                },
+                "required": ["path"],
                 "additionalProperties": false
             }),
         ),
