@@ -2,6 +2,7 @@ use crate::agent::provider::{
     AgentProvider, ChatMessage, DynError, Role, StreamEvent, ToolCall, ToolCallAccumulator, Usage,
 };
 use crate::memory::{TurnObservation, TurnOutcome};
+use crate::tools::document_tools::ReadDocumentArgs;
 use crate::tools::exec_tools::{RunCommandArgs, SshRunArgs};
 use crate::tools::file_tools::{
     EditFileArgs, ListFilesArgs, ReadFileArgs, SearchArgs, WriteFileArgs,
@@ -125,6 +126,10 @@ pub struct AgentRuntime {
     session: String,
     /// Remembered so `with_memory` can rebuild the tool set with memory attached.
     max_file_bytes: usize,
+    /// Lowercased tool names disabled by configuration ("tool library"):
+    /// filtered out of the schema list and refused at dispatch, so a
+    /// hallucinated call to a disabled tool can never run.
+    disabled_tools: Arc<Vec<String>>,
 }
 
 impl AgentRuntime {
@@ -156,6 +161,7 @@ impl AgentRuntime {
                 &format!("session:{}", workspace.display()),
             ),
             max_file_bytes,
+            disabled_tools: Arc::new(Vec::new()),
         }
     }
 
@@ -171,12 +177,26 @@ impl AgentRuntime {
         self.tools = Arc::new(tools);
         let mut schemas = (*self.tools_schema).clone();
         schemas.extend(crate::tools::memory_tools::memory_tool_schemas());
-        self.tools_schema = Arc::new(schemas);
+        self.tools_schema = Arc::new(filter_disabled_schemas(schemas, &self.disabled_tools));
         self.system_prompt.push_str(
             "\n\nPersistent memory is available through the memory_* tools. Search it when \
              context from earlier sessions would help, and save durable facts, decisions \
              and preferences the user states - never credentials or secrets.",
         );
+        self
+    }
+
+    /// Configures the disabled-tool list (the "tool library" toggle). Disabled
+    /// tools disappear from the schema list the provider sees and are refused
+    /// at dispatch, so the model can neither see nor run them. Call in any
+    /// order relative to [`Self::with_memory`]: both schema assembly points
+    /// re-apply the filter.
+    pub fn with_disabled_tools(mut self, disabled: Vec<String>) -> Self {
+        self.disabled_tools = Arc::new(crate::config::parse_disabled_tools(&disabled.join(",")));
+        self.tools_schema = Arc::new(filter_disabled_schemas(
+            (*self.tools_schema).clone(),
+            &self.disabled_tools,
+        ));
         self
     }
 
@@ -397,10 +417,13 @@ impl AgentRuntime {
 
                 // File IO is blocking: keep it off the async runtime's worker threads.
                 let tools = Arc::clone(&self.tools);
+                let disabled = Arc::clone(&self.disabled_tools);
                 let call_for_task = call.clone();
-                let outcome = tokio::task::spawn_blocking(move || run_tool(&tools, &call_for_task))
-                    .await
-                    .unwrap_or_else(|e| Err(format!("tool panicked: {e}")));
+                let outcome = tokio::task::spawn_blocking(move || {
+                    run_tool(&tools, &disabled, &call_for_task)
+                })
+                .await
+                .unwrap_or_else(|e| Err(format!("tool panicked: {e}")));
 
                 match outcome {
                     Ok((payload, summary)) => {
@@ -452,8 +475,42 @@ where
     }
 }
 
+/// Removes configuration-disabled tools from a schema list. Both sides are
+/// normalized (trim + lowercase), so the helper is safe to call with any
+/// user-supplied list, not just pre-parsed names.
+fn filter_disabled_schemas(
+    schemas: Vec<crate::agent::provider::Tool>,
+    disabled: &[String],
+) -> Vec<crate::agent::provider::Tool> {
+    if disabled.is_empty() {
+        return schemas;
+    }
+    schemas
+        .into_iter()
+        .filter(|tool| {
+            let name = tool.function.name.to_ascii_lowercase();
+            !disabled
+                .iter()
+                .any(|d| d.trim().to_ascii_lowercase() == name)
+        })
+        .collect()
+}
+
 /// Executes a tool call and returns `(payload for the model, human summary for the UI)`.
-fn run_tool(tools: &ToolSet, call: &ToolCall) -> Result<(String, String), String> {
+/// `disabled` carries the configuration-disabled tool names (lowercased): a
+/// disabled tool is refused even though the schema list should already have
+/// hidden it - the model can still hallucinate a name.
+fn run_tool(
+    tools: &ToolSet,
+    disabled: &[String],
+    call: &ToolCall,
+) -> Result<(String, String), String> {
+    let requested = call.name.trim().to_ascii_lowercase();
+    if disabled.contains(&requested) {
+        return Err(
+            "{\"error\":\"tool disabled by configuration\",\"code\":\"tool_disabled\"}".to_string(),
+        );
+    }
     let args: serde_json::Value = if call.arguments.trim().is_empty() {
         json!({})
     } else {
@@ -535,6 +592,29 @@ fn run_tool(tools: &ToolSet, call: &ToolCall) -> Result<(String, String), String
             let summary = format!("{} replacements made", result.replacements_made);
             let payload = serde_json::to_string(&result).unwrap_or_default();
             Ok((payload, format!("{} · {summary}", shorten(&path, 48))))
+        }
+        "read_document" => {
+            let parsed: ReadDocumentArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad read_document arguments: {e}"))?;
+            let path = parsed.path.clone();
+            let result = tools
+                .documents
+                .read_document(parsed)
+                .map_err(|e| format!("read_document failed: {e}"))?;
+            let summary = format!(
+                "{} · {} · {} {}{}",
+                shorten(&path, 48),
+                result.format,
+                result.sections,
+                if result.sections == 1 {
+                    "section"
+                } else {
+                    "sections"
+                },
+                if result.truncated { " (truncated)" } else { "" }
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
         }
         "run_command" => {
             let parsed: RunCommandArgs = serde_json::from_value(args)
@@ -777,6 +857,22 @@ fn preview_args(call: &ToolCall) -> Option<String> {
             }
             Some(shorten(cmd, 120))
         }
+        // read_document previews from arguments alone (no IO here - the loop
+        // runs previews on the async thread): the target format comes from the
+        // extension, the section titles only exist after extraction.
+        "read_document" => {
+            let path = args.get("path").and_then(|v| v.as_str())?;
+            if path.trim().is_empty() {
+                return None;
+            }
+            let format = std::path::Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .and_then(crate::extract::Format::from_extension)
+                .map(|f| f.as_str())
+                .unwrap_or("document");
+            Some(shorten(&format!("[{format}] {path}"), 120))
+        }
         _ => None,
     }
 }
@@ -968,6 +1064,7 @@ mod tests {
 
         let (payload, _) = run_tool(
             &tools,
+            &[],
             &ToolCall {
                 id: "t1".into(),
                 name: "memory_save".into(),
@@ -984,6 +1081,7 @@ mod tests {
 
         let (payload, _) = run_tool(
             &tools,
+            &[],
             &ToolCall {
                 id: "t2".into(),
                 name: "memory_search".into(),
@@ -998,6 +1096,7 @@ mod tests {
         // as a structured error string on the tool-result path.
         let refusal = run_tool(
             &tools,
+            &[],
             &ToolCall {
                 id: "t3".into(),
                 name: "memory_delete".into(),
@@ -1014,6 +1113,7 @@ mod tests {
         let runtime = runtime_with(Arc::new(RecordingProvider::new()), None);
         let outcome = run_tool(
             &runtime.tools,
+            &[],
             &ToolCall {
                 id: "t1".into(),
                 name: "memory_list".into(),
@@ -1109,5 +1209,121 @@ mod tests {
         let text = "x".repeat(10_000);
         let p = bounded_preview(&text, 100, 200);
         assert!(p.len() <= 210, "char cap leaked: {}", p.len());
+    }
+
+    #[test]
+    fn preview_args_read_document_shows_format_and_path() {
+        let call = ToolCall {
+            id: "t7".into(),
+            name: "read_document".into(),
+            arguments: r#"{"path":"report.pdf"}"#.to_string(),
+            index: 0,
+        };
+        let p = preview_args(&call).expect("read_document gets a preview");
+        assert!(p.contains("pdf"), "{p}");
+        assert!(p.contains("report.pdf"), "{p}");
+        assert!(p.chars().count() <= 160, "preview must stay bounded: {p}");
+
+        let none = ToolCall {
+            id: "t8".into(),
+            name: "read_document".into(),
+            arguments: "{}".into(),
+            index: 0,
+        };
+        assert!(preview_args(&none).is_none());
+    }
+
+    #[test]
+    fn filter_disabled_schemas_removes_only_disabled_names() {
+        let schemas = crate::agent::openai::tool_schemas();
+        let disabled = vec!["read_file".to_string(), "WEB_FETCH".to_string()];
+        let kept = filter_disabled_schemas(schemas, &disabled);
+        let names: Vec<&str> = kept.iter().map(|t| t.function.name.as_str()).collect();
+        assert!(!names.contains(&"read_file"));
+        assert!(!names.contains(&"web_fetch"));
+        assert!(names.contains(&"list_files"));
+
+        // Empty disabled list is the identity.
+        let schemas = crate::agent::openai::tool_schemas();
+        assert_eq!(filter_disabled_schemas(schemas, &[]).len(), 10);
+    }
+
+    #[test]
+    fn disabled_tools_are_hidden_from_schemas_and_refused_at_dispatch() {
+        let provider: Arc<dyn AgentProvider> = Arc::new(RecordingProvider::new());
+        let runtime = runtime_with(provider, Some(memory_engine()))
+            .with_disabled_tools(vec!["read_file".into(), "memory_save".into()]);
+        let names: Vec<String> = runtime
+            .tools_schema
+            .iter()
+            .map(|t| t.function.name.clone())
+            .collect();
+        assert!(!names.iter().any(|n| n == "read_file"), "{names:?}");
+        assert!(
+            !names.iter().any(|n| n == "memory_save"),
+            "memory schemas must be filtered too: {names:?}"
+        );
+        assert!(names.iter().any(|n| n == "list_files"));
+        assert!(names.iter().any(|n| n == "memory_search"));
+        assert!(names.iter().any(|n| n == "read_document"));
+
+        // Defense in depth: a hallucinated call to a disabled tool is refused
+        // with a structured error payload, never executed.
+        let tools = ToolSet::new(
+            std::env::temp_dir().join("nanomite-runtime-test-workspace"),
+            64 * 1024,
+        );
+        let call = ToolCall {
+            id: "t9".into(),
+            name: "read_file".into(),
+            arguments: r#"{"path":"Cargo.toml"}"#.to_string(),
+            index: 0,
+        };
+        let err = run_tool(&tools, &runtime.disabled_tools, &call).unwrap_err();
+        assert!(err.contains("tool disabled by configuration"), "{err}");
+
+        // A tool that is merely unknown is still reported as unknown, not
+        // conflated with the disabled refusal.
+        let unknown = ToolCall {
+            id: "t10".into(),
+            name: "no_such_tool".into(),
+            arguments: "{}".into(),
+            index: 0,
+        };
+        let err = run_tool(&tools, &runtime.disabled_tools, &unknown).unwrap_err();
+        assert!(err.contains("unknown tool"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn read_document_dispatch_returns_payload_and_summary() {
+        let ws = std::env::temp_dir().join(format!("nanomite-runtime-doc-{}", std::process::id()));
+        std::fs::create_dir_all(&ws).expect("temp workspace");
+        std::fs::write(ws.join("doc.md"), "# Title\n\nBody text.\n").expect("fixture");
+
+        let provider: Arc<dyn AgentProvider> = Arc::new(RecordingProvider::new());
+        let runtime = runtime_with(provider, None);
+        // Point the runtime's tool set at the fixture workspace.
+        let runtime = AgentRuntime {
+            tools: Arc::new(ToolSet::new(ws.clone(), 64 * 1024)),
+            ..runtime
+        };
+
+        let call = ToolCall {
+            id: "t11".into(),
+            name: "read_document".into(),
+            arguments: r#"{"path":"doc.md"}"#.to_string(),
+            index: 0,
+        };
+        let disabled: Vec<String> = Vec::new();
+        let (payload, summary) = run_tool(&runtime.tools, &disabled, &call).expect("extract");
+        assert!(payload.contains("\"format\":\"markdown\""), "{payload}");
+        assert!(payload.contains("Body text."), "{payload}");
+        assert!(summary.contains("markdown"), "{summary}");
+        assert!(
+            summary.contains("sections") || summary.contains("section"),
+            "{summary}"
+        );
+
+        let _ = std::fs::remove_dir_all(&ws);
     }
 }

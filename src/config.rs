@@ -285,6 +285,10 @@ pub struct Config {
     pub reasoning: Reasoning,
     /// UI skin persisted across sessions (`mono`, `umbrella`, …).
     pub theme: String,
+    /// Tools hidden from the agent ("tool library" toggle): names are absent
+    /// from the provider's schema list and refused at dispatch. Persisted as
+    /// a comma-separated list; `NANOMITE_DISABLED_TOOLS` overrides the file.
+    pub disabled_tools: Vec<String>,
     /// Token budget used for the context gauge in the status bar.
     pub context_limit: usize,
     pub max_steps: usize,
@@ -307,6 +311,7 @@ struct Stored {
     model: Option<String>,
     reasoning: Option<String>,
     theme: Option<String>,
+    disabled_tools: Option<String>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
@@ -331,6 +336,7 @@ fn parse_stored(text: &str) -> Stored {
             "model" => stored.model = Some(value),
             "reasoning" => stored.reasoning = Some(value),
             "theme" => stored.theme = Some(value),
+            "disabled_tools" => stored.disabled_tools = Some(value),
             _ => {}
         }
     }
@@ -374,6 +380,20 @@ fn unquote(value: &str) -> String {
     out
 }
 
+/// Comma-separated tool-name list → trimmed, lowercased, de-duplicated
+/// names. Unknown names are tolerated: a disabled list may name a tool this
+/// build does not have, which simply disables nothing.
+pub fn parse_disabled_tools(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for part in raw.split(',') {
+        let name = part.trim().to_ascii_lowercase();
+        if !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
 fn stored_text(cfg: &Config) -> String {
     let mut lines = vec![
         "# nanomite setup - written automatically; edit by hand if you like.".to_string(),
@@ -388,6 +408,12 @@ fn stored_text(cfg: &Config) -> String {
     lines.push(format!("model = {}", quote(&cfg.model)));
     lines.push(format!("reasoning = {}", quote(cfg.reasoning.as_str())));
     lines.push(format!("theme = {}", quote(&cfg.theme)));
+    if !cfg.disabled_tools.is_empty() {
+        lines.push(format!(
+            "disabled_tools = {}",
+            quote(&cfg.disabled_tools.join(","))
+        ));
+    }
     lines.push(String::new());
     lines.join("\n")
 }
@@ -542,6 +568,19 @@ impl Config {
             })
             .unwrap_or_else(|| crate::ui::theme::ThemeId::Mono.label().to_string());
 
+        // Disabled tools: environment wins over the file, same as every other
+        // persisted setting.
+        let disabled_tools = {
+            let raw = if use_env {
+                first_env_one("NANOMITE_DISABLED_TOOLS")
+            } else {
+                None
+            }
+            .or_else(|| stored.disabled_tools.clone())
+            .unwrap_or_default();
+            parse_disabled_tools(&raw)
+        };
+
         Self {
             provider,
             preset,
@@ -551,6 +590,7 @@ impl Config {
             default_model,
             reasoning,
             theme,
+            disabled_tools,
             context_limit: {
                 let raw = if use_env {
                     num_env("NANOMITE_CONTEXT_LIMIT", 200_000)
@@ -805,6 +845,53 @@ mod tests {
             "unknown label must fall back"
         );
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn disabled_tools_roundtrip_env_precedence_and_unknown_names() {
+        let path = std::env::temp_dir().join(format!("nanomite-tools-{}.toml", std::process::id()));
+        // Trimmed + lowercased on parse; unknown names are tolerated.
+        fs::write(
+            &path,
+            "provider = \"openai\"\nbase_url = \"https://api.openai.com/v1\"\nmodel = \"gpt-4o-mini\"\ndisabled_tools = \" Read_File , web_search ,bogus_tool\"\n",
+        )
+        .expect("write config");
+        let cfg = Config::load_from(&path);
+        assert_eq!(
+            cfg.disabled_tools,
+            vec!["read_file", "web_search", "bogus_tool"]
+        );
+
+        // Absent key = empty list.
+        let plain =
+            std::env::temp_dir().join(format!("nanomite-plain-{}.toml", std::process::id()));
+        fs::write(&plain, "model = \"gpt-4o-mini\"\n").expect("write config");
+        assert!(Config::load_from(&plain).disabled_tools.is_empty());
+
+        // Environment overrides the file.
+        std::env::set_var("NANOMITE_CONFIG", &path);
+        std::env::set_var(
+            "NANOMITE_DISABLED_TOOLS",
+            "run_command, , SSH_RUN,run_command",
+        );
+        let env_cfg = Config::load();
+        assert_eq!(env_cfg.disabled_tools, vec!["run_command", "ssh_run"]);
+        std::env::remove_var("NANOMITE_DISABLED_TOOLS");
+        std::env::remove_var("NANOMITE_CONFIG");
+
+        // A saved config writes the list back out.
+        let mut saved = Config::from_env();
+        saved.disabled_tools = vec!["edit_file".into()];
+        saved.store_path = Some(path.clone());
+        saved.save_to(&path);
+        assert_eq!(
+            Config::load_from(&path).disabled_tools,
+            vec!["edit_file"],
+            "comma list must survive a save/load round trip"
+        );
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&plain);
     }
 
     #[test]
