@@ -1,8 +1,11 @@
 use crate::agent::openai::OpenAiProvider;
 use crate::agent::provider::{AgentProvider, ChatMessage, Usage};
 use crate::agent::runtime::{AgentEvent, AgentRuntime, Cancel};
+use crate::agent::swarm::Swarm;
 #[cfg(test)]
 use crate::agent::testdouble::ScriptedProvider;
+use crate::board::engine::{BoardEngine, CancelFlag};
+use crate::board::store::{BoardMessage, BoardStore};
 use crate::commands::{self, Command};
 use crate::config::{find_preset, host_of, Config, ProviderKind, ProviderPreset, PRESETS};
 use crate::session::{self, StoredSession};
@@ -18,6 +21,8 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 const MAX_HISTORY_MESSAGES: usize = 40;
 const TOAST_TTL: Duration = Duration::from_secs(2);
+/// Discussion rounds a `/panel` convene runs (engine caps at `MAX_ROUNDS`).
+const BOARD_ROUNDS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryRole {
@@ -344,6 +349,8 @@ pub enum OverlayKind {
     Providers,
     Connect,
     Help,
+    Tools,
+    Board,
 }
 
 impl Overlay {
@@ -354,6 +361,8 @@ impl Overlay {
             Overlay::Providers(_) => OverlayKind::Providers,
             Overlay::Connect(_) => OverlayKind::Connect,
             Overlay::Help(_) => OverlayKind::Help,
+            Overlay::Tools(_) => OverlayKind::Tools,
+            Overlay::Board(_) => OverlayKind::Board,
         }
     }
 }
@@ -364,6 +373,29 @@ pub enum Overlay {
     Providers(ProvidersState),
     Connect(ConnectForm),
     Help(HelpState),
+    Tools(ToolsState),
+    Board(BoardState),
+}
+
+/// `/tools` overlay: the tool library. Rows are derived from the catalog at
+/// render time; the highlighted index is the only state.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ToolsState {
+    pub cursor: usize,
+}
+
+/// `/panel <topic>` overlay: one board thread while it convenes.
+#[derive(Debug, Clone, Default)]
+pub struct BoardState {
+    pub topic: String,
+    pub thread_id: Option<String>,
+    pub messages: Vec<BoardMessage>,
+    /// True until the convene task posts its done marker.
+    pub running: bool,
+    /// Rendered rows hidden from the bottom (Up scrolls toward older messages).
+    pub offset: usize,
+    /// The on-disk store could not be opened; this thread is memory-only.
+    pub in_memory: bool,
 }
 
 /// One row of the `/connect` provider menu.
@@ -405,6 +437,19 @@ enum ModelsResult {
     Err(String),
 }
 
+/// Board events sent by the convene task; drained alongside `ModelsResult`.
+/// Each channel item is tagged with the convene generation so a cancelled
+/// thread's stragglers can never leak into a newer one.
+enum BoardEvent {
+    Message(BoardMessage),
+    /// The on-disk store could not be opened; the thread runs in memory.
+    StoreFallback,
+    Done {
+        thread_id: Option<String>,
+        error: Option<String>,
+    },
+}
+
 pub struct App {
     pub cfg: Config,
     pub theme: Theme,
@@ -430,6 +475,12 @@ pub struct App {
     tx: UnboundedSender<AgentEvent>,
     models_rx: UnboundedReceiver<ModelsResult>,
     models_tx: UnboundedSender<ModelsResult>,
+    board_rx: UnboundedReceiver<(u64, BoardEvent)>,
+    board_tx: UnboundedSender<(u64, BoardEvent)>,
+    /// Bumped on every `/panel`: stale events from an older convene are dropped.
+    board_gen: u64,
+    /// Shared with the in-flight convene task so `esc` can stop the engine.
+    pub(crate) board_cancel: Option<Arc<CancelFlag>>,
     handle: tokio::runtime::Handle,
     history: Vec<ChatMessage>,
     /// Index of the in-flight transcript entry while a turn runs.
@@ -458,6 +509,7 @@ impl App {
 
         let (tx, rx) = unbounded_channel();
         let (models_tx, models_rx) = unbounded_channel();
+        let (board_tx, board_rx) = unbounded_channel();
 
         let mut app = Self {
             view: View::new(theme),
@@ -481,6 +533,10 @@ impl App {
             tx,
             models_rx,
             models_tx,
+            board_rx,
+            board_tx,
+            board_gen: 0,
+            board_cancel: None,
             handle,
             history: Vec::new(),
             active: None,
@@ -555,7 +611,8 @@ impl App {
 
     // -- events -------------------------------------------------------------
 
-    /// Drains engine events and model-discovery results; cheap to call every tick.
+    /// Drains engine events, model-discovery results and board events; cheap
+    /// to call every tick.
     pub fn pump_engine(&mut self) {
         let mut changed = false;
         while let Ok(event) = self.rx.try_recv() {
@@ -565,6 +622,14 @@ impl App {
         while let Ok(result) = self.models_rx.try_recv() {
             changed = true;
             self.apply_models_result(result);
+        }
+        while let Ok((gen, event)) = self.board_rx.try_recv() {
+            changed = true;
+            // A cancelled convene's stragglers must never leak into a
+            // newer thread's view.
+            if gen == self.board_gen {
+                self.apply_board_event(event);
+            }
         }
         if changed {
             self.mark_dirty();
@@ -589,6 +654,10 @@ impl App {
                 model: cfg.model.clone(),
             }),
         )
+        // Config-loaded disables (file or NANOMITE_DISABLED_TOOLS) take effect
+        // at startup: the schemas the model sees and the dispatch filter both
+        // honor them.
+        .with_disabled_tools(cfg.disabled_tools.clone())
     }
 
     fn rebuild_runtime(&mut self) -> Result<(), String> {
@@ -761,8 +830,17 @@ impl App {
     pub fn submit(&mut self) {
         // `/provider`, `/model`, ... are handled locally and never reach the model.
         if let Some((command, canonical)) = commands::parse(self.composer.value()) {
+            // Everything after the command word is its argument (`/panel <topic>`).
+            let args = self
+                .composer
+                .value()
+                .trim()
+                .split_once(char::is_whitespace)
+                .map(|(_, rest)| rest.trim())
+                .unwrap_or("")
+                .to_string();
             self.composer.clear();
-            self.run_command(command);
+            self.run_command(command, &args);
             if command == Command::Help || command == Command::Exit {
                 self.mark_dirty();
             }
@@ -815,7 +893,9 @@ impl App {
     }
 
     /// Runs a slash command locally; nothing here reaches the model unless it says so.
-    pub fn run_command(&mut self, command: Command) {
+    /// `args` is everything the user typed after the command word (empty when
+    /// the command came from the picker).
+    pub fn run_command(&mut self, command: Command, args: &str) {
         match command {
             Command::Connect => self.open_connect(),
             Command::ProviderMenu => self.open_provider_menu(),
@@ -833,12 +913,14 @@ impl App {
             Command::Models => self.open_model_picker(),
             Command::Memory => self.open_memory_picker(),
             Command::New => self.new_session(),
+            Command::Panel => self.open_board(args),
             Command::Reasoning => self.cycle_reasoning(),
             Command::Copy => self.copy_selection(),
             Command::Redo => self.redo(),
             Command::Sessions => self.open_sessions(),
             Command::Share => self.share_session(),
             Command::Themes => self.open_themes(),
+            Command::Tools => self.open_tools(),
             Command::Thinking => {
                 self.show_thinking = !self.show_thinking;
                 self.toast(format!(
@@ -1378,10 +1460,168 @@ impl App {
         self.mark_dirty();
     }
 
+    // -- /panel -------------------------------------------------------------
+
+    /// Hands a board event to the open overlay. Events for a closed overlay
+    /// are dropped, except the done marker which still retires the cancel flag.
+    fn apply_board_event(&mut self, event: BoardEvent) {
+        if matches!(event, BoardEvent::Done { .. }) {
+            self.board_cancel = None;
+        }
+        let mut notice: Option<String> = None;
+        if let Some(Overlay::Board(board)) = &mut self.overlay {
+            match event {
+                BoardEvent::Message(message) => board.messages.push(message),
+                BoardEvent::StoreFallback => {
+                    board.in_memory = true;
+                    notice = Some("board store unavailable - convening in memory".to_string());
+                }
+                BoardEvent::Done {
+                    thread_id,
+                    error: None,
+                } => {
+                    board.running = false;
+                    board.thread_id = thread_id;
+                }
+                BoardEvent::Done {
+                    error: Some(err), ..
+                } => {
+                    board.running = false;
+                    notice = Some(err);
+                }
+            }
+        }
+        if let Some(msg) = notice {
+            self.toast(msg);
+        }
+    }
+
+    /// `/panel <topic>`: convene the personas on a background thread. The
+    /// engine is synchronous by design, so it runs under `spawn_blocking` and
+    /// streams messages back through `board_tx`, mirroring `models_tx`.
+    fn open_board(&mut self, topic: &str) {
+        let topic = topic.trim();
+        if topic.is_empty() {
+            self.toast("usage: /panel <topic>");
+            self.mark_dirty();
+            return;
+        }
+        if self
+            .overlay
+            .as_ref()
+            .is_some_and(|o| matches!(o, Overlay::Board(b) if b.running))
+        {
+            self.toast("a board is already convening");
+            self.mark_dirty();
+            return;
+        }
+
+        self.board_gen += 1;
+        let gen = self.board_gen;
+        let cancel = Arc::new(CancelFlag::new());
+        self.board_cancel = Some(Arc::clone(&cancel));
+
+        // The swarm shares the runtime's provider client (one Arc, many users).
+        let mut swarm = Swarm::new();
+        swarm.add_arc(Arc::clone(self.runtime.provider()));
+        let tx = self.board_tx.clone();
+        let handle = self.handle.clone();
+        let topic_owned = topic.to_string();
+
+        self.overlay = Some(Overlay::Board(BoardState {
+            topic: topic_owned.clone(),
+            running: true,
+            ..BoardState::default()
+        }));
+
+        handle.spawn_blocking(move || {
+            // File-backed when possible; a failed open downgrades to memory.
+            let store = match board_store_path().map(|path| BoardStore::open(&path)) {
+                Some(Ok(store)) => store,
+                Some(Err(_)) => {
+                    let _ = tx.send((gen, BoardEvent::StoreFallback));
+                    BoardStore::open_in_memory().expect("in-memory board store")
+                }
+                None => BoardStore::open_in_memory().expect("in-memory board store"),
+            };
+            let engine = BoardEngine::new(store, swarm);
+            let result = engine.convene(&topic_owned, BOARD_ROUNDS, &cancel, |message| {
+                let _ = tx.send((gen, BoardEvent::Message(message.clone())));
+            });
+            let event = match result {
+                Ok(thread_id) => BoardEvent::Done {
+                    thread_id: Some(thread_id),
+                    error: None,
+                },
+                Err(err) => BoardEvent::Done {
+                    thread_id: None,
+                    error: Some(err.to_string()),
+                },
+            };
+            let _ = tx.send((gen, event));
+        });
+        self.mark_dirty();
+    }
+
+    /// `esc` on the board: stop the engine at its next checkpoint (it appends
+    /// its documented "cancelled by user" marker to the thread) and close.
+    fn cancel_board(&mut self) {
+        if let Some(cancel) = &self.board_cancel {
+            cancel.cancel();
+        }
+        self.board_cancel = None;
+        self.close_overlay();
+    }
+
+    // -- /tools -------------------------------------------------------------
+
+    /// Tool library overlay over the 16-tool catalog.
+    pub fn open_tools(&mut self) {
+        self.overlay = Some(Overlay::Tools(ToolsState::default()));
+        self.mark_dirty();
+    }
+
+    /// Enter on `/tools`: enable or disable the highlighted tool, persist the
+    /// list, and apply it to the live runtime.
+    ///
+    /// Mechanism: the runtime is owned by `App` and cloned per turn (never
+    /// Arc-shared across threads), so the cleanest immediate apply is an
+    /// in-place rebuild: clone the current runtime (same provider/client) and
+    /// re-run the `with_disabled_tools` builder, which refilters the schema
+    /// list. The tool loop itself is untouched.
+    fn toggle_tool(&mut self) {
+        let Some(Overlay::Tools(state)) = self.overlay.clone() else {
+            return;
+        };
+        let catalog = crate::tools::ToolSet::catalog();
+        let Some(spec) = catalog.get(state.cursor) else {
+            return;
+        };
+        let name = spec.name.to_ascii_lowercase();
+        let mut disabled = self.cfg.disabled_tools.clone();
+        let message = if disabled.contains(&name) {
+            disabled.retain(|t| *t != name);
+            format!("{name} enabled")
+        } else {
+            disabled.push(name.clone());
+            format!("{name} disabled")
+        };
+
+        self.cfg.disabled_tools = disabled;
+        self.cfg.save();
+        self.runtime = self
+            .runtime
+            .clone()
+            .with_disabled_tools(self.cfg.disabled_tools.clone());
+
+        self.toast(message);
+        self.mark_dirty();
+    }
+
     fn apply_picker_value(&mut self, value: PickerValue) {
         match value {
             PickerValue::Action(action) => self.run_action(action),
-            PickerValue::Command(command) => self.run_command(command),
+            PickerValue::Command(command) => self.run_command(command, ""),
             PickerValue::Session(path) => self.restore_session(&path),
             PickerValue::Theme(id) => self.apply_theme(id),
             PickerValue::Model(model) => {
@@ -1714,6 +1954,53 @@ impl App {
                 self.overlay = Some(Overlay::Picker(picker));
                 self.mark_dirty();
             }
+            Overlay::Tools(mut state) => {
+                let count = crate::tools::ToolSet::catalog().len();
+                match key.code {
+                    KeyCode::Esc => {
+                        self.close_overlay();
+                        return;
+                    }
+                    KeyCode::Enter => {
+                        self.overlay = Some(Overlay::Tools(state));
+                        self.toggle_tool();
+                        return;
+                    }
+                    KeyCode::Up => state.cursor = state.cursor.saturating_sub(1),
+                    KeyCode::Down => {
+                        if count > 0 && state.cursor + 1 < count {
+                            state.cursor += 1;
+                        }
+                    }
+                    KeyCode::PageUp => state.cursor = state.cursor.saturating_sub(8),
+                    KeyCode::PageDown => {
+                        state.cursor = (state.cursor + 8).min(count.saturating_sub(1))
+                    }
+                    KeyCode::Home => state.cursor = 0,
+                    KeyCode::End => state.cursor = count.saturating_sub(1),
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Tools(state));
+                self.mark_dirty();
+            }
+            Overlay::Board(mut state) => {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.cancel_board();
+                        return;
+                    }
+                    // Scrolling is view-only: Up moves toward older messages.
+                    KeyCode::Up => state.offset = state.offset.saturating_add(1),
+                    KeyCode::Down => state.offset = state.offset.saturating_sub(1),
+                    KeyCode::PageUp => state.offset = state.offset.saturating_add(8),
+                    KeyCode::PageDown => state.offset = state.offset.saturating_sub(8),
+                    KeyCode::Home => state.offset = usize::MAX / 2,
+                    KeyCode::End => state.offset = 0,
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Board(state));
+                self.mark_dirty();
+            }
             Overlay::Providers(mut state) => {
                 match key.code {
                     KeyCode::Esc => {
@@ -1790,6 +2077,16 @@ fn editor_available() -> bool {
     std::env::var("EDITOR")
         .ok()
         .is_some_and(|e| !e.trim().is_empty())
+}
+
+/// Where the board database lives: `NANOMITE_BOARD_DIR` overrides the
+/// directory (tests), else the platform data dir like `session.rs` uses.
+fn board_store_path() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("NANOMITE_BOARD_DIR") {
+        return Some(PathBuf::from(dir).join("board.db"));
+    }
+    let base = dirs::data_dir().or_else(dirs::home_dir)?;
+    Some(base.join("nanomite").join("board").join("board.db"))
 }
 
 /// One-line palette description shown beside each theme in `/themes`.

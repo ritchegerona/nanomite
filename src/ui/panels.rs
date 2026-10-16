@@ -1,10 +1,12 @@
 use super::text;
 use super::theme::{glyph, Theme};
-use crate::app::{Action, App, Overlay, OverlayKind, PickerItem, PickerValue, CONNECT_FIELDS};
+use crate::app::{
+    Action, App, BoardState, Overlay, OverlayKind, PickerItem, PickerValue, CONNECT_FIELDS,
+};
 use crate::commands::Command;
 
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use ratatui::Frame;
@@ -790,12 +792,322 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(shown), inner);
 }
 
+// ---------------------------------------------------------------------------
+// /tools — the tool library
+// ---------------------------------------------------------------------------
+
+/// Content rows of the `/tools` sheet: one line per tool, one header per
+/// category group, one summary line. Drives overlay sizing.
+pub fn tools_row_count() -> u16 {
+    let catalog = crate::tools::ToolSet::catalog();
+    let mut groups = 0usize;
+    let mut last: Option<crate::tools::catalog::ToolCategory> = None;
+    for spec in &catalog {
+        if last != Some(spec.category) {
+            groups += 1;
+            last = Some(spec.category);
+        }
+    }
+    (catalog.len() + groups + 1) as u16
+}
+
+/// `/tools` tool library: the catalog grouped by category, each row showing
+/// name, one-line description and an on/off marker driven by
+/// `cfg.disabled_tools`. `enter` toggles, `esc` closes.
+pub fn tools(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+    let Some(Overlay::Tools(ref state)) = app.overlay else {
+        return;
+    };
+
+    let inner_w = area.width.saturating_sub(4) as usize;
+    let inner_h = area.height.saturating_sub(2) as usize;
+
+    let catalog = crate::tools::ToolSet::catalog();
+    let is_disabled = |name: &str| app.cfg.disabled_tools.iter().any(|t| t == name);
+    let enabled = catalog.iter().filter(|s| !is_disabled(s.name)).count();
+    let name_w = catalog.iter().map(|s| s.name.len()).max().unwrap_or(10);
+
+    // Summary line first, then category headers interleaved with tool rows.
+    // `row_line[i]` is the display line of catalog row `i`, so the window can
+    // follow the cursor.
+    let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
+        format!(
+            "  {} tools · {enabled} enabled · enter toggles",
+            catalog.len()
+        ),
+        theme.faint_style(),
+    ))];
+    let mut row_line: Vec<usize> = Vec::with_capacity(catalog.len());
+    let mut last: Option<crate::tools::catalog::ToolCategory> = None;
+    for (i, spec) in catalog.iter().enumerate() {
+        if last != Some(spec.category) {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    " {}",
+                    match spec.category {
+                        crate::tools::catalog::ToolCategory::Files => "files",
+                        crate::tools::catalog::ToolCategory::Exec => "exec",
+                        crate::tools::catalog::ToolCategory::Web => "web",
+                        crate::tools::catalog::ToolCategory::Memory => "memory",
+                        crate::tools::catalog::ToolCategory::Document => "document",
+                    }
+                ),
+                Style::default()
+                    .fg(theme.accent())
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )));
+            last = Some(spec.category);
+        }
+        row_line.push(lines.len());
+        let selected = i == state.cursor;
+        let disabled = is_disabled(spec.name);
+        let marker = if disabled { glyph::CROSS } else { glyph::CHECK };
+        let marker_style = if disabled {
+            Style::default().fg(theme.danger())
+        } else {
+            Style::default().fg(theme.success())
+        };
+        let cursor_marker = if selected { glyph::GUTTER } else { " " };
+        let desc_budget = inner_w.saturating_sub(6 + name_w + 2).max(12);
+        let desc = text::truncate_head(spec.description, desc_budget);
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(" {cursor_marker} "),
+                Style::default().fg(theme.accent()),
+            ),
+            Span::styled(format!("{marker} "), marker_style),
+            Span::styled(
+                format!("{:<name_w$}", spec.name),
+                if selected {
+                    Style::default().fg(theme.strong())
+                } else {
+                    theme.dim()
+                },
+            ),
+            Span::styled(
+                format!("  {desc}"),
+                if selected {
+                    theme.dim()
+                } else {
+                    theme.faint_style()
+                },
+            ),
+        ]));
+    }
+
+    // Keep the highlighted row inside the viewport.
+    let selected_line = row_line
+        .get(state.cursor)
+        .copied()
+        .unwrap_or(lines.len().saturating_sub(1));
+    let visible = inner_h.max(1);
+    let start = selected_line
+        .saturating_sub(visible.saturating_sub(1))
+        .min(selected_line);
+    let window: Vec<Line<'static>> = lines.into_iter().skip(start).take(visible).collect();
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_focus()))
+        .title(Line::from(Span::styled(" tools ", Style::default().fg(theme.accent()))).centered())
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(
+                    " {}{} move {} enter toggle {} esc close ",
+                    glyph::ARROW_UP,
+                    glyph::ARROW_DOWN,
+                    glyph::DOT,
+                    glyph::DOT
+                ),
+                theme.faint_style(),
+            ))
+            .right_aligned(),
+        )
+        .style(Style::default().bg(theme.panel_bg()));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(window), inner);
+}
+
+// ---------------------------------------------------------------------------
+// /panel — the agent message board
+// ---------------------------------------------------------------------------
+
+/// Hard cap on rendered board lines; the oldest are trimmed with a marker.
+const BOARD_MAX_LINES: usize = 400;
+
+/// Deterministic accent per persona: a fixed rotation over theme roles.
+fn persona_color(theme: &Theme, persona: &str) -> Color {
+    match persona {
+        "Architect" => theme.accent(),
+        "Engineer" => theme.success(),
+        "Scientist" => theme.warn(),
+        "Critic" => theme.danger(),
+        "Chair" => theme.strong(),
+        "topic" | "system" => theme.faint(),
+        _ => theme.muted(),
+    }
+}
+
+/// Renders a board thread into display lines, oldest first. Bodies are
+/// untrusted model text: plain styled spans through `wrap_spans`, wrapped and
+/// indented, never interpreted. Capped at [`BOARD_MAX_LINES`] with an elision
+/// marker for the oldest rows.
+fn board_lines(theme: &Theme, state: &BoardState, width: usize) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (i, message) in state.messages.iter().enumerate() {
+        let color = persona_color(theme, &message.persona);
+        lines.push(Line::from(Span::styled(
+            format!("  {} (round {}):", message.persona, message.round),
+            Style::default().fg(color),
+        )));
+        // Wrap width leaves room for the indent column.
+        let budget = width.saturating_sub(6).max(10);
+        for raw in message.body.lines() {
+            for wrapped in text::wrap_spans(vec![Span::raw(raw.to_string())], budget) {
+                let mut spans = Vec::with_capacity(wrapped.spans.len() + 1);
+                spans.push(Span::raw("     ".to_string()));
+                spans.extend(wrapped.spans);
+                lines.push(Line::from(spans));
+            }
+        }
+        if i + 1 < state.messages.len() {
+            lines.push(Line::default());
+        }
+    }
+    if lines.len() > BOARD_MAX_LINES {
+        lines.drain(..lines.len() - BOARD_MAX_LINES);
+        lines.insert(
+            0,
+            Line::from(Span::styled(
+                "  … older messages elided",
+                theme.faint_style(),
+            )),
+        );
+    }
+    lines
+}
+
+/// Rendered board rows (after wrap, elide, plus the status row) — used to size
+/// the overlay, which is why the width is the overlay's nominal inner width.
+pub fn board_row_count(app: &App) -> u16 {
+    let Some(Overlay::Board(ref state)) = app.overlay else {
+        return 16;
+    };
+    let nominal_width = 84usize;
+    let rows = board_lines(&app.theme, state, nominal_width.saturating_sub(4)).len();
+    (rows as u16 + 1).clamp(8, 36)
+}
+
+/// `/panel` board overlay: one thread while it convenes. The topic is the
+/// block title, messages are persona-headed blocks, and the status line at the
+/// bottom carries the spinner plus the esc hint.
+pub fn board(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+    let Some(Overlay::Board(ref state)) = app.overlay else {
+        return;
+    };
+
+    let inner_w = area.width.saturating_sub(4) as usize;
+    let inner_h = area.height.saturating_sub(2) as usize;
+
+    let mut lines = board_lines(theme, state, inner_w);
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  waiting for the first reply…",
+            theme.faint_style(),
+        )));
+    }
+
+    // Scroll: `offset` hides rows from the bottom, so Up pages toward older
+    // messages and the thread stays pinned to the live tail by default.
+    let visible = inner_h.saturating_sub(1).max(1);
+    let offset = state.offset.min(lines.len().saturating_sub(1));
+    let end = lines.len().saturating_sub(offset);
+    let start = end.saturating_sub(visible);
+    let window: Vec<Line<'static>> = lines.into_iter().skip(start).take(visible).collect();
+
+    // Pinned status row: convening spinner or done mark, then the esc hint.
+    let round = state.messages.iter().map(|m| m.round).max().unwrap_or(0);
+    let mut status: Vec<Span<'static>> = Vec::new();
+    if state.running {
+        status.push(Span::styled(
+            format!(
+                "{} ",
+                glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()]
+            ),
+            Style::default().fg(theme.accent()),
+        ));
+        status.push(Span::styled(
+            format!("convening… round {round}"),
+            theme.dim(),
+        ));
+        status.push(Span::styled(" · esc cancel", theme.faint_style()));
+    } else {
+        status.push(Span::styled(
+            format!("{} convened", glyph::CHECK),
+            Style::default().fg(theme.success()),
+        ));
+        status.push(Span::styled(" · esc close", theme.faint_style()));
+    }
+    if state.in_memory {
+        status.push(Span::styled(" · in-memory store", theme.faint_style()));
+    }
+
+    let esc_hint = if state.running {
+        "esc cancel"
+    } else {
+        "esc close"
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_focus()))
+        .title(
+            Line::from(Span::styled(
+                format!(
+                    " panel · {} ",
+                    text::truncate(&state.topic, inner_w.saturating_sub(12).max(8))
+                ),
+                Style::default().fg(theme.accent()),
+            ))
+            .centered(),
+        )
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(
+                    " {}{} scroll {} {esc_hint} ",
+                    glyph::ARROW_UP,
+                    glyph::ARROW_DOWN,
+                    glyph::DOT
+                ),
+                theme.faint_style(),
+            ))
+            .right_aligned(),
+        )
+        .style(Style::default().bg(theme.panel_bg()));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(window), inner);
+    let status_rect = Rect {
+        x: inner.x,
+        y: inner.y + inner.height.saturating_sub(1),
+        width: inner.width,
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(Line::from(status)), status_rect);
+}
+
 pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
     let (w_pct, max_h) = match kind {
         OverlayKind::Picker => (72, 18),
         OverlayKind::Providers => (72, 22),
         OverlayKind::Connect => (70, 10),
         OverlayKind::Help => (76, 40),
+        OverlayKind::Tools => (76, 32),
+        OverlayKind::Board => (84, 40),
     };
     let width = (area.width * w_pct / 100).clamp(40.min(area.width), 100.min(area.width));
     let height = (content_rows + 2).clamp(7.min(area.height), max_h.min(area.height));

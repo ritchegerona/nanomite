@@ -176,6 +176,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             let rect = panels::overlay_rect(area, OverlayKind::Help, help_row_count() as u16);
             panels::help(frame, rect, app);
         }
+        Some(Overlay::Tools(_)) => {
+            let rect = panels::overlay_rect(area, OverlayKind::Tools, panels::tools_row_count());
+            panels::tools(frame, rect, app);
+        }
+        Some(Overlay::Board(_)) => {
+            let rect = panels::overlay_rect(area, OverlayKind::Board, panels::board_row_count(app));
+            panels::board(frame, rect, app);
+        }
         None => {}
     }
 

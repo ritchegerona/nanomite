@@ -27,6 +27,8 @@ pub enum Command {
     Memory,
     Copy,
     ProviderMenu,
+    Tools,
+    Panel,
 }
 
 pub struct Entry {
@@ -165,6 +167,18 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "copy selection to clipboard",
         kind: Command::Copy,
+    },
+    Entry {
+        command: "/tools",
+        aliases: &[],
+        hint: "tool library - enable or disable agent tools",
+        kind: Command::Tools,
+    },
+    Entry {
+        command: "/panel",
+        aliases: &[],
+        hint: "convene the agent board - /panel <topic>",
+        kind: Command::Panel,
     },
 ];
 

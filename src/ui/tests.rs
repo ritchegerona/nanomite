@@ -1165,3 +1165,204 @@ async fn edit_file_preview_uses_the_diff_renderer() {
         "preview must hide with /details off:\n{text}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// /tools — the tool library
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tools_overlay_lists_all_tools_and_toggles() {
+    let mut app = test_app().await;
+    let path = std::env::temp_dir().join(format!("nanomite-ui-tools-{}.toml", std::process::id()));
+    app.cfg.store_path = Some(path.clone());
+
+    // `/` opens the palette; the filter "tools" narrows it to the one command.
+    type_text(&mut app, "/tools");
+    press(
+        &mut app,
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    );
+    assert!(matches!(
+        app.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Tools)
+    ));
+
+    let text = frame_text(&mut app, 100, 40);
+    assert!(text.contains("tools"), "overlay title missing:\n{text}");
+    for spec in crate::tools::ToolSet::catalog() {
+        assert!(
+            text.contains(spec.name),
+            "tool {} missing:\n{text}",
+            spec.name
+        );
+    }
+    assert!(text.contains('✓'), "enabled marker missing:\n{text}");
+    assert!(app.cfg.disabled_tools.is_empty(), "nothing disabled yet");
+
+    // Enter toggles the highlighted row (list_files is first in the catalog).
+    press(
+        &mut app,
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    );
+    assert_eq!(app.cfg.disabled_tools, vec!["list_files".to_string()]);
+    assert!(
+        app.toast
+            .as_ref()
+            .is_some_and(|(msg, _)| msg.contains("list_files disabled")),
+        "no disable toast: {:?}",
+        app.toast
+    );
+
+    let stored = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        stored.contains("disabled_tools = \"list_files\""),
+        "disable not persisted: {stored}"
+    );
+
+    // Enter again re-enables and the persisted line disappears.
+    press(
+        &mut app,
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    );
+    assert!(app.cfg.disabled_tools.is_empty(), "toggle back on failed");
+    let stored = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        !stored.contains("disabled_tools"),
+        "empty list still persisted: {stored}"
+    );
+
+    app.close_overlay();
+    let _ = std::fs::remove_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// /panel — the agent message board
+// ---------------------------------------------------------------------------
+
+fn board_dir_for_tests() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("nanomite-board-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("board dir");
+    std::env::set_var("NANOMITE_BOARD_DIR", &dir);
+    dir
+}
+
+#[tokio::test]
+async fn panel_convenes_board_and_renders_thread() {
+    let board_dir = board_dir_for_tests();
+
+    let mut app = test_app().await;
+    app.composer
+        .insert_str("/panel should we split the runtime?");
+    app.submit();
+    assert!(matches!(
+        app.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Board)
+    ));
+
+    // 1 topic + 4 personas x 2 rounds + 1 chair = 10. The scripted provider
+    // answers instantly, so pump until the done marker lands (mirrors
+    // busy_footer).
+    for _ in 0..900 {
+        app.pump_engine();
+        let done = matches!(
+            &app.overlay,
+            Some(Overlay::Board(b)) if !b.running && b.messages.len() >= 10
+        );
+        if done {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let Some(Overlay::Board(board)) = &app.overlay else {
+        panic!("board overlay missing");
+    };
+    assert!(!board.running, "convene never finished");
+    assert_eq!(board.messages.len(), 10);
+    assert_eq!(board.messages[0].persona, "topic");
+    assert_eq!(board.messages[0].body, "should we split the runtime?");
+    assert_eq!(board.messages.last().unwrap().persona, "Chair");
+    assert!(board.thread_id.is_some(), "thread id missing");
+    let seen: std::collections::BTreeSet<&str> =
+        board.messages.iter().map(|m| m.persona.as_str()).collect();
+    for persona in ["Architect", "Engineer", "Scientist", "Critic", "Chair"] {
+        assert!(seen.contains(persona), "persona {persona} never spoke");
+    }
+
+    // The store was opened through the env override, not the real data dir.
+    assert!(
+        board_dir.join("board.db").exists(),
+        "board store was not created"
+    );
+
+    // Rendering: topic title, persona headers, and the scripted body — the
+    // tail (newest messages) is pinned, so the chair is on screen.
+    let text = frame_text(&mut app, 110, 44);
+    assert!(
+        text.contains("panel · should we split the runtime?"),
+        "topic title missing:\n{text}"
+    );
+    assert!(
+        text.contains("Chair (round 3):"),
+        "chair header missing:\n{text}"
+    );
+    assert!(
+        text.contains("Scripted test reply"),
+        "scripted body missing:\n{text}"
+    );
+    app.close_overlay();
+}
+
+#[tokio::test]
+async fn panel_esc_cancels_and_closes_cleanly() {
+    let _board_dir = board_dir_for_tests();
+
+    let mut app = test_app().await;
+    app.composer.insert_str("/panel long running debate");
+    app.submit();
+    assert!(matches!(
+        app.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Board)
+    ));
+    assert!(
+        app.board_cancel.is_some(),
+        "cancel flag must be shared with the engine"
+    );
+
+    press(
+        &mut app,
+        ratatui::crossterm::event::KeyCode::Esc,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    );
+    assert!(app.overlay.is_none(), "esc must close the board");
+    assert!(
+        app.board_cancel.is_none(),
+        "esc must retire the cancel flag"
+    );
+
+    // The in-flight convene observes the flag and retires itself; pumping the
+    // stragglers must neither panic nor reopen anything.
+    for _ in 0..60 {
+        app.pump_engine();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(app.overlay.is_none());
+    }
+}
+
+#[tokio::test]
+async fn panel_without_args_toasts_usage() {
+    let mut app = test_app().await;
+    app.composer.insert_str("/panel");
+    app.submit();
+    assert!(app.overlay.is_none(), "no board without a topic");
+    assert!(
+        app.toast
+            .as_ref()
+            .is_some_and(|(msg, _)| msg.contains("usage")),
+        "no usage toast: {:?}",
+        app.toast
+    );
+}

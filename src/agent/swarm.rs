@@ -34,6 +34,12 @@ impl Swarm {
         self.providers.push(Arc::new(provider));
     }
 
+    /// Add an already-shared provider (e.g. the runtime's `Arc<dyn AgentProvider>`)
+    /// so several consumers stay on one client instance.
+    pub fn add_arc(&mut self, provider: Arc<dyn AgentProvider>) {
+        self.providers.push(provider);
+    }
+
     /// Number of registered providers.
     pub fn len(&self) -> usize {
         self.providers.len()
