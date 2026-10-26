@@ -882,7 +882,11 @@ mod tests {
 
     #[test]
     fn highlight_matches_no_match() {
-        let spans = highlight_matches("hello world", "xyz", Style::default().fg(ratatui::style::Color::Red));
+        let spans = highlight_matches(
+            "hello world",
+            "xyz",
+            Style::default().fg(ratatui::style::Color::Red),
+        );
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content, "hello world");
     }

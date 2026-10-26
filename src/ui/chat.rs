@@ -4,12 +4,12 @@ use super::theme::{glyph, Theme};
 use crate::app::{Entry, EntryRole, Phase, Rendered};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation};
 use ratatui::Frame;
 
-/// Width of the left rail (`▌ `) drawn next to every transcript row.
-pub const GUTTER: usize = 2;
+/// Width of the left gutter reserved for role badges.
+pub const GUTTER: usize = 4;
 
 /// Transcripts up to this many entries get measured exactly before drawing.
 pub const WARM_LIMIT: usize = 400;
@@ -19,15 +19,51 @@ pub const COMPACT_TOOL_DETAIL_WIDTH: usize = 40;
 
 /// Glyphs for compact tool status display.
 pub mod tool_glyph {
-    pub const RUNNING: &str = "◐";
+    pub const RUNNING: &str = "⟳";
     pub const SUCCESS: &str = "✓";
     pub const FAILURE: &str = "✗";
     pub const DIFF_ADD: &str = "+";
     pub const DIFF_DEL: &str = "−";
 }
 
+pub fn render_prompt_queue(frame: &mut Frame, area: Rect, app: &crate::app::App) {
+    let theme = app.theme;
+    let queue_len = app.prompt_queue_len();
+    if queue_len == 0 {
+        return;
+    }
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  ⏳ Queued prompts (",
+            Style::default().fg(app.theme.faint()),
+        ),
+        Span::styled(
+            queue_len.to_string(),
+            Style::default()
+                .fg(app.theme.accent())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(")", Style::default().fg(app.theme.faint())),
+    ]));
+    lines.push(Line::default());
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(app.theme.border_focus()))
+        .style(Style::default().bg(app.theme.panel_bg()));
+
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).style(Style::default().bg(app.theme.panel_bg())),
+        area,
+    );
+}
+
 pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
-    if area.width < 12 || area.height == 0 {
+    if area.width < 20 || area.height == 0 {
         return;
     }
     let theme = app.theme;
@@ -42,8 +78,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     }
 
     let crate::app::App { entries, view, .. } = app;
-    // One column is always reserved on the right so the scrollbar never overlaps text
-    // and the wrap width does not change when the bar appears.
+    // Reserve space for scrollbar
     let width = area.width.saturating_sub(1) as usize;
     let view_h = area.height;
 
@@ -52,8 +87,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     let (mut top, window_bottom) = view.window();
 
     // Warm the render cache, then rebuild offsets so scrolling uses exact heights.
-    // Small transcripts are measured in full; large ones get the window plus a margin so
-    // scrolling forward fills in real heights instead of estimates.
     let margin = 16usize;
     let first = entries.len().saturating_sub(WARM_LIMIT);
     let pad = (margin as u16) * 8;
@@ -70,7 +103,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
 
     // Check if we have an active selection
     let selection = app.selection.clone();
-    
+
     // 2. Walk the virtual rows that intersect the viewport.
     let mut row = top;
     let mut idx = 0usize;
@@ -87,10 +120,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
 
         let status_rows = entries[idx].status_rows() as usize;
         let status = status_line(&entries[idx], &theme, view.spinner).filter(|_| show_thinking);
-        let rail = rail_style(&entries[idx], &theme);
-        // User prompts and assistant replies render as borderless filled bubbles;
-        // the `▌` rail is reserved for system lines.
-        let bubbled = entries[idx].role != EntryRole::System;
         let entry = &mut entries[idx];
         let cached = entry.ensure_rendered(&theme, width, show_details);
 
@@ -99,30 +128,23 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
         while row < bottom && row < entry_end {
             let local = (row - entry_start) as usize;
             let line = if local < status_rows {
-                status.as_ref().map(|l| {
-                    if bubbled {
-                        l.clone()
-                    } else {
-                        gutter_line(l.clone(), rail)
-                    }
-                })
+                status.as_ref().cloned()
             } else {
-                // Past the body this is the blank separator row between entries.
                 let body = local - status_rows;
-                match cached.lines.get(body) {
-                    Some(l) => Some(if bubbled {
-                        l.clone()
-                    } else {
-                        gutter_line(l.clone(), rail)
-                    }),
-                    None => Some(Line::default()),
-                }
+                cached.lines.get(body).cloned()
             };
-            
+
             // Apply selection highlighting if this line is within the selection
             if let Some(line) = line {
                 if let Some(ref sel) = selection {
-                    batch.push(apply_selection_highlight(line, idx, local - status_rows, status_rows, sel, &theme));
+                    batch.push(apply_selection_highlight(
+                        line,
+                        idx,
+                        local.saturating_sub(status_rows),
+                        status_rows,
+                        sel,
+                        &theme,
+                    ));
                 } else {
                     batch.push(line);
                 }
@@ -135,7 +157,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
         let height = batch.len() as u16;
         if height > 0 {
             frame.render_widget(
-                Paragraph::new(ratatui::text::Text::from(batch)),
+                Paragraph::new(Text::from(batch)),
                 Rect {
                     x: area.x,
                     y: area.y + (batch_start - top),
@@ -155,8 +177,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
             .begin_symbol(None)
             .end_symbol(None)
             .track_symbol(Some("│"))
-            .thumb_symbol("┃")
-            .thumb_style(Style::default().fg(theme.border_focus()))
+            .thumb_symbol("█")
+            .thumb_style(Style::default().fg(theme.accent()))
             .track_style(Style::default().fg(theme.border()));
         frame.render_stateful_widget(
             sb,
@@ -182,24 +204,36 @@ fn apply_selection_highlight(
 ) -> Line<'static> {
     let (start_entry, start_row, start_col) = sel.start;
     let (end_entry, end_row, end_col) = sel.end;
-    
+
     // Ensure start is before end
-    let (start_entry, start_row, start_col, end_entry, end_row, end_col) = 
+    let (start_entry, start_row, start_col, end_entry, end_row, end_col) =
         if (start_entry, start_row, start_col) <= (end_entry, end_row, end_col) {
-            (start_entry, start_row, start_col, end_entry, end_row, end_col)
+            (
+                start_entry,
+                start_row,
+                start_col,
+                end_entry,
+                end_row,
+                end_col,
+            )
         } else {
-            (end_entry, end_row, end_col, start_entry, start_row, start_col)
+            (
+                end_entry,
+                end_row,
+                end_col,
+                start_entry,
+                start_row,
+                start_col,
+            )
         };
-    
+
     // Check if this entry is within selection range
     if entry_idx < start_entry || entry_idx > end_entry {
         return line;
     }
-    
+
     // For body rows, check if this row is within selection
-    // body_row is already offset by status_rows
     let is_in_range = if entry_idx == start_entry && entry_idx == end_entry {
-        // Same entry - check row range
         body_row >= start_row && body_row <= end_row
     } else if entry_idx == start_entry {
         body_row >= start_row
@@ -208,27 +242,35 @@ fn apply_selection_highlight(
     } else {
         true // Middle entry - fully selected
     };
-    
+
     if !is_in_range {
         return line;
     }
-    
+
     // Apply highlighting to spans within the column range
     let mut new_spans = Vec::new();
     let mut current_col = 0usize;
-    
+
     for span in line.spans {
         let span_len = span.content.chars().count();
         let span_end = current_col + span_len;
-        
-        let sel_start = if entry_idx == start_entry && body_row == start_row { start_col } else { 0 };
-        let sel_end = if entry_idx == end_entry && body_row == end_row { end_col } else { usize::MAX };
-        
+
+        let sel_start = if entry_idx == start_entry && body_row == start_row {
+            start_col
+        } else {
+            0
+        };
+        let sel_end = if entry_idx == end_entry && body_row == end_row {
+            end_col
+        } else {
+            usize::MAX
+        };
+
         // Check if this span overlaps with selection
         if span_end > sel_start && current_col < sel_end {
             // Split into up to 3 parts: before, selected, after
             let chars: Vec<char> = span.content.chars().collect();
-            
+
             // Before selection
             if current_col < sel_start {
                 let before_end = (sel_start - current_col).min(chars.len());
@@ -237,18 +279,22 @@ fn apply_selection_highlight(
                     new_spans.push(Span::styled(before, span.style));
                 }
             }
-            
+
             // Selected portion
-            let sel_begin = if current_col < sel_start { sel_start - current_col } else { 0 };
-            let sel_finish = if span_end > sel_end { sel_end - current_col } else { span_len };
+            let sel_begin = sel_start.saturating_sub(current_col);
+            let sel_finish = if span_end > sel_end {
+                sel_end - current_col
+            } else {
+                span_len
+            };
             let sel_finish = sel_finish.min(chars.len());
-            
+
             if sel_begin < sel_finish && sel_begin < chars.len() {
                 let selected: String = chars[sel_begin..sel_finish].iter().collect();
                 let highlight_style = span.style.bg(theme.accent()).fg(theme.panel_bg());
                 new_spans.push(Span::styled(selected, highlight_style));
             }
-            
+
             // After selection
             if span_end > sel_end && sel_end < usize::MAX && sel_end > current_col {
                 let after_start = sel_end - current_col;
@@ -257,7 +303,7 @@ fn apply_selection_highlight(
                     new_spans.push(Span::styled(after, span.style));
                 }
             }
-            
+
             // If no overlap, keep as-is
             if span_end <= sel_start || current_col >= sel_end {
                 new_spans.push(span);
@@ -265,59 +311,67 @@ fn apply_selection_highlight(
         } else {
             new_spans.push(span);
         }
-        
+
         current_col = span_end;
     }
-    
+
     Line::from(new_spans)
 }
 
 /// Centred placeholder shown until the first prompt is sent.
 fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &Theme) {
-    let rows: Vec<(String, String)> = vec![
-        ("model".into(), app.model_label()),
-        ("provider".into(), app.provider_label()),
-        ("workspace".into(), text::display_path(&app.cwd, 42)),
-        ("tools".into(), "files · shell · ssh · web · memory".into()),
-        ("commands".into(), "/ or ctrl+x opens the menu".into()),
-    ];
+    let card_w = (area.width as usize).saturating_sub(8).clamp(40, 60);
 
-    let card_w = (area.width as usize).saturating_sub(8).clamp(20, 54);
-    // Molecule mark: a honeycomb cluster beside the wordmark.
-    let hex = Style::default().fg(theme.accent());
     let logo = vec![
-        Line::from(Span::styled(
-            format!("    {}", glyph::HEX_FILL.repeat(3)),
-            hex,
-        )),
         Line::from(vec![
-            Span::styled(format!("   {}  ", glyph::HEX_FILL.repeat(5)), hex),
-            Span::styled("nanomite", theme.bold()),
+            Span::styled("    ▄▄▄▄▄▄▄ ", Style::default().fg(theme.accent())),
+            Span::styled("nanomite", theme.bold().fg(theme.strong())),
+        ]),
+        Line::from(vec![
+            Span::styled("   █ ▄▄▄ █ ", Style::default().fg(theme.accent())),
+            Span::styled("the microscopic agent", theme.faint_style()),
         ]),
         Line::from(Span::styled(
-            format!("    {}", glyph::HEX_FILL.repeat(3)),
-            hex,
+            "    ▀▀▀▀▀▀▀ ",
+            Style::default().fg(theme.accent()),
         )),
-        Line::from(Span::styled("  the microscopic agent", theme.faint_style())),
     ];
-    let lines: Vec<Line<'static>> = logo
+
+    let rows: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("  model     ", theme.faint_style()),
+            Span::styled(text::truncate(&app.model_label(), card_w - 12), theme.dim()),
+        ]),
+        Line::from(vec![
+            Span::styled("  provider  ", theme.faint_style()),
+            Span::styled(
+                text::truncate(&app.provider_label(), card_w - 12),
+                theme.dim(),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  workspace ", theme.faint_style()),
+            Span::styled(text::display_path(&app.cwd, card_w - 12), theme.dim()),
+        ]),
+        Line::from(vec![
+            Span::styled("  tools     ", theme.faint_style()),
+            Span::styled("files · shell · ssh · web · memory", theme.dim()),
+        ]),
+    ];
+
+    let lines: Vec<Line> = logo
         .into_iter()
         .chain(std::iter::once(Line::default()))
-        .chain(rows.into_iter().map(|(k, v)| {
-            Line::from(vec![
-                Span::styled(format!("  {k:<10}"), Style::default().fg(theme.faint())),
-                Span::styled(text::truncate(&v, card_w.saturating_sub(14)), theme.dim()),
-            ])
-        }))
+        .chain(rows)
         .chain(std::iter::once(Line::default()))
-        .chain(std::iter::once(Line::from(Span::styled(
-            format!("  {} ask anything to begin", glyph::PROMPT),
+        .chain(std::iter::once(Line::from(vec![Span::styled(
+            "  ❯ ask anything to begin  ",
             theme.accent_style(),
-        ))))
-        .chain(std::iter::once(Line::from(Span::styled(
-            format!("  /help {} /new {} /themes", glyph::CHEVRON, glyph::CHEVRON),
+        )])))
+        .chain(std::iter::once(Line::from(vec![Span::styled(
+            "  /  commands  ·  ctrl+x  palette  ·  esc  interrupt",
             theme.faint_style(),
-        ))))
+        )])))
         .collect();
 
     let height = lines.len() as u16;
@@ -326,8 +380,24 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
     }
     let x = area.x + (area.width.saturating_sub(card_w as u16)) / 2;
     let y = area.y + (area.height - height) / 2;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_focus()))
+        .style(Style::default().bg(theme.panel_bg()));
+
     frame.render_widget(
-        Paragraph::new(ratatui::text::Text::from(lines)),
+        block,
+        Rect {
+            x,
+            y,
+            width: card_w as u16,
+            height,
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).style(Style::default().bg(theme.panel_bg())),
         Rect {
             x,
             y,
@@ -343,10 +413,17 @@ fn rail_style(entry: &Entry, theme: &Theme) -> Style {
         EntryRole::Assistant => match entry.phase {
             Phase::Streaming => Style::default().fg(theme.accent_soft()),
             Phase::Failed => Style::default().fg(theme.danger()),
-            _ => Style::default().fg(theme.border_focus()),
+            _ => Style::default().fg(theme.success()),
         },
         EntryRole::System => Style::default().fg(theme.border()),
     }
+}
+
+/// Format timestamp as HH:MM
+fn format_timestamp(ts: u64) -> String {
+    let dt = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts);
+    let local = chrono::DateTime::<chrono::Local>::from(dt);
+    local.format("%H:%M").to_string()
 }
 
 /// Live one-line status (spinner / error / summary) drawn above the cached body.
@@ -365,7 +442,7 @@ fn status_line(entry: &Entry, theme: &Theme, spinner: usize) -> Option<Line<'sta
                     Style::default().fg(theme.faint()),
                 ),
             ];
-            // Steps · tools finished so far, when there is anything to show.
+            // Steps · tools finished so far
             let done_tools = entry.tools.iter().filter(|t| !t.running).count();
             if entry.steps > 0 || done_tools > 0 {
                 spans.push(Span::styled(
@@ -422,16 +499,6 @@ fn status_line(entry: &Entry, theme: &Theme, spinner: usize) -> Option<Line<'sta
     }
 }
 
-fn gutter_line(line: Line<'static>, rail: Style) -> Line<'static> {
-    if line.spans.is_empty() {
-        return Line::default();
-    }
-    let mut spans = Vec::with_capacity(line.spans.len() + 1);
-    spans.push(Span::styled(format!("{} ", glyph::GUTTER), rail));
-    spans.extend(line.spans);
-    Line::from(spans)
-}
-
 impl Entry {
     /// Height of the cached body (excludes the dynamic status line and trailing gap).
     pub fn height(&self) -> u16 {
@@ -445,10 +512,9 @@ impl Entry {
     pub fn estimated_height(&self, width: usize) -> u16 {
         let inner = width.saturating_sub(GUTTER).max(8);
         match self.role {
-            // Prompts: quote marker + 2-col indent, no label row.
             EntryRole::User => {
                 let wrap_w = inner.saturating_sub(2).max(8);
-                let mut rows = 0usize;
+                let mut rows = 3usize; // role badge + empty line + content start
                 for line in self.text.lines() {
                     let w = text::width(line) as u16;
                     rows += w.div_ceil(wrap_w as u16).max(1) as usize;
@@ -456,7 +522,7 @@ impl Entry {
                 (self.tools.len() as u16) + rows.max(1) as u16
             }
             _ => {
-                let mut h = self.tools.len() as u16;
+                let mut h = self.tools.len() as u16 + 4; // role badge + empty line + tool section gap
                 if self.text.is_empty() {
                     h += 1;
                 } else {
@@ -508,15 +574,31 @@ impl Entry {
                 )));
             }
             EntryRole::User => {
-                // opencode-minimal prompt: accent caret, full-strength text,
-                // indented. Roles are carried by alignment and tone - no labels.
-                let marker = Style::default().fg(theme.accent());
-                let style = Style::default().fg(theme.strong());
-                let wrap_w = inner.saturating_sub(2).max(8);
+                let style = Style::default()
+                    .fg(theme.strong())
+                    .add_modifier(Modifier::BOLD);
+                let wrap_w = inner.saturating_sub(4).max(8);
                 let mut first = true;
+                let ts = format_timestamp(self.started.elapsed().as_secs());
+
+                // User badge with timestamp
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(
+                        " YOU ",
+                        Style::default()
+                            .fg(theme.panel_bg())
+                            .bg(theme.accent())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(ts, Style::default().fg(theme.faint())),
+                ]));
+                lines.push(Line::default());
+
                 for raw in self.text.split('\n') {
                     if raw.trim().is_empty() {
-                        lines.push(Line::from(Span::raw("  ")));
+                        lines.push(Line::from(vec![Span::styled("    ", Style::default())]));
                         continue;
                     }
                     lines.extend(
@@ -526,14 +608,14 @@ impl Entry {
                                 for span in l.spans.iter_mut() {
                                     *span = Span::styled(span.content.to_string(), style);
                                 }
-                                let mut spans: Vec<Span> = Vec::with_capacity(l.spans.len() + 2);
+                                let mut spans = Vec::with_capacity(l.spans.len() + 2);
                                 spans.push(Span::styled(
                                     if first {
                                         format!("{} ", glyph::PROMPT)
                                     } else {
                                         "  ".to_string()
                                     },
-                                    marker,
+                                    Style::default().fg(theme.accent()),
                                 ));
                                 first = false;
                                 spans.extend(l.spans);
@@ -542,58 +624,69 @@ impl Entry {
                     );
                 }
                 if first {
-                    lines.push(Line::from(Span::raw("  ")));
+                    lines.push(Line::from(Span::raw("    ")));
                 }
             }
             EntryRole::Assistant => {
-                // Reply body: tools grouped, then full-width markdown. No label.
+                let wrap_w = inner;
+                let ts = format_timestamp(self.started.elapsed().as_secs());
+
+                // Assistant badge with timestamp
+                let (badge_style, badge_text) = match self.phase {
+                    Phase::Streaming => (
+                        Style::default()
+                            .fg(theme.panel_bg())
+                            .bg(theme.accent_soft()),
+                        " ◐  ",
+                    ),
+                    Phase::Failed => (
+                        Style::default().fg(theme.panel_bg()).bg(theme.danger()),
+                        " ✗  ",
+                    ),
+                    Phase::Interrupted => (
+                        Style::default().fg(theme.panel_bg()).bg(theme.warn()),
+                        " ●  ",
+                    ),
+                    _ => (
+                        Style::default().fg(theme.panel_bg()).bg(theme.success()),
+                        " ✓  ",
+                    ),
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(" AI ", badge_style.add_modifier(Modifier::BOLD)),
+                    Span::raw(" "),
+                    Span::styled(ts, Style::default().fg(theme.faint())),
+                ]));
+                lines.push(Line::default());
+
+                // Tool calls as pills
                 for tool in &self.tools {
-                    let (marker, marker_style) = if tool.running {
-                        (glyph::HOURGLASS, Style::default().fg(theme.warn()))
+                    let (marker, marker_style, status_text) = if tool.running {
+                        (
+                            glyph::SPINNER[0],
+                            Style::default().fg(theme.warn()),
+                            "running",
+                        )
                     } else if tool.ok {
-                        (glyph::CHECK, Style::default().fg(theme.success()))
+                        (
+                            tool_glyph::SUCCESS,
+                            Style::default().fg(theme.success()),
+                            "ok",
+                        )
                     } else {
-                        (glyph::CROSS, Style::default().fg(theme.danger()))
+                        (
+                            tool_glyph::FAILURE,
+                            Style::default().fg(theme.danger()),
+                            "failed",
+                        )
                     };
-                    // Compact mode: show `name · status · duration` on one line.
-                    // Mini-diff chip for edit_file: `+3 −1` next to tool name.
-                    let (detail, diff_chip) = if details {
-                        let detail = text::truncate(
-                            &tool.detail,
-                            inner.saturating_sub(tool.name.chars().count() + 6),
-                        );
-                        (if detail.is_empty() {
-                            String::new()
-                        } else {
-                            format!("  {detail}")
-                        }, None)
-                    } else {
-                        // Compact mode: build `name · status · duration`
-                        let mut compact = tool.name.clone();
-                        // Status
-                        let status = if tool.running {
-                            format!("{} running", tool_glyph::RUNNING)
-                        } else if tool.ok {
-                            format!("{} ok", tool_glyph::SUCCESS)
-                        } else {
-                            format!("{} failed", tool_glyph::FAILURE)
-                        };
-                        compact.push_str(&format!(" · {status}"));
-                        // Duration (if available via elapsed in entry)
-                        if let Some(elapsed) = self.elapsed {
-                            compact.push_str(&format!(" · {}", text::format_duration(elapsed)));
-                        }
-                        // Mini-diff chip for edit_file
-                        let diff_chip = if tool.name == "edit_file" {
-                            tool.edit_replacements.map(|_r| format!(" {} {}1", tool_glyph::DIFF_ADD, tool_glyph::DIFF_DEL))
-                        } else {
-                            None
-                        };
-                        (compact, diff_chip)
-                    };
-                    let mut spans = vec![
+
+                    let mut pill_spans = vec![
                         Span::raw("  "),
-                        Span::styled(format!("{marker} "), marker_style),
+                        Span::styled(" ", Style::default()),
+                        Span::styled(format!("{} ", marker), marker_style),
                         Span::styled(
                             tool.name.clone(),
                             Style::default()
@@ -601,27 +694,60 @@ impl Entry {
                                 .add_modifier(Modifier::BOLD),
                         ),
                     ];
-                    if let Some(chip) = diff_chip {
-                        spans.push(Span::styled(chip, Style::default().fg(theme.diff_add())));
+
+                    // Mini-diff chip for edit_file
+                    if tool.name == "edit_file" {
+                        if let Some(r) = tool.edit_replacements {
+                            pill_spans.push(Span::raw(" "));
+                            pill_spans.push(Span::styled(
+                                format!("{} {}", tool_glyph::DIFF_ADD, tool_glyph::DIFF_DEL),
+                                Style::default().fg(theme.diff_add()),
+                            ));
+                        }
                     }
-                    spans.push(Span::styled(
-                        if detail.is_empty() {
-                            String::new()
-                        } else {
-                            format!("  {detail}")
-                        },
-                        Style::default().fg(theme.faint()),
+
+                    // Status pill
+                    let status_color = if tool.running {
+                        theme.warn()
+                    } else if tool.ok {
+                        theme.success()
+                    } else {
+                        theme.danger()
+                    };
+                    pill_spans.push(Span::raw(" "));
+                    pill_spans.push(Span::styled(
+                        format!(" {} ", status_text),
+                        Style::default().fg(theme.panel_bg()).bg(status_color),
                     ));
-                    lines.push(Line::from(spans));
+
+                    // Duration
+                    if let Some(elapsed) = self.elapsed {
+                        pill_spans.push(Span::raw(" "));
+                        pill_spans.push(Span::styled(
+                            format!(" {} ", text::format_duration(elapsed)),
+                            Style::default().fg(theme.faint()),
+                        ));
+                    }
+
+                    // Detail in compact mode
+                    if !details {
+                        let detail = text::truncate(
+                            &tool.detail,
+                            inner.saturating_sub(tool.name.chars().count() + 20),
+                        );
+                        if !detail.is_empty() {
+                            pill_spans.push(Span::raw(" "));
+                            pill_spans
+                                .push(Span::styled(detail, Style::default().fg(theme.muted())));
+                        }
+                    }
+
+                    lines.push(Line::from(pill_spans));
+
                     // Live preview of what the tool is writing/running
-                    // (OpenCode-style): bounded at construction, rendered under
-                    // the row while the tool runs. `/details` off collapses it.
                     if details {
                         if let Some(preview) = &tool.preview {
                             if tool.name == "edit_file" {
-                                // Diffs go through the shared renderer so the
-                                // -/+ lines carry the diff roles, not the
-                                // success/danger signal colours.
                                 let mut diff = DiffView::with_theme(*theme);
                                 for raw in preview.split('\n') {
                                     diff.push_diff(raw.to_string());
@@ -662,26 +788,33 @@ impl Entry {
                         }
                     }
                 }
+
                 if !self.tools.is_empty() {
                     lines.push(Line::default());
                 }
+
                 let st = text::MarkdownStyles::new(theme);
                 if self.text.trim().is_empty() {
                     lines.push(Line::default());
                 } else {
                     lines.extend(text::markdown(&self.text, inner, &st));
                 }
+
                 // Live stream cursor at the head of the reply, like opencode.
                 if self.phase == Phase::Streaming {
                     if let Some(last) = lines.last_mut() {
                         if let Some(s) = last.spans.last_mut() {
                             let mut chars: Vec<char> = s.content.chars().collect();
-                            chars.pop();
+                            if !chars.is_empty() {
+                                chars.pop();
+                            }
                             s.content = chars.into_iter().collect();
                         }
                         last.spans.push(Span::styled(
                             glyph::CURSOR,
-                            Style::default().fg(theme.accent()),
+                            Style::default()
+                                .fg(theme.accent())
+                                .add_modifier(Modifier::SLOW_BLINK),
                         ));
                     }
                 }

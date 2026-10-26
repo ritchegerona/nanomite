@@ -165,6 +165,24 @@ never listed as released.
   capture, with comments explaining the ordering.
   Verified: `cargo test --lib` 371 passed (3 pre-existing failures unchanged
   from HEAD), release build and clippy clean.
+- **Model picker reads as live, and stale endpoint replies can no longer fill it.**
+  Smoke-testing the real binary against the endpoint's 85-model list showed the
+  fetch itself was already dynamic — but the picker *rendered* like a static
+  table: the window pinned the highlighted row to the bottom edge
+  (`start = cursor − (visible−1)`), so a model sorted deep in the list opened as
+  an unchanging wall of rows above the highlight, and nothing on screen said the
+  list had just been fetched. Three changes: the title now carries the live
+  count (`model · 85`, filtered `model · 36/85`); the window centres the
+  highlighted row (clamped at both ends) so there is always context below it;
+  and `ModelsResult` is tagged with the base URL that produced it (same
+  discipline as `BoardEvent`'s generation tag) so a slow reply from a previous
+  `/connect` endpoint is dropped in `apply_models_result` instead of populating
+  the current endpoint's picker or toast.
+  Verified: `cargo test --lib` 374 passed / 0 failed; `cargo clippy --lib
+  --bins -- -D warnings` clean; `cargo fmt --check` clean on tracked sources;
+  end-to-end pty smoke against a mock serving the endpoint's real payload
+  (open → `model · 85`, filter `nvidia` → `model · 36/85`, top and bottom of
+  the list reachable, current model highlighted with context below).
 - **Header context meter no longer clipped on narrow terminals.**
   `ui::panels::header` budgeted the right side (model · reasoning · 🧠
   `used/limit · pct`) against the full terminal width while rendering it on the

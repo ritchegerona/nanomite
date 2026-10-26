@@ -1,12 +1,10 @@
 use nanomite::app::{App, Control};
 use nanomite::ui;
-use ratatui::crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind,
-};
-use std::sync::mpsc;
+use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
+use std::sync::mpsc;
 use std::time::Duration;
 
 /// Frame interval: only used to animate the spinner; the loop is otherwise idle.

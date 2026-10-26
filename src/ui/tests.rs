@@ -67,15 +67,12 @@ async fn renders_welcome_state() {
     let text = frame_text(&mut app, 92, 24);
     assert!(text.contains("nanomite"), "header missing:\n{text}");
     assert!(
-        text.contains("ask anything"),
+        text.contains("ask anything to begin"),
         "welcome card missing:\n{text}"
     );
     // Composer frame is visible and focused.
     assert!(text.contains('❯'), "composer prompt missing:\n{text}");
-    assert!(
-        text.contains("/ or ctrl+x"),
-        "composer hint missing:\n{text}"
-    );
+    assert!(text.contains("ctrl+x"), "composer hint missing:\n{text}");
 }
 
 #[tokio::test]
@@ -214,7 +211,7 @@ async fn long_transcripts_are_virtualized() {
     }
     app.view.mark_dirty();
 
-    let mut terminal = Terminal::new(TestBackend::new(92, 30)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(92, 40)).unwrap();
     terminal.draw(|f| render(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     let rendered: String = (0..buffer.area.height)
@@ -401,9 +398,16 @@ async fn submitting_while_busy_keeps_the_prompt() {
     app.submit();
 
     assert!(app.is_busy());
-    assert_eq!(app.composer.value(), "second", "queued prompt was dropped");
+    // Prompt is now queued, not kept in composer
+    assert!(
+        app.composer.is_empty(),
+        "composer should be cleared when busy"
+    );
+    assert_eq!(app.prompt_queue_len(), 1, "prompt should be queued");
+    assert_eq!(app.prompt_queue_front().unwrap(), "second");
     assert_eq!(app.entries.len(), 2, "a second turn must not start");
     assert!(app.toast.is_some(), "user was not told why");
+    assert!(app.toast.as_ref().unwrap().0.contains("queued"));
 }
 
 #[tokio::test]
@@ -1487,7 +1491,10 @@ async fn memory_picker_without_an_engine_explains_itself() {
     assert!(app.overlay.is_none(), "no engine, no picker");
     let text = frame_text(&mut app, 92, 24);
     // The toast message is shown in the footer
-    assert!(text.contains("memory not available"), "toast missing:\n{text}");
+    assert!(
+        text.contains("memory not available"),
+        "toast missing:\n{text}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1954,4 +1961,33 @@ async fn the_help_sheet_lists_the_improve_command() {
         help.contains("review self-edit proposals"),
         "hint missing:\n{help}"
     );
+}
+
+#[tokio::test]
+async fn esc_interrupts_during_initial_streaming() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    let mut app = test_app().await;
+    app.composer.insert_str("hello");
+    app.submit();
+
+    assert!(app.is_busy(), "turn should be running");
+
+    // Send ESC immediately after submit, during initial streaming
+    app.on_key(KeyEvent {
+        code: KeyCode::Esc,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    });
+
+    for _ in 0..100 {
+        app.pump_engine();
+        if !app.is_busy() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(!app.is_busy(), "esc did not interrupt during streaming");
+    assert_eq!(app.entries[1].phase, Phase::Interrupted);
 }

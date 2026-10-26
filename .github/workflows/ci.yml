@@ -2,72 +2,180 @@ name: CI
 
 on:
   push:
-    branches: [master]
-    tags: ["v*"]
+    branches: [main]
   pull_request:
+    branches: [main]
 
 env:
+  RUSTFLAGS: "-D warnings"
   CARGO_TERM_COLOR: always
 
 jobs:
   test:
-    name: fmt · clippy · test
+    name: Test (stable)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust (stable)
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-
+          components: clippy
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run tests
+        run: cargo test --lib --all-features
+      - name: Clippy
+        run: cargo clippy --all-features -- -D warnings
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
-      # Plain `cargo test` also builds benches/perf.rs, which needs nightly
-      # (#![feature(test)]). The offline suite is `cargo test --lib`.
-      - name: Format
-        run: cargo fmt --check
-
-      - name: Check (lib + bins)
-        run: cargo check --lib --bins
-
-      - name: Clippy (lib + bins, warnings denied)
-        run: cargo clippy --lib --bins -- -D warnings
-
-      - name: Test (offline suite)
-        run: cargo test --lib
-
-  release-binary:
-    name: Attach linux binary to release
+  test-msrv:
+    name: Test (MSRV 1.75)
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
+      - name: Install Rust 1.75
+        uses: dtolnay/rust-toolchain@1.75
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-msrv
+      - name: Run tests
+        run: cargo test --lib
 
+  bench:
+    name: Benchmarks (nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bench
+      - name: Run benchmarks
+        run: cargo bench --no-run
+      - name: Execute benchmarks
+        run: cargo bench 2>&1 | tee bench-results.txt
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench-results.txt
+
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-deny
+      - name: Install cargo-deny
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-deny
+      - name: Run cargo-deny
+        run: cargo deny check --all-features
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-audit
+      - name: Install cargo-audit
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-audit
+          version: "0.21"
+      - name: Run cargo-audit
+        run: cargo audit
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-docs
+      - name: Build docs
+        run: cargo doc --all-features --no-deps --document-private-items
+      - name: Upload docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs
+          path: target/doc
+
+  release:
+    name: Release Build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, deny, audit]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-release
       - name: Build release
-        run: cargo build --release
-
-      - name: Package
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          tar czf "nanomite-v${VERSION}-x86_64-linux.tar.gz" -C target/release nanomite
-          sha256sum "nanomite-v${VERSION}-x86_64-linux.tar.gz" > "nanomite-v${VERSION}-x86_64-linux.tar.gz.sha256"
-
-      - name: Upload to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          gh release upload "$GITHUB_REF_NAME" \
-            "nanomite-v${VERSION}-x86_64-linux.tar.gz" \
-            "nanomite-v${VERSION}-x86_64-linux.tar.gz.sha256" \
-            --clobber
+        run: cargo build --release --all-features
+      - name: Strip binary
+        run: strip target/release/nanomite
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: nanomite-${{ github.ref_name }}-x86_64-linux
+          path: target/release/nanomite

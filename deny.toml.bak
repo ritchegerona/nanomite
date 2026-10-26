@@ -1,0 +1,50 @@
+# Cargo deny configuration for nanomite
+# See https://github.com/EmbarkStudios/cargo-deny for documentation
+
+[advisories]
+# Ignore specific advisories if needed (with justification)
+# ignore = ["RUSTSEC-XXXX-XXXX"]
+# db = "https://github.com/RustSec/advisory-db.git"
+# db-path = "~/.cargo/advisory-db"
+
+[licenses]
+# Allow these licenses (SPDX identifiers)
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "MPL-2.0",
+]
+# Reject these licenses
+# deny = ["GPL-3.0-only", "AGPL-3.0-only"]
+# Unclassified licenses are not allowed
+unclassified = "deny"
+# Allow these licenses for specific crates (with justification)
+# allow-by-crate = { "crate-name" = "MIT" }
+
+[bans]
+# Deny specific crates or versions
+# deny = [{ name = "bad-crate", version = "=1.0.0" }]
+# Allow multiple versions of these crates (for semver-incompatible deps)
+multiple-versions = "allow"
+# Highlight crates with multiple versions but don't fail
+# multiple-versions = "warn"
+# Wildcards for multiple versions
+# wildcard-multiple-versions = "allow"
+
+[sources]
+# Allow crates from these registries
+allow-unknown-registries = false
+# Allow git sources
+allow-git = false
+# Allow local path sources
+allow-path = true
+
+[layout]
+# Allow this workspace layout
+workspace = true

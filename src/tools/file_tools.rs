@@ -247,16 +247,20 @@ impl FileTools {
                 }
 
                 // Use memory-mapped file for zero-copy access
-                let Ok(file) = File::open(&path) else { continue };
-                let Ok(metadata) = file.metadata() else { continue };
+                let Ok(file) = File::open(&path) else {
+                    continue;
+                };
+                let Ok(metadata) = file.metadata() else {
+                    continue;
+                };
                 if metadata.len() > self.max_file_bytes as u64 {
                     continue;
                 }
-                
+
                 let bytes = unsafe { Mmap::map(&file) }.ok();
                 let Some(bytes) = bytes else { continue };
                 let bytes = &bytes[..];
-                
+
                 if bytes.is_empty() || looks_binary(bytes) {
                     continue;
                 }
@@ -266,7 +270,7 @@ impl FileTools {
                 if needle_bytes.is_empty() {
                     continue;
                 }
-                
+
                 // Fast two-byte check - if first two case-folded bytes don't appear in sequence, skip
                 if needle_bytes.len() >= 2 {
                     let first = needle_bytes[0] | 32;
@@ -299,20 +303,22 @@ impl FileTools {
                 // Only decode if we found a candidate
                 let text = String::from_utf8_lossy(bytes);
                 let rel = self.relative(&path);
-                
+
                 // Use memchr to find line boundaries quickly
                 let mut line_start = 0;
                 let mut line_no = 1;
                 let mut search_pos = 0;
-                
+
                 while search_pos < bytes.len() {
                     // Find next newline
-                    let line_end = memchr(b'\n', &bytes[search_pos..]).map(|i| search_pos + i).unwrap_or(bytes.len());
-                    
+                    let line_end = memchr(b'\n', &bytes[search_pos..])
+                        .map(|i| search_pos + i)
+                        .unwrap_or(bytes.len());
+
                     // Quick ASCII check on this line slice
                     let line_bytes = &bytes[line_start..line_end];
                     let is_ascii = line_bytes.iter().all(|&b| b.is_ascii());
-                    
+
                     let matched = if is_ascii && !needle_bytes.is_empty() {
                         contains_ci_ascii(line_bytes, needle_bytes)
                     } else if !needle_bytes.is_empty() {
@@ -322,7 +328,7 @@ impl FileTools {
                     } else {
                         false
                     };
-                    
+
                     if matched {
                         let display_line = &text[line_start..line_end.min(text.len())];
                         hits.push(SearchHit {
@@ -335,12 +341,12 @@ impl FileTools {
                             break;
                         }
                     }
-                    
+
                     line_start = line_end + 1;
                     search_pos = line_start;
                     line_no += 1
                 }
-                
+
                 if hits.len() >= MAX_HITS {
                     truncated = true;
                     break;
@@ -479,13 +485,13 @@ fn contains_ci_ascii(hay: &[u8], needle: &[u8]) -> bool {
     if n > hay.len() {
         return false;
     }
-    
+
     // Pre-fold the needle for comparison
     let folded_needle: Vec<u8> = needle.iter().map(|&b| fold_ascii(b)).collect();
-    
+
     let mut pos = 0;
     let last = hay.len() - n;
-    
+
     while pos <= last {
         // Find next candidate by manually scanning (memchr can't do case-insensitive)
         // We use a quick check: look for any byte whose folded value matches folded_needle[0]
@@ -503,7 +509,7 @@ fn contains_ci_ascii(hay: &[u8], needle: &[u8]) -> bool {
         if !found {
             break;
         }
-        
+
         // Verify the rest of the needle
         let window = &hay[pos..pos + n];
         if window

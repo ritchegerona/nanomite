@@ -1,4 +1,5 @@
 pub mod chat;
+use crate::ui::chat::render_prompt_queue;
 pub mod composer;
 pub mod diff;
 pub mod panels;
@@ -21,6 +22,7 @@ const MEMORY_OVERLAY_ROWS: u16 = 28;
 pub struct Rects {
     pub header: Rect,
     pub chat: Rect,
+    pub queue: Option<Rect>,
     pub footer: Rect,
     pub composer: Rect,
 }
@@ -64,12 +66,12 @@ impl View {
     pub fn cached_chat_height(&self) -> Option<u16> {
         self.layout.map(|(_, _, _, r)| r.chat.height)
     }
-    
+
     /// Get the cached chat area rect for mouse hit testing
     pub fn cached_chat_rect(&self) -> Option<Rect> {
         self.layout.map(|(_, _, _, r)| r.chat)
     }
-    
+
     /// Get the viewport row count (chat area height)
     pub fn viewport_rows(&self) -> u16 {
         self.cached_chat_height().unwrap_or(10)
@@ -172,10 +174,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let prompt_layout = app.composer.layout(inner_width, theme.base());
     let composer_rows = composer::rows(&prompt_layout);
 
-    let rects = app.view.layout(area, composer_rows);
+    let queue_rows = if app.prompt_queue_len() > 0 {
+        app.prompt_queue_len() as u16 + 1
+    } else {
+        0
+    };
+    let rects = app.view.layout(area, composer_rows, queue_rows);
 
     panels::header(frame, rects.header, app);
     chat::render(frame, rects.chat, app);
+    if let Some(queue_rect) = rects.queue {
+        render_prompt_queue(frame, queue_rect, app);
+    }
     panels::footer(frame, rects.footer, app);
 
     let cursor = composer::render(frame, rects.composer, app, &prompt_layout);
@@ -231,15 +241,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 impl View {
-    fn layout(&mut self, area: Rect, composer_rows: u16) -> Rects {
-        if let Some((cached_area, cached_rows, _, rects)) = self.layout {
-            if cached_area == area && cached_rows == composer_rows {
+    fn layout(&mut self, area: Rect, composer_rows: u16, queue_rows: u16) -> Rects {
+        let has_queued = queue_rows > 0;
+
+        if let Some((cached_area, cached_rows, cached_queue, rects)) = self.layout {
+            if cached_area == area && cached_rows == composer_rows && cached_queue == queue_rows {
                 return rects;
             }
         }
         let areas = ratatui::layout::Layout::vertical([
             ratatui::layout::Constraint::Length(1),
             ratatui::layout::Constraint::Min(3),
+            ratatui::layout::Constraint::Length(queue_rows),
             ratatui::layout::Constraint::Length(1),
             ratatui::layout::Constraint::Length(composer_rows),
         ])
@@ -249,10 +262,11 @@ impl View {
         let rects = Rects {
             header: areas[0],
             chat: areas[1],
-            footer: areas[2],
-            composer: areas[3],
+            queue: if has_queued { Some(areas[2]) } else { None },
+            footer: areas[3],
+            composer: areas[4],
         };
-        self.layout = Some((area, composer_rows, 0, rects));
+        self.layout = Some((area, composer_rows, queue_rows, rects));
         rects
     }
 }

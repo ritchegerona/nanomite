@@ -16,6 +16,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 memchr = "2.7"
 memmap2 = "0.9"
 unicode-width = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
 # Authoritative structured-memory store. `bundled` keeps the SQLite build
 # self-contained (no system libsqlite3 needed) and enables FTS5 full-text search.
 rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
@@ -52,6 +53,11 @@ format-pdf = ["dep:pdf-extract"]
 name = "perf"
 harness = false
 
+
+[dev-dependencies]
+tempfile = "3.15"
+chrono = { version = "0.4", features = ["serde"] }
+shellexpand = "3"
 
 [profile.release]
 opt-level = 3

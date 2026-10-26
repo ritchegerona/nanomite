@@ -20,6 +20,7 @@ use crate::ui::theme::Theme;
 use crate::ui::theme::ThemeId;
 use crate::ui::View;
 use ratatui::text::Line;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -682,6 +683,9 @@ pub struct App {
     memory_hint: Option<String>,
     /// One-time footer hint: why the custom prompt file was not loaded.
     prompt_hint: Option<String>,
+    /// Queued user prompts submitted while the agent is busy. Processed FIFO
+    /// after each turn completes.
+    prompt_queue: VecDeque<String>,
     /// Self-improvement engine. Opening it only creates a data directory, so it
     /// is always attached in production.
     improve: Option<Arc<ImproveEngine>>,
@@ -794,6 +798,7 @@ impl App {
             memory,
             memory_hint,
             prompt_hint,
+            prompt_queue: VecDeque::new(),
             improve: Some(improve),
             improve_dir,
             improve_roots,
@@ -989,6 +994,16 @@ impl App {
     /// Quiet footer hint when the custom prompt file could not be read.
     pub fn prompt_hint(&self) -> Option<&str> {
         self.prompt_hint.as_deref()
+    }
+
+    /// Number of prompts queued for processing after the current turn.
+    pub fn prompt_queue_len(&self) -> usize {
+        self.prompt_queue.len()
+    }
+
+    /// Returns the next queued prompt without removing it.
+    pub fn prompt_queue_front(&self) -> Option<&str> {
+        self.prompt_queue.front().map(|s| s.as_str())
     }
 
     /// Pending proposals as the `/improve` list shows them, read synchronously.
@@ -1348,9 +1363,14 @@ impl App {
         // Clear ghost text when user submits a new prompt
         self.composer.clear_ghost();
         if self.is_busy() {
-            // One turn at a time: requeue by telling the user instead of dropping text.
-            self.composer.insert_str(&prompt);
-            self.toast("still working - press esc to interrupt");
+            // Queue the prompt for processing after the current turn completes
+            self.prompt_queue.push_back(prompt.clone());
+            let queued = self.prompt_queue.len();
+            if queued == 1 {
+                self.toast("queued (1 pending)".to_string());
+            } else {
+                self.toast(format!("queued ({queued} pending"));
+            }
             self.mark_dirty();
             return;
         }
@@ -2693,7 +2713,7 @@ impl App {
         if self.entries.is_empty() || view_h == 0 {
             return;
         }
-        
+
         // Use the cached offsets to find which entry is at the top of the viewport
         let mut entry_idx = 0;
         let mut found = false;
@@ -2708,35 +2728,38 @@ impl App {
                 break;
             }
         }
-        
+
         if !found {
             return;
         }
-        
+
         // Calculate the row within the entry (0 for line mode, cursor position for char mode)
         let row_within_entry = match mode {
             SelectionMode::Line => 0,
             SelectionMode::Char => 0, // Will be refined
             SelectionMode::Block => 0,
         };
-        
+
         let (start_col, end_col) = match mode {
             SelectionMode::Line => (0, usize::MAX), // Full line
-            SelectionMode::Char => (0, 0), // Will expand with cursor movement
+            SelectionMode::Char => (0, 0),          // Will expand with cursor movement
             SelectionMode::Block => (0, 0),
         };
-        
+
         self.selection = Some(Selection {
             start: (entry_idx, row_within_entry, start_col),
             end: (entry_idx, row_within_entry, end_col),
             dragging: false,
             mode: Some(mode),
         });
-        self.toast(&format!("Visual {} mode", match mode {
-            SelectionMode::Char => "char",
-            SelectionMode::Line => "line",
-            SelectionMode::Block => "block",
-        }));
+        self.toast(format!(
+            "Visual {} mode",
+            match mode {
+                SelectionMode::Char => "char",
+                SelectionMode::Line => "line",
+                SelectionMode::Block => "block",
+            }
+        ));
         self.mark_dirty();
     }
 
@@ -2745,12 +2768,14 @@ impl App {
         if let Some(sel) = &mut self.selection {
             if sel.mode.is_some() {
                 let (mut entry_idx, mut row, mut col) = sel.end;
-                
+
                 // Update entry index
                 if delta_entry != 0 {
-                    entry_idx = (entry_idx as isize + delta_entry).clamp(0, self.entries.len().saturating_sub(1) as isize) as usize;
+                    entry_idx = (entry_idx as isize + delta_entry)
+                        .clamp(0, self.entries.len().saturating_sub(1) as isize)
+                        as usize;
                 }
-                
+
                 // Update row within entry
                 if delta_row != 0 {
                     if let Some(entry) = self.entries.get(entry_idx) {
@@ -2760,20 +2785,25 @@ impl App {
                         }
                     }
                 }
-                
+
                 // Update column
                 if delta_col != 0 {
                     if let Some(entry) = self.entries.get(entry_idx) {
                         if let Some(cached) = &entry.cache {
                             if row < cached.lines.len() {
-                                let line_text: String = cached.lines[row].spans.iter().map(|s| s.content.as_ref()).collect();
+                                let line_text: String = cached.lines[row]
+                                    .spans
+                                    .iter()
+                                    .map(|s| s.content.as_ref())
+                                    .collect();
                                 let max_col = line_text.chars().count();
-                                col = (col as isize + delta_col).clamp(0, max_col as isize) as usize;
+                                col =
+                                    (col as isize + delta_col).clamp(0, max_col as isize) as usize;
                             }
                         }
                     }
                 }
-                
+
                 sel.end = (entry_idx, row, col);
                 self.mark_dirty();
             }
@@ -2827,12 +2857,12 @@ impl App {
             self.composer.clear_ghost();
             return;
         };
-        
+
         // Find the last fenced code block
         let mut last_code_block = None;
         let mut in_fence = false;
         let mut current_block = String::new();
-        
+
         for line in text.lines() {
             if line.trim_start().starts_with("```") {
                 if !in_fence {
@@ -2851,7 +2881,7 @@ impl App {
                 current_block.push('\n');
             }
         }
-        
+
         if let Some(block) = last_code_block {
             // Trim trailing newline and set as ghost
             let ghost = block.trim_end().to_string();
@@ -3055,8 +3085,13 @@ impl App {
                         if let Some(entry) = self.entries.get(sel.end.0) {
                             if let Some(cached) = &entry.cache {
                                 if sel.end.1 < cached.lines.len() {
-                                    let line_text: String = cached.lines[sel.end.1].spans.iter().map(|s| s.content.as_ref()).collect();
-                                    self.selection.as_mut().unwrap().end.2 = line_text.chars().count();
+                                    let line_text: String = cached.lines[sel.end.1]
+                                        .spans
+                                        .iter()
+                                        .map(|s| s.content.as_ref())
+                                        .collect();
+                                    self.selection.as_mut().unwrap().end.2 =
+                                        line_text.chars().count();
                                     self.mark_dirty();
                                 }
                             }
@@ -3112,18 +3147,8 @@ impl App {
                 }
             }
 
-            // Transcript actions: y = yank/copy, > = quote into composer
-            KeyCode::Char('y') => {
-                if let Some(sel) = &self.selection {
-                    if sel.mode.is_some() {
-                        self.copy_visual_selection();
-                    } else {
-                        self.copy_selection();
-                    }
-                } else {
-                    self.copy_selection();
-                }
-            }
+            // Transcript actions: y = yank/copy (only in visual mode), > = quote into composer
+            // In visual mode, 'y' copies selection. In composer, 'y' types normally.
             KeyCode::Char('>') => self.quote_last_assistant(),
 
             // Tab accepts inline completion (ghost text from last assistant code block)
@@ -3137,6 +3162,15 @@ impl App {
             KeyCode::Char(c) => {
                 if ctrl || alt {
                     return;
+                }
+                // Handle 'y' in transcript mode (visual selection copy)
+                if c == 'y' && !self.composer_focused() {
+                    if let Some(sel) = &self.selection {
+                        if sel.mode.is_some() {
+                            self.copy_visual_selection();
+                        }
+                        return;
+                    }
                 }
                 self.composer.insert(c);
             }
@@ -3483,7 +3517,7 @@ impl App {
     /// Handle mouse events: scroll wheel and right-click text selection
     pub fn on_mouse(&mut self, event: crossterm::event::MouseEvent) {
         use crossterm::event::MouseEventKind;
-        
+
         // Handle scroll wheel first
         match event.kind {
             MouseEventKind::ScrollUp => {
@@ -3496,31 +3530,34 @@ impl App {
             }
             _ => {}
         }
-        
+
         // Handle right-click text selection in chat area
         self.handle_chat_mouse(event);
     }
-    
+
     /// Handle mouse events in the chat area for text selection
     fn handle_chat_mouse(&mut self, event: crossterm::event::MouseEvent) {
-        use crossterm::event::{MouseEventKind, MouseButton};
-        
-        let Some(chat_rect) = self.view.cached_chat_rect() else { return };
-        
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        let Some(chat_rect) = self.view.cached_chat_rect() else {
+            return;
+        };
+
         // Convert mouse position to chat-relative coordinates
         let col = event.column.saturating_sub(chat_rect.x) as usize;
         let row = event.row.saturating_sub(chat_rect.y) as usize;
-        
+
         // Width of chat content area (accounting for gutter and scrollbar)
         let content_width = chat_rect.width.saturating_sub(1) as usize;
         let inner_width = content_width.saturating_sub(chat::GUTTER).max(8);
-        
+
         // Find which entry and position the mouse is over
-        let (entry_idx, entry_row, entry_col) = match self.mouse_to_text_position(row, col, inner_width) {
-            Some(pos) => pos,
-            None => return,
-        };
-        
+        let (entry_idx, entry_row, entry_col) =
+            match self.mouse_to_text_position(row, col, inner_width) {
+                Some(pos) => pos,
+                None => return,
+            };
+
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 // Start left-click selection (like opencode)
@@ -3567,16 +3604,21 @@ impl App {
             _ => {}
         }
     }
-    
+
     /// Convert mouse row/col to entry index, row within entry, and column
-    fn mouse_to_text_position(&self, mouse_row: usize, mouse_col: usize, _inner_width: usize) -> Option<(usize, usize, usize)> {
+    fn mouse_to_text_position(
+        &self,
+        mouse_row: usize,
+        mouse_col: usize,
+        _inner_width: usize,
+    ) -> Option<(usize, usize, usize)> {
         if self.entries.is_empty() || mouse_row >= self.view.content_height as usize {
             return None;
         }
-        
+
         let (top, _) = self.view.window();
         let virtual_row = top as usize + mouse_row;
-        
+
         // Walk through entries to find which one contains this virtual row
         let mut current_row = 0usize;
         for (idx, entry) in self.entries.iter().enumerate() {
@@ -3585,67 +3627,110 @@ impl App {
                 // Found the entry
                 let local_row = virtual_row - current_row;
                 let status_rows = entry.status_rows() as usize;
-                
+
                 if local_row < status_rows {
                     // In status line - skip
                     return None;
                 }
-                
+
                 let body_row = local_row - status_rows;
                 let cached = entry.cache.as_ref()?;
                 if body_row >= cached.lines.len() {
                     return None;
                 }
-                
+
                 // Calculate column from mouse position
                 // Account for gutter (2 chars) and prompt marker (2 chars for user)
                 let gutter = chat::GUTTER;
                 let col = mouse_col.saturating_sub(gutter);
-                
-                return Some((idx, body_row, col.min(cached.lines[body_row].spans.iter().map(|s| s.content.chars().count()).sum::<usize>())));
+
+                return Some((
+                    idx,
+                    body_row,
+                    col.min(
+                        cached.lines[body_row]
+                            .spans
+                            .iter()
+                            .map(|s| s.content.chars().count())
+                            .sum::<usize>(),
+                    ),
+                ));
             }
             current_row += entry_h;
         }
-        
+
         None
     }
-    
+
     /// Extract selected text from the transcript
     fn get_selected_text(&self, sel: &Selection) -> String {
         let (start_entry, start_row, start_col) = sel.start;
         let (end_entry, end_row, end_col) = sel.end;
-        
+
         // Ensure start is before end
-        let (start_entry, start_row, start_col, end_entry, end_row, end_col) = 
+        let (start_entry, start_row, start_col, end_entry, end_row, end_col) =
             if (start_entry, start_row, start_col) <= (end_entry, end_row, end_col) {
-                (start_entry, start_row, start_col, end_entry, end_row, end_col)
+                (
+                    start_entry,
+                    start_row,
+                    start_col,
+                    end_entry,
+                    end_row,
+                    end_col,
+                )
             } else {
-                (end_entry, end_row, end_col, start_entry, start_row, start_col)
+                (
+                    end_entry,
+                    end_row,
+                    end_col,
+                    start_entry,
+                    start_row,
+                    start_col,
+                )
             };
-        
+
         let mut result = String::new();
-        
+
         for entry_idx in start_entry..=end_entry.min(self.entries.len().saturating_sub(1)) {
             let entry = &self.entries[entry_idx];
             let cached = match &entry.cache {
                 Some(c) => c,
                 None => continue,
             };
-            
-            let row_start = if entry_idx == start_entry { start_row } else { 0 };
-            let row_end = if entry_idx == end_entry { end_row.min(cached.lines.len().saturating_sub(1)) } else { cached.lines.len().saturating_sub(1) };
-            
+
+            let row_start = if entry_idx == start_entry {
+                start_row
+            } else {
+                0
+            };
+            let row_end = if entry_idx == end_entry {
+                end_row.min(cached.lines.len().saturating_sub(1))
+            } else {
+                cached.lines.len().saturating_sub(1)
+            };
+
             for row_idx in row_start..=row_end {
-                if row_idx >= cached.lines.len() { continue; }
+                if row_idx >= cached.lines.len() {
+                    continue;
+                }
                 let line = &cached.lines[row_idx];
                 let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-                
-                let col_start = if entry_idx == start_entry && row_idx == start_row { start_col } else { 0 };
-                let col_end = if entry_idx == end_entry && row_idx == end_row { end_col.min(line_text.chars().count()) } else { line_text.chars().count() };
-                
+
+                let col_start = if entry_idx == start_entry && row_idx == start_row {
+                    start_col
+                } else {
+                    0
+                };
+                let col_end = if entry_idx == end_entry && row_idx == end_row {
+                    end_col.min(line_text.chars().count())
+                } else {
+                    line_text.chars().count()
+                };
+
                 if col_start < line_text.chars().count() {
                     let chars: Vec<char> = line_text.chars().collect();
-                    let selected: String = chars[col_start..col_end.min(chars.len())].iter().collect();
+                    let selected: String =
+                        chars[col_start..col_end.min(chars.len())].iter().collect();
                     result.push_str(&selected);
                     if row_idx < row_end || entry_idx < end_entry {
                         result.push('\n');
@@ -3653,7 +3738,7 @@ impl App {
                 }
             }
         }
-        
+
         result
     }
 }

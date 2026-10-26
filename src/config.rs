@@ -240,7 +240,11 @@ fn preset_for_url(url: &str) -> Option<&'static ProviderPreset> {
 pub fn model_context_limit(model: &str) -> usize {
     let m = model.to_ascii_lowercase();
     // OpenAI
-    if m.contains("gpt-5.4") || m.contains("gpt-5.5") || m.contains("gpt-5.6") || m.contains("gpt-6") {
+    if m.contains("gpt-5.4")
+        || m.contains("gpt-5.5")
+        || m.contains("gpt-5.6")
+        || m.contains("gpt-6")
+    {
         return 1_050_000; // ~1.05M
     }
     if m.contains("gpt-5") {
@@ -262,7 +266,14 @@ pub fn model_context_limit(model: &str) -> usize {
         return 16_384;
     }
     // Anthropic
-    if m.contains("claude-5") || m.contains("claude-4") || m.contains("claude-opus-4") || m.contains("claude-sonnet-4") || m.contains("claude-haiku-4") || m.contains("claude-fable") || m.contains("claude-mythos") {
+    if m.contains("claude-5")
+        || m.contains("claude-4")
+        || m.contains("claude-opus-4")
+        || m.contains("claude-sonnet-4")
+        || m.contains("claude-haiku-4")
+        || m.contains("claude-fable")
+        || m.contains("claude-mythos")
+    {
         return 1_000_000;
     }
     if m.contains("claude-3.5-sonnet") || m.contains("claude-3.7-sonnet") {
@@ -294,7 +305,13 @@ pub fn model_context_limit(model: &str) -> usize {
         return 1_000_000;
     }
     // xAI
-    if m.contains("grok-4.7") || m.contains("grok-4.6") || m.contains("grok-4.5") || m.contains("grok-4.3") || m.contains("grok-4.2") || m.contains("grok-4.1") {
+    if m.contains("grok-4.7")
+        || m.contains("grok-4.6")
+        || m.contains("grok-4.5")
+        || m.contains("grok-4.3")
+        || m.contains("grok-4.2")
+        || m.contains("grok-4.1")
+    {
         return 1_000_000;
     }
     if m.contains("grok-4") {
@@ -353,13 +370,23 @@ pub fn model_context_limit(model: &str) -> usize {
         return 32_768;
     }
     // Qwen
-    if m.contains("qwen3.8-max") || m.contains("qwen3.7-max") || m.contains("qwen3.8-plus") || m.contains("qwen3.7-plus") {
+    if m.contains("qwen3.8-max")
+        || m.contains("qwen3.7-max")
+        || m.contains("qwen3.8-plus")
+        || m.contains("qwen3.7-plus")
+    {
         return 1_000_000;
     }
     if m.contains("qwen3-max") || m.contains("qwen3.5-max") || m.contains("qwen3.6-max") {
         return 262_144; // 256K
     }
-    if m.contains("qwen3-coder") || m.contains("qwen3-next") || m.contains("qwen3.6") || m.contains("qwen3.8") || m.contains("qwen3.5") || m.contains("qwen3") {
+    if m.contains("qwen3-coder")
+        || m.contains("qwen3-next")
+        || m.contains("qwen3.6")
+        || m.contains("qwen3.8")
+        || m.contains("qwen3.5")
+        || m.contains("qwen3")
+    {
         return 262_144; // 256K native (some extensible to 1M via YaRN)
     }
     if m.contains("qwen-2.5") || m.contains("qwen-2") {
@@ -1242,7 +1269,10 @@ mod tests {
         assert_eq!(model_context_limit("grok-3"), 128_000);
 
         // NVIDIA Nemotron
-        assert_eq!(model_context_limit("nvidia/nemotron-3-ultra-550b-a55b"), 1_000_000);
+        assert_eq!(
+            model_context_limit("nvidia/nemotron-3-ultra-550b-a55b"),
+            1_000_000
+        );
         assert_eq!(model_context_limit("nemotron-3-ultra"), 1_000_000);
 
         // DeepSeek

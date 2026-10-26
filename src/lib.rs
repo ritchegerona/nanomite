@@ -19,3 +19,7 @@ pub mod memory;
 pub mod session;
 pub mod tools;
 pub mod ui;
+
+/// Test support utilities - re-exports internal test types for integration tests.
+#[cfg(test)]
+pub mod test_support;
