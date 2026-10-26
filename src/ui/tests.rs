@@ -1197,7 +1197,7 @@ async fn tools_overlay_lists_all_tools_and_toggles() {
         Some(OverlayKind::Tools)
     ));
 
-    let text = frame_text(&mut app, 100, 40);
+    let text = frame_text(&mut app, 100, 80);
     assert!(text.contains("tools"), "overlay title missing:\n{text}");
     for spec in crate::tools::ToolSet::catalog() {
         assert!(

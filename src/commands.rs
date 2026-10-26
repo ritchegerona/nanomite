@@ -33,6 +33,7 @@ pub enum Command {
     ImproveFromBoard,
     Prev,
     Next,
+    Policy,
 }
 
 pub struct Entry {
@@ -207,6 +208,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "stage the board's chair synthesis as an improve proposal",
         kind: Command::ImproveFromBoard,
+    },
+    Entry {
+        command: "/policy",
+        aliases: &["/mode"],
+        hint: "cycle tool policy: auto · plan · readonly",
+        kind: Command::Policy,
     },
 ];
 

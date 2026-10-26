@@ -1061,6 +1061,10 @@ pub fn tools(frame: &mut Frame, area: Rect, app: &App) {
                         crate::tools::catalog::ToolCategory::Memory => "memory",
                         crate::tools::catalog::ToolCategory::Document => "document",
                         crate::tools::catalog::ToolCategory::SelfImprove => "self-improve",
+                        crate::tools::catalog::ToolCategory::Git => "git",
+                        crate::tools::catalog::ToolCategory::Test => "test",
+                        crate::tools::catalog::ToolCategory::Index => "index",
+                        crate::tools::catalog::ToolCategory::Plan => "plan",
                     }
                 ),
                 Style::default()
@@ -1645,7 +1649,7 @@ pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
         OverlayKind::Providers => (72, 22),
         OverlayKind::Connect => (70, 10),
         OverlayKind::Help => (76, 40),
-        OverlayKind::Tools => (76, 32),
+        OverlayKind::Tools => (76, 48),
         OverlayKind::Board => (84, 40),
         OverlayKind::Memory => (76, 40),
         OverlayKind::Improve => (80, 34),

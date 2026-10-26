@@ -1,3 +1,4 @@
+use crate::agent::policy::ToolPolicy;
 use crate::agent::provider::{
     AgentProvider, ChatMessage, DynError, Role, StreamEvent, ToolCall, ToolCallAccumulator, Usage,
 };
@@ -7,10 +8,23 @@ use crate::tools::exec_tools::{RunCommandArgs, SshRunArgs};
 use crate::tools::file_tools::{
     EditFileArgs, ListFilesArgs, ReadFileArgs, SearchArgs, WriteFileArgs,
 };
+use crate::tools::git_tools::{
+    GitBranchArgs, GitBranchResult, GitCommitArgs, GitCommitResult, GitDiffArgs, GitDiffResult,
+    GitLogArgs, GitLogResult, GitStatusArgs, GitStatusResult,
+};
+use crate::tools::index_tools::{
+    FindReferencesArgs, FindReferencesResult, FindSymbolArgs, FindSymbolResult, IndexSymbolsArgs,
+    IndexSymbolsResult,
+};
 use crate::tools::memory_tools::{
     MemoryDeleteArgs, MemoryGetArgs, MemoryListArgs, MemorySaveArgs, MemorySearchArgs,
     MemoryUpdateArgs,
 };
+use crate::tools::plan_tools::{
+    CreatePlanArgs, CreatePlanResult, CreateTaskArgs, DeletePlanArgs, DeletePlanResult,
+    GetPlanArgs, GetPlanResult, ListPlansResult, PlanSummary, UpdateTaskArgs, UpdateTaskResult,
+};
+use crate::tools::test_tools::{RunTestsArgs, RunTestsResult};
 use crate::tools::web_tools::{WebFetchArgs, WebSearchArgs};
 use crate::tools::ToolSet;
 use serde_json::json;
@@ -130,6 +144,9 @@ pub struct AgentRuntime {
     /// filtered out of the schema list and refused at dispatch, so a
     /// hallucinated call to a disabled tool can never run.
     disabled_tools: Arc<Vec<String>>,
+    /// Central tool authorization policy: controls which risk classes are
+    /// permitted (Auto / Plan / Readonly). Defaults to Auto.
+    tool_policy: ToolPolicy,
 }
 
 impl AgentRuntime {
@@ -162,6 +179,7 @@ impl AgentRuntime {
             ),
             max_file_bytes,
             disabled_tools: Arc::new(Vec::new()),
+            tool_policy: ToolPolicy::default(),
         }
     }
 
@@ -247,6 +265,13 @@ impl AgentRuntime {
             (*self.tools_schema).clone(),
             &self.disabled_tools,
         ));
+        self
+    }
+
+    /// Sets the tool authorization policy (Auto / Plan / Readonly).
+    /// This controls which risk classes of tools the agent may invoke.
+    pub fn with_tool_policy(mut self, policy: ToolPolicy) -> Self {
+        self.tool_policy = policy;
         self
     }
 
@@ -841,6 +866,233 @@ pub(crate) fn run_tool(
             let payload = serde_json::to_string(&result).unwrap_or_default();
             Ok((payload, summary))
         }
+        "git_status" => {
+            let parsed: GitStatusArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad git_status arguments: {e}"))?;
+            let path = parsed.path.clone().unwrap_or_else(|| ".".to_string());
+            let result = tools
+                .git
+                .status(parsed)
+                .map_err(|e| format!("git_status failed: {e}"))?;
+            let summary = format!(
+                "{} · branch:{} {}↑{}↓ · {} staged {} unstaged {} untracked",
+                shorten(&path, 48),
+                shorten(&result.branch, 20),
+                result.ahead,
+                result.behind,
+                result.staged.len(),
+                result.unstaged.len(),
+                result.untracked.len()
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "git_diff" => {
+            let parsed: GitDiffArgs =
+                serde_json::from_value(args).map_err(|e| format!("bad git_diff arguments: {e}"))?;
+            let path = parsed.path.clone().unwrap_or_else(|| ".".to_string());
+            let staged = parsed.staged;
+            let include_untracked = parsed.include_untracked;
+            let result = tools
+                .git
+                .diff(parsed)
+                .map_err(|e| format!("git_diff failed: {e}"))?;
+            let summary = format!(
+                "{} · {} {}{}",
+                shorten(&path, 48),
+                if result.truncated { "(truncated) " } else { "" },
+                if staged { "staged" } else { "working" },
+                if include_untracked { "+untracked" } else { "" }
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "git_log" => {
+            let parsed: GitLogArgs =
+                serde_json::from_value(args).map_err(|e| format!("bad git_log arguments: {e}"))?;
+            let path = parsed.path.clone().unwrap_or_else(|| ".".to_string());
+            let limit = parsed.limit;
+            let show_diff = parsed.show_diff;
+            let result = tools
+                .git
+                .log(parsed)
+                .map_err(|e| format!("git_log failed: {e}"))?;
+            let summary = format!(
+                "{} · {} commit(s)",
+                shorten(&path, 48),
+                result.commits.len()
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "git_commit" => {
+            let parsed: GitCommitArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad git_commit arguments: {e}"))?;
+            let msg = parsed.message.clone();
+            let result = tools
+                .git
+                .commit(parsed)
+                .map_err(|e| format!("git_commit failed: {e}"))?;
+            let summary = format!(
+                "{} · {}",
+                shorten(&result.short_hash, 10),
+                shorten(&msg, 40)
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "git_branch" => {
+            let parsed: GitBranchArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad git_branch arguments: {e}"))?;
+            let result = tools
+                .git
+                .branch(parsed)
+                .map_err(|e| format!("git_branch failed: {e}"))?;
+            let summary = format!(
+                "{} · {} branch(es) · current: {}",
+                result.action,
+                result.branches.len(),
+                shorten(&result.current, 20)
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "run_tests" => {
+            let parsed: RunTestsArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad run_tests arguments: {e}"))?;
+            let runner = parsed.runner.clone();
+            let result = tools
+                .test
+                .run_tests(parsed)
+                .map_err(|e| format!("run_tests failed: {e}"))?;
+            let summary = format!(
+                "{} · {} · {} passed / {} failed / {} skipped · {}ms",
+                runner,
+                if result.timed_out { "timeout" } else { "done" },
+                result.summary.passed,
+                result.summary.failed,
+                result.summary.skipped,
+                result.duration_ms
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "index_symbols" => {
+            let parsed: IndexSymbolsArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad index_symbols arguments: {e}"))?;
+            let result = tools
+                .index
+                .index_symbols(parsed)
+                .map_err(|e| format!("index_symbols failed: {e}"))?;
+            let summary = format!(
+                "indexed: {} symbols · {} langs · {}ms",
+                result.symbols_count,
+                result.languages.len(),
+                result.duration_ms
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "find_symbol" => {
+            let parsed: FindSymbolArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad find_symbol arguments: {e}"))?;
+            let result = tools
+                .index
+                .find_symbol(parsed)
+                .map_err(|e| format!("find_symbol failed: {e}"))?;
+            let summary = format!(
+                "{} matches · {}{}",
+                result.matches.len(),
+                if result.truncated { "(truncated) " } else { "" },
+                result.query
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "find_references" => {
+            let parsed: FindReferencesArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad find_references arguments: {e}"))?;
+            let result = tools
+                .index
+                .find_references(parsed)
+                .map_err(|e| format!("find_references failed: {e}"))?;
+            let summary = format!(
+                "{} refs · {}{}",
+                result.references.len(),
+                if result.truncated { "(truncated) " } else { "" },
+                result.symbol
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "create_plan" => {
+            let parsed: CreatePlanArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad create_plan arguments: {e}"))?;
+            let result = tools
+                .plan
+                .create_plan(parsed)
+                .map_err(|e| format!("create_plan failed: {e}"))?;
+            let summary = format!("{} · {} tasks", result.plan.name, result.plan.tasks.len());
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "get_plan" => {
+            let parsed: GetPlanArgs =
+                serde_json::from_value(args).map_err(|e| format!("bad get_plan arguments: {e}"))?;
+            let result = tools
+                .plan
+                .get_plan(parsed)
+                .map_err(|e| format!("get_plan failed: {e}"))?;
+            let summary = if let Some(p) = &result.plan {
+                format!(
+                    "{} · {} tasks · {}/{} done",
+                    p.name,
+                    p.tasks.len(),
+                    p.tasks
+                        .iter()
+                        .filter(|t| t.status == crate::tools::plan_tools::TaskStatus::Done)
+                        .count(),
+                    p.tasks.len()
+                )
+            } else if !result.plans.is_empty() {
+                format!("{} plans available", result.plans.len())
+            } else {
+                "no plans found".to_string()
+            };
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "update_task" => {
+            let parsed: UpdateTaskArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad update_task arguments: {e}"))?;
+            let result = tools
+                .plan
+                .update_task(parsed)
+                .map_err(|e| format!("update_task failed: {e}"))?;
+            let summary = format!("task {} · {}", result.task.id, result.task.status.as_str());
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "list_plans" => {
+            let result = tools
+                .plan
+                .list_plans()
+                .map_err(|e| format!("list_plans failed: {e}"))?;
+            let summary = format!("{} plans", result.plans.len());
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "delete_plan" => {
+            let parsed: DeletePlanArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad delete_plan arguments: {e}"))?;
+            let result = tools
+                .plan
+                .delete_plan(parsed)
+                .map_err(|e| format!("delete_plan failed: {e}"))?;
+            let summary = format!("plan deleted: {}", result.deleted);
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
         other => Err(format!("unknown tool `{other}`")),
     }
 }
@@ -1011,6 +1263,65 @@ fn preview_args(call: &ToolCall) -> Option<String> {
                 PREVIEW_MAX_LINES,
                 PREVIEW_MAX_CHARS,
             ))
+        }
+        "run_tests" => {
+            let runner = args.get("runner").and_then(|v| v.as_str())?;
+            if runner.trim().is_empty() {
+                return None;
+            }
+            Some(shorten(&format!("run_tests ({runner})"), 120))
+        }
+        "index_symbols" => {
+            let force = args
+                .get("force_rebuild")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            Some(if force {
+                "force rebuild".to_string()
+            } else {
+                "incremental".to_string()
+            })
+        }
+        "find_symbol" => {
+            let query = args.get("query").and_then(|v| v.as_str())?;
+            if query.trim().is_empty() {
+                return None;
+            }
+            Some(shorten(query, 120))
+        }
+        "find_references" => {
+            let symbol = args.get("symbol").and_then(|v| v.as_str())?;
+            if symbol.trim().is_empty() {
+                return None;
+            }
+            Some(shorten(symbol, 120))
+        }
+        "create_plan" => {
+            let name = args.get("name").and_then(|v| v.as_str())?;
+            if name.trim().is_empty() {
+                return None;
+            }
+            Some(shorten(&format!("create_plan: {name}"), 120))
+        }
+        "get_plan" => {
+            let name = args.get("name").and_then(|v| v.as_str());
+            Some(if let Some(n) = name {
+                format!("get_plan: {n}")
+            } else {
+                "get_plan (latest)".to_string()
+            })
+        }
+        "update_task" => {
+            let task_id = args.get("task_id").and_then(|v| v.as_u64())?;
+            let status = args.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            Some(shorten(
+                &format!("update_task: #{task_id} -> {status}"),
+                120,
+            ))
+        }
+        "delete_plan" => {
+            let name = args.get("name").and_then(|v| v.as_str())?;
+            Some(shorten(&format!("delete_plan: {name}"), 120))
         }
         _ => None,
     }
@@ -1384,7 +1695,7 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        assert_eq!(filter_disabled_schemas(schemas, &[]).len(), 10);
+        assert_eq!(filter_disabled_schemas(schemas, &[]).len(), 24);
     }
 
     #[test]

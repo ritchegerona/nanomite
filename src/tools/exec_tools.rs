@@ -10,9 +10,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// Largest stdout/stderr payload returned to the model (chars, not bytes).
-const MAX_OUTPUT: usize = 16 * 1024;
+pub(crate) const MAX_OUTPUT: usize = 16 * 1024;
 /// Wall-clock ceiling for one command.
-const MAX_TIMEOUT_MS: u64 = 120_000;
+pub(crate) const MAX_TIMEOUT_MS: u64 = 120_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunCommandArgs {
@@ -160,7 +160,8 @@ impl ExecTools {
 }
 
 /// Spawns `cmd`, drains both pipes on helper threads, polls for exit, kills on timeout.
-fn run_with_timeout(
+/// Shared with the git tools, which run `git` directly instead of through a shell.
+pub(crate) fn run_with_timeout(
     cmd: &mut Command,
     what: &str,
     timeout: Duration,

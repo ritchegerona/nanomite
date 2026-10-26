@@ -29,9 +29,9 @@ impl Risk {
     pub fn of(name: &str) -> Risk {
         match name.trim() {
             "run_command" | "ssh_run" | "memory_delete" => Risk::External,
-            "write_file" | "edit_file" | "memory_save" | "memory_update" | "propose_self_edit" => {
-                Risk::Write
-            }
+            "write_file" | "edit_file" | "memory_save" | "memory_update" | "propose_self_edit"
+            | "git_commit" | "git_branch" | "index_symbols" | "create_plan" | "update_task"
+            | "delete_plan" => Risk::Write,
             _ => Risk::Safe,
         }
     }
@@ -135,6 +135,22 @@ mod tests {
         assert_eq!(Risk::of("run_command"), Risk::External);
         assert_eq!(Risk::of("ssh_run"), Risk::External);
         assert_eq!(Risk::of("memory_delete"), Risk::External);
+        // Git: inspection is safe, history mutation is a write.
+        assert_eq!(Risk::of("git_status"), Risk::Safe);
+        assert_eq!(Risk::of("git_diff"), Risk::Safe);
+        assert_eq!(Risk::of("git_log"), Risk::Safe);
+        assert_eq!(Risk::of("git_commit"), Risk::Write);
+        assert_eq!(Risk::of("git_branch"), Risk::Write);
+        // Index: building writes cache, searching is safe.
+        assert_eq!(Risk::of("index_symbols"), Risk::Write);
+        assert_eq!(Risk::of("find_symbol"), Risk::Safe);
+        assert_eq!(Risk::of("find_references"), Risk::Safe);
+        // Plan: reads are safe, mutations are writes.
+        assert_eq!(Risk::of("create_plan"), Risk::Write);
+        assert_eq!(Risk::of("get_plan"), Risk::Safe);
+        assert_eq!(Risk::of("update_task"), Risk::Write);
+        assert_eq!(Risk::of("list_plans"), Risk::Safe);
+        assert_eq!(Risk::of("delete_plan"), Risk::Write);
         // Unknown names are safe, not blocked.
         assert_eq!(Risk::of("some_future_tool"), Risk::Safe);
     }

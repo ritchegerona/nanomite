@@ -1132,6 +1132,8 @@ impl App {
         // at startup: the schemas the model sees and the dispatch filter both
         // honor them.
         .with_disabled_tools(cfg.disabled_tools.clone())
+        // Tool authorization policy (auto/plan/readonly).
+        .with_tool_policy(cfg.tool_policy)
     }
 
     fn rebuild_runtime(&mut self) -> Result<(), String> {
@@ -1433,6 +1435,7 @@ impl App {
             Command::ImproveFromBoard => {
                 let _ = self.stage_board_proposal();
             }
+            Command::Policy => self.cycle_tool_policy(),
             Command::Thinking => {
                 self.show_thinking = !self.show_thinking;
                 self.toast(format!(
@@ -2552,6 +2555,19 @@ impl App {
         self.cfg.reasoning = next;
         self.cfg.save();
         self.toast(format!("reasoning: {}", next.label()));
+        self.mark_dirty();
+    }
+
+    pub fn cycle_tool_policy(&mut self) {
+        let next = self.cfg.tool_policy.next();
+        self.cfg.tool_policy = next;
+        self.cfg.save();
+        // Rebuild runtime so the new policy takes effect immediately.
+        if let Err(err) = self.rebuild_runtime() {
+            self.toast(format!("policy cycle failed: {err}"));
+        } else {
+            self.toast(format!("tool policy: {}", next.label()));
+        }
         self.mark_dirty();
     }
 

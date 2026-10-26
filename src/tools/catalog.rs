@@ -18,6 +18,10 @@ pub enum ToolCategory {
     Memory,
     Document,
     SelfImprove,
+    Git,
+    Test,
+    Index,
+    Plan,
 }
 
 /// One tool in the inventory: stable name, one-line description.
@@ -33,7 +37,9 @@ impl ToolSet {
     /// `read_document`. Names are unique and match the schema list exactly
     /// (enforced by tests).
     pub fn catalog() -> Vec<ToolSpec> {
-        use ToolCategory::{Document, Exec, Files, Memory, SelfImprove, Web};
+        use ToolCategory::{
+            Document, Exec, Files, Git, Index, Memory, Plan, SelfImprove, Test, Web,
+        };
         vec![
             ToolSpec {
                 name: "list_files",
@@ -125,6 +131,76 @@ impl ToolSet {
                 description: "List self-edit proposals still waiting for the user's decision.",
                 category: SelfImprove,
             },
+            ToolSpec {
+                name: "git_status",
+                description: "Show git status: branch, ahead/behind, staged/unstaged/untracked files.",
+                category: Git,
+            },
+            ToolSpec {
+                name: "git_diff",
+                description: "Show git diff of working tree or staged changes (optionally for a specific path).",
+                category: Git,
+            },
+            ToolSpec {
+                name: "git_log",
+                description: "Show recent git commit history (with optional diffs).",
+                category: Git,
+            },
+            ToolSpec {
+                name: "git_commit",
+                description: "Create a git commit with the given message, optionally staging specific files.",
+                category: Git,
+            },
+            ToolSpec {
+                name: "git_branch",
+                description: "List, create, or delete git branches.",
+                category: Git,
+            },
+            ToolSpec {
+                name: "run_tests",
+                description: "Run project tests (cargo, npm, pytest, jest, go, custom) and return structured results.",
+                category: Test,
+            },
+            ToolSpec {
+                name: "index_symbols",
+                description: "Build or rebuild the project symbol index for fast code navigation.",
+                category: Index,
+            },
+            ToolSpec {
+                name: "find_symbol",
+                description: "Search the symbol index for definitions matching a pattern.",
+                category: Index,
+            },
+            ToolSpec {
+                name: "find_references",
+                description: "Find all references to a symbol across the project.",
+                category: Index,
+            },
+            ToolSpec {
+                name: "create_plan",
+                description: "Create a new task plan with structured tasks, dependencies, and tags.",
+                category: Plan,
+            },
+            ToolSpec {
+                name: "get_plan",
+                description: "Retrieve a plan by name, or the most recently updated plan.",
+                category: Plan,
+            },
+            ToolSpec {
+                name: "update_task",
+                description: "Update a task's status, description, dependencies, or tags.",
+                category: Plan,
+            },
+            ToolSpec {
+                name: "list_plans",
+                description: "List all saved plans with completion summaries.",
+                category: Plan,
+            },
+            ToolSpec {
+                name: "delete_plan",
+                description: "Delete a plan by name (requires confirmation).",
+                category: Plan,
+            },
         ]
     }
 }
@@ -144,7 +220,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate tool names in catalog");
-        assert_eq!(count, 18, "expected the full 18-tool inventory");
+        assert_eq!(count, 32, "expected the full 32-tool inventory");
     }
 
     /// Catalog and schemas must stay in step: the exact name set the model

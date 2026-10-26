@@ -2,6 +2,7 @@
 // and never exists in the shipped binary. Production always talks to a real
 // OpenAI-compatible endpoint.
 pub mod openai;
+pub mod policy;
 pub mod provider;
 pub mod runtime;
 pub mod swarm;

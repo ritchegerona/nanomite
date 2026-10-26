@@ -494,6 +494,9 @@ pub struct Config {
     /// from the provider's schema list and refused at dispatch. Persisted as
     /// a comma-separated list; `NANOMITE_DISABLED_TOOLS` overrides the file.
     pub disabled_tools: Vec<String>,
+    /// Central tool authorization policy: auto (default) / plan / readonly.
+    /// Persisted as a single keyword; `NANOMITE_TOOL_POLICY` overrides the file.
+    pub tool_policy: crate::agent::policy::ToolPolicy,
     /// Token budget used for the context gauge in the status bar.
     pub context_limit: usize,
     pub max_steps: usize,
@@ -525,6 +528,7 @@ struct Stored {
     reasoning: Option<String>,
     theme: Option<String>,
     disabled_tools: Option<String>,
+    tool_policy: Option<String>,
     prompt_file: Option<String>,
     reduced_motion: Option<bool>,
 }
@@ -552,6 +556,7 @@ fn parse_stored(text: &str) -> Stored {
             "reasoning" => stored.reasoning = Some(value),
             "theme" => stored.theme = Some(value),
             "disabled_tools" => stored.disabled_tools = Some(value),
+            "tool_policy" => stored.tool_policy = Some(value),
             "prompt_file" => stored.prompt_file = Some(value),
             "reduced_motion" => stored.reduced_motion = value.parse().ok(),
             _ => {}
@@ -630,6 +635,9 @@ fn stored_text(cfg: &Config) -> String {
             "disabled_tools = {}",
             quote(&cfg.disabled_tools.join(","))
         ));
+    }
+    if cfg.tool_policy != crate::agent::policy::ToolPolicy::default() {
+        lines.push(format!("tool_policy = {}", quote(cfg.tool_policy.as_str())));
     }
     if let Some(path) = &cfg.prompt_file {
         lines.push(format!(
@@ -818,6 +826,17 @@ impl Config {
             parse_disabled_tools(&raw)
         };
 
+        let tool_policy = {
+            let raw = if use_env {
+                first_env_one("NANOMITE_TOOL_POLICY")
+            } else {
+                None
+            }
+            .or_else(|| stored.tool_policy.clone())
+            .unwrap_or_default();
+            crate::agent::policy::ToolPolicy::parse(&raw).unwrap_or_default()
+        };
+
         // Custom prompt file: the environment wins over the persisted path, and the
         // default location is always resolved so callers can report it.
         let prompt_file = (if use_env {
@@ -839,6 +858,7 @@ impl Config {
             reasoning,
             theme,
             disabled_tools,
+            tool_policy,
             context_limit: {
                 let raw = if use_env {
                     num_env("NANOMITE_CONTEXT_LIMIT", 200_000)

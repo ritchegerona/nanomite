@@ -523,6 +523,191 @@ pub fn tool_schemas() -> Vec<Tool> {
                 "additionalProperties": false
             }),
         ),
+        Tool::new(
+            "git_status",
+            "Show git status: current branch, ahead/behind counts, staged, unstaged and untracked files.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Workspace-relative path to a file or directory (defaults to workspace root)" }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "git_diff",
+            "Show git diff of working tree or staged changes, optionally for a specific path.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Workspace-relative file or directory to diff (defaults to all changes)" },
+                    "staged": { "type": "boolean", "description": "Show staged (index) changes instead of working tree (default: false)" },
+                    "include_untracked": { "type": "boolean", "description": "Include untracked files as new content (default: false)" }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "git_log",
+            "Show recent git commit history with optional diffs.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "description": "Number of commits to show (default 20, max 200)" },
+                    "path": { "type": "string", "description": "Optional path to limit history to" },
+                    "show_diff": { "type": "boolean", "description": "Include full diff per commit (default: false)" }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "git_commit",
+            "Create a git commit with the given message, optionally staging specific files first.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string", "description": "Commit message" },
+                    "files": { "type": "array", "items": { "type": "string" }, "description": "Files to stage before commit (defaults to all tracked changes)" },
+                    "allow_empty": { "type": "boolean", "description": "Allow empty commit (default: false)" }
+                },
+                "required": ["message"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "git_branch",
+            "List, create, or delete git branches.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Name of the new branch (omit to list all branches)" },
+                    "start_point": { "type": "string", "description": "Starting commit-ish (defaults to HEAD)" },
+                    "delete": { "type": "boolean", "description": "Delete the branch instead of creating (default: false)" },
+                    "force": { "type": "boolean", "description": "Force delete (required if branch has unmerged changes, default: false)" }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "run_tests",
+            "Run project tests using cargo, npm, pytest, jest, go test, or a custom command. Returns structured pass/fail results with per-test details.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "runner": { "type": "string", "description": "Test runner: cargo, npm, pytest, jest, go, or custom" },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Additional arguments for the runner" },
+                    "cwd": { "type": "string", "description": "Workspace-relative working directory (defaults to workspace root)" },
+                    "timeout_ms": { "type": "integer", "description": "Hard cap in milliseconds (max 300000, default 120000)" },
+                    "command": { "type": "string", "description": "For custom runner: full command line to execute" }
+                },
+                "required": ["runner"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "index_symbols",
+            "Build or rebuild the project symbol index for fast code navigation. Uses ctags when available, falls back to regex-based indexing.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "force_rebuild": { "type": "boolean", "description": "Force rebuild the index (default: false, uses cached index)" },
+                    "languages": { "type": "array", "items": { "type": "string" }, "description": "Specific languages to index (default: all detected)" }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "find_symbol",
+            "Search the symbol index for definitions matching a pattern. Supports wildcards (*) and filters by kind/language.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Symbol name or pattern to search for (supports * wildcard)" },
+                    "kind": { "type": "string", "description": "Filter by symbol kind: function, struct, enum, trait, const, mod, etc." },
+                    "language": { "type": "string", "description": "Filter by language" },
+                    "limit": { "type": "integer", "description": "Max results (default 50, max 200)", "default": 50 }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "find_references",
+            "Find all references to a symbol across the project.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "symbol": { "type": "string", "description": "Symbol name to find references for" },
+                    "from_file": { "type": "string", "description": "Optional file to start search from (for context)" },
+                    "limit": { "type": "integer", "description": "Max results (default 50, max 200)", "default": 50 }
+                },
+                "required": ["symbol"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "create_plan",
+            "Create a new task plan with structured tasks, dependencies, and tags. Use this to break down complex work into trackable steps.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Unique plan name" },
+                    "description": { "type": "string", "description": "Plan description" },
+                    "tasks": { "type": "array", "items": { "type": "object", "properties": { "description": { "type": "string" }, "depends_on": { "type": "array", "items": { "type": "integer" } }, "tags": { "type": "array", "items": { "type": "string" } } }, "required": ["description"] } }
+                },
+                "required": ["name", "description", "tasks"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "get_plan",
+            "Retrieve a plan by name, or the most recently updated plan if name is omitted.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Plan name (optional; defaults to most recent)" }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "update_task",
+            "Update a task's status, description, dependencies, or tags.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "integer", "description": "Task ID to update" },
+                    "status": { "type": "string", "description": "New status: pending, in_progress, done, blocked, cancelled" },
+                    "description": { "type": "string", "description": "New description" },
+                    "depends_on": { "type": "array", "items": { "type": "integer" }, "description": "New dependency task IDs" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "New tags" }
+                },
+                "required": ["task_id"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "list_plans",
+            "List all saved plans with completion summaries.",
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "delete_plan",
+            "Delete a plan by name (requires confirmation).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Plan name to delete" },
+                    "confirm": { "type": "boolean", "description": "Must be true to confirm deletion" }
+                },
+                "required": ["name", "confirm"],
+                "additionalProperties": false
+            }),
+        ),
     ]
 }
 
@@ -531,7 +716,7 @@ pub fn system_prompt(workspace: &str) -> String {
         "You are nanomite, a terse terminal coding agent working in {workspace}.\n\
          You have tools: file access (list_files, read_file, write_file, edit_file, search),\n\
          a workspace shell (run_command), SSH to remote hosts (ssh_run) and web access\n\
-         (web_fetch, web_search).\n\
+         (web_fetch, web_search), git (git_status, git_diff, git_log, git_commit, git_branch),\n         and test runner (run_tests), symbol index (index_symbols, find_symbol, find_references), plan (create_plan, get_plan, update_task, list_plans, delete_plan).\n\
          Prefer reading files before answering. Cite paths as `path:line`.\n\
          Keep answers short: no preamble, no restating the request."
     )
