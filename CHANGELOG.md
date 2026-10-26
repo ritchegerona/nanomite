@@ -91,7 +91,35 @@ never listed as released.
   telemetry, self-update and the evolution lifecycle remain future work — see
   `docs/FEATURES.md`.
 
-## [Unreleased]
+## [0.3.0] — 2026-10-26
+
+### Added
+
+- **Prompt Queue**: Messages sent while the agent is busy are now queued (FIFO) and displayed in a visible panel between the chat transcript and the composer. Shows count, first queued message, and "N more" indicator. Toast notifications: "queued (1 pending)" / "queued (N pending)". Automatic processing after each turn completes.
+- **OpenCode-style Chat UI**: Complete visual overhaul with message bubbles, role badges (YOU/AI), timestamps, tool pills with status indicators, mini-diff chips for edit_file, streaming cursor (▍), and full markdown rendering.
+- **Welcome Screen**: Centered bordered card with logo, model/provider/workspace info, and keyboard hints.
+- **Thinking Indicator**: Spinner + "thinking" + elapsed time + step/tool counters + token count.
+- **Modular App Architecture**: Split `app.rs` into focused submodules (`entry`, `picker`, `overlays`, `engine`, `actions`, `commands`, `session`, `provider`, `board`, `tools`, `improve`, `memory`, `input`, `visual`, `history`, `composer`).
+- **Integration Tests**: 7 new tests covering ToolSet file/exec operations, session persistence, memory engine, config loading, and document extraction.
+- **CI Pipeline**: GitHub Actions workflow with test, clippy, fmt, bench (nightly), cargo-deny, cargo-audit, docs, and release jobs.
+- **Security Updates**: Updated tokio 1.54.1, rustls 0.23.46, rustls-webpki 0.103.16 for CVE fixes.
+
+### Changed
+
+- **`y` Key Behavior**: Types normally in composer; copies selection only in visual mode (v/V); no-op in transcript normal mode (prevents accidental clipboard copies).
+- **ESC Key**: Interrupts agent during streaming, tool execution, and board convene; closes overlays; clears composer.
+- **Virtualization**: Fixed estimated height calculation to account for role badges and timestamps.
+- **Dependency**: Added `chrono` for timestamp formatting.
+
+### Fixed
+
+- **Release Binary**: Built with `cargo build --release` (optimized, stripped, LTO).
+- **All Quality Gates**: 383 tests pass (375 unit + 7 integration + 1 production); clippy clean; fmt clean; cargo-deny clean; cargo-audit clean.
+
+### Known Limitations
+
+- `ttf-parser` (transitive via `lopdf` → `pdf-extract`) is unmaintained (RUSTSEC-2026-0192). Monitored for migration to `skrifa`.
+
 
 ### Added
 
