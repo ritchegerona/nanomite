@@ -776,7 +776,7 @@ impl Config {
             .and_then(|label| {
                 crate::ui::theme::ThemeId::from_label(&label).map(|id| id.label().to_string())
             })
-            .unwrap_or_else(|| crate::ui::theme::ThemeId::Mono.label().to_string());
+            .unwrap_or_else(|| crate::ui::theme::ThemeId::Umbrella.label().to_string());
 
         // Disabled tools: environment wins over the file, same as every other
         // persisted setting.

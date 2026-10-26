@@ -7,8 +7,10 @@ shell, SSH and the web.
 Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
 
 ```
- ⬡ nanomite                                                model · medium
- ──────────────────────────────────────────────────────────────────────────
+ ╔══════════════════════════════════════════════════════════════════════════════╗
+ ║ █ NANOMITE    🧠 [██████░░] 42.3k/128.0k · 33%                               ║
+ ║ ────────────────────────────────────────────────────────────────────────── ║
+ ╚═════════════════════════════════════════════════════════════════════════════╝
  › list the files in src and read Cargo.toml
 
    ✓ list_files  src · 6 files + 3 dirs
@@ -25,11 +27,14 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
 
  ▏ let mut app = App::new(cfg, handle)?;
  ▏
- · ready                          640 [██░░░░░░░░] 3% ctx
+═══════════════════════════════════════════════════════════════════════════════
+ ↑ 2.1k  ↓ 800  ·  ready
 ──────────────────────────────────────────────────────────────────────────
  ❯ ask anything - / opens the command menu
    enter send · ctrl+j newline · / commands
 ```
+
+**Umbrella theme** (default) — blood-red accent on near-black
 
 ---
 

@@ -68,6 +68,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     (top, _) = view.window();
     let bottom = top + view_h;
 
+    // Check if we have an active selection
+    let selection = app.selection.clone();
+    
     // 2. Walk the virtual rows that intersect the viewport.
     let mut row = top;
     let mut idx = 0usize;
@@ -115,7 +118,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
                     None => Some(Line::default()),
                 }
             };
-            batch.push(line.unwrap_or_default());
+            
+            // Apply selection highlighting if this line is within the selection
+            if let Some(line) = line {
+                if let Some(ref sel) = selection {
+                    batch.push(apply_selection_highlight(line, idx, local - status_rows, status_rows, sel, &theme));
+                } else {
+                    batch.push(line);
+                }
+            } else {
+                batch.push(Line::default());
+            }
             row += 1;
         }
 
@@ -156,6 +169,107 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
             &mut state,
         );
     }
+}
+
+/// Apply selection highlighting to a line if it falls within the selection range
+fn apply_selection_highlight(
+    line: Line<'static>,
+    entry_idx: usize,
+    body_row: usize,
+    _status_rows: usize,
+    sel: &crate::app::Selection,
+    theme: &Theme,
+) -> Line<'static> {
+    let (start_entry, start_row, start_col) = sel.start;
+    let (end_entry, end_row, end_col) = sel.end;
+    
+    // Ensure start is before end
+    let (start_entry, start_row, start_col, end_entry, end_row, end_col) = 
+        if (start_entry, start_row, start_col) <= (end_entry, end_row, end_col) {
+            (start_entry, start_row, start_col, end_entry, end_row, end_col)
+        } else {
+            (end_entry, end_row, end_col, start_entry, start_row, start_col)
+        };
+    
+    // Check if this entry is within selection range
+    if entry_idx < start_entry || entry_idx > end_entry {
+        return line;
+    }
+    
+    // For body rows, check if this row is within selection
+    // body_row is already offset by status_rows
+    let is_in_range = if entry_idx == start_entry && entry_idx == end_entry {
+        // Same entry - check row range
+        body_row >= start_row && body_row <= end_row
+    } else if entry_idx == start_entry {
+        body_row >= start_row
+    } else if entry_idx == end_entry {
+        body_row <= end_row
+    } else {
+        true // Middle entry - fully selected
+    };
+    
+    if !is_in_range {
+        return line;
+    }
+    
+    // Apply highlighting to spans within the column range
+    let mut new_spans = Vec::new();
+    let mut current_col = 0usize;
+    
+    for span in line.spans {
+        let span_len = span.content.chars().count();
+        let span_end = current_col + span_len;
+        
+        let sel_start = if entry_idx == start_entry && body_row == start_row { start_col } else { 0 };
+        let sel_end = if entry_idx == end_entry && body_row == end_row { end_col } else { usize::MAX };
+        
+        // Check if this span overlaps with selection
+        if span_end > sel_start && current_col < sel_end {
+            // Split into up to 3 parts: before, selected, after
+            let chars: Vec<char> = span.content.chars().collect();
+            
+            // Before selection
+            if current_col < sel_start {
+                let before_end = (sel_start - current_col).min(chars.len());
+                if before_end > 0 {
+                    let before: String = chars[0..before_end].iter().collect();
+                    new_spans.push(Span::styled(before, span.style));
+                }
+            }
+            
+            // Selected portion
+            let sel_begin = if current_col < sel_start { sel_start - current_col } else { 0 };
+            let sel_finish = if span_end > sel_end { sel_end - current_col } else { span_len };
+            let sel_finish = sel_finish.min(chars.len());
+            
+            if sel_begin < sel_finish && sel_begin < chars.len() {
+                let selected: String = chars[sel_begin..sel_finish].iter().collect();
+                let highlight_style = span.style.bg(theme.accent()).fg(theme.panel_bg());
+                new_spans.push(Span::styled(selected, highlight_style));
+            }
+            
+            // After selection
+            if span_end > sel_end && sel_end < usize::MAX && sel_end > current_col {
+                let after_start = sel_end - current_col;
+                if after_start < chars.len() {
+                    let after: String = chars[after_start..].iter().collect();
+                    new_spans.push(Span::styled(after, span.style));
+                }
+            }
+            
+            // If no overlap, keep as-is
+            if span_end <= sel_start || current_col >= sel_end {
+                new_spans.push(span);
+            }
+        } else {
+            new_spans.push(span);
+        }
+        
+        current_col = span_end;
+    }
+    
+    Line::from(new_spans)
 }
 
 /// Centred placeholder shown until the first prompt is sent.

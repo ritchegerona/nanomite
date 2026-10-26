@@ -45,7 +45,7 @@ async fn main() -> io::Result<()> {
             Some(Ok(event)) = futures_util::StreamExt::next(&mut events) => {
                 match event {
                     Event::Key(key) if key.kind != KeyEventKind::Release => app.on_key(key),
-                    Event::Mouse(m) => app.on_mouse(m.kind),
+                    Event::Mouse(m) => app.on_mouse(m),
                     Event::Resize(_, _) => app.on_resize(),
                     _ => {}
                 }

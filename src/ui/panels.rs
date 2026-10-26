@@ -24,6 +24,10 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
     let mut left = vec![
         Span::styled(glyph::HEX, Style::default().fg(theme.accent())),
         Span::styled(" NANOMITE", Style::default().fg(theme.accent()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!(" [{}]", app.theme.id.label()),
+            Style::default().fg(theme.accent()).add_modifier(Modifier::BOLD),
+        ),
     ];
     let path_budget = width.saturating_sub(24).min(40);
     if path_budget >= 6 {
@@ -32,7 +36,7 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
             format!(" {} ", glyph::CHEVRON),
             Style::default().fg(theme.faint()),
         ));
-        left.push(Span::styled(path, theme.faint_style()));
+        left.push(Span::styled(path, theme.faint_style().add_modifier(Modifier::DIM)));
     }
 
     // Right: spinner/dot · model · reasoning · ctx meter
@@ -74,12 +78,12 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(theme.faint())
             },
         ),
-        Span::styled(model, theme.dim()),
+        Span::styled(model, theme.dim().add_modifier(Modifier::DIM).fg(theme.accent())),
         Span::styled(
             format!(" {} ", glyph::CHEVRON),
             Style::default().fg(theme.faint()),
         ),
-        Span::styled(app.cfg.reasoning.label(), theme.faint_style()),
+        Span::styled(app.cfg.reasoning.label(), theme.faint_style().add_modifier(Modifier::DIM).fg(theme.accent_soft())),
         Span::styled(
             format!(" {} ", glyph::CHEVRON),
             Style::default().fg(theme.faint()),
@@ -172,6 +176,22 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
     if let Some((toast_msg, _)) = &app.toast {
         left.push(Span::styled("  ", theme.faint_style()));
         left.push(Span::styled(toast_msg.clone(), Style::default().fg(theme.warn())));
+    }
+
+    // Visual selection indicator
+    if let Some(sel) = &app.selection {
+        if sel.mode.is_some() {
+            let mode_label = match sel.mode.unwrap() {
+                crate::app::SelectionMode::Char => "VISUAL",
+                crate::app::SelectionMode::Line => "VISUAL LINE",
+                crate::app::SelectionMode::Block => "VISUAL BLOCK",
+            };
+            left.push(Span::styled("  ", theme.faint_style()));
+            left.push(Span::styled(
+                format!("-- {mode_label} --"),
+                Style::default().fg(theme.accent()).add_modifier(Modifier::BOLD),
+            ));
+        }
     }
 
     // Right side: prompt / completion token counts only (context meter moved to header)
@@ -394,9 +414,7 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
         let label = format!("{check} {}", item.label);
         // The label is never squeezed: on a tight row the hint gives up its head
         // (the host) and keeps its tail (the key name) instead.
-        let label_chars = text::width(&label);
-        let avail = inner_w.saturating_sub(3 + label_chars + 2);
-        let hint = text::truncate_head(&item.hint, avail);
+        let hint = text::truncate_head(&item.hint, inner_w.saturating_sub(3 + text::width(&label) + 2));
         let label_w = inner_w.saturating_sub(3 + text::width(&hint));
         let label_style = if selected {
             Style::default().fg(theme.strong())
@@ -405,14 +423,70 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             theme.dim()
         };
+
+        // Highlight query matches in label and hint
+        let highlight_style = Style::default()
+            .fg(theme.accent())
+            .add_modifier(Modifier::BOLD);
+        let label_spans = if query.is_empty() {
+            vec![Span::styled(text::truncate(&label, label_w), label_style)]
+        } else {
+            text::highlight_matches(&label, &query, highlight_style)
+                .into_iter()
+                .map(|mut s| {
+                    s.style = s.style.patch(label_style);
+                    s
+                })
+                .collect()
+        };
+        let hint_spans = if query.is_empty() {
+            vec![Span::styled(hint, theme.faint_style())]
+        } else {
+            text::highlight_matches(&hint, &query, Style::default().fg(theme.accent()))
+        };
+
+        // Build label spans with truncation
+        let mut label_line_spans = Vec::new();
+        let mut current_width = 0;
+        for span in &label_spans {
+            let span_width = text::width(&span.content);
+            if current_width + span_width <= label_w {
+                label_line_spans.push(Span::styled(span.content.clone(), span.style.patch(label_style)));
+                current_width += span_width;
+            } else {
+                // Truncate this span
+                let mut remaining = label_w - current_width;
+                let mut truncated = String::new();
+                for ch in span.content.chars() {
+                    let cw = text::width(&ch.to_string());
+                    if remaining < cw {
+                        break;
+                    }
+                    truncated.push(ch);
+                    remaining -= cw;
+                }
+                if !truncated.is_empty() {
+                    label_line_spans.push(Span::styled(truncated, span.style.patch(label_style)));
+                }
+                break;
+            }
+        }
+        if label_line_spans.is_empty() {
+            label_line_spans.push(Span::styled(String::new(), label_style));
+        }
+
+        // Build hint spans
+        let mut hint_line_spans = Vec::new();
+        for span in &hint_spans {
+            hint_line_spans.push(span.clone());
+        }
+
         lines.push(Line::from(vec![
             Span::styled(format!(" {marker} "), Style::default().fg(theme.accent())),
-            Span::styled(
-                format!("{:<label_w$}", text::truncate(&label, label_w)),
-                label_style,
-            ),
-            Span::styled(hint, theme.faint_style()),
-        ]));
+        ].into_iter()
+        .chain(label_line_spans)
+        .chain(hint_line_spans)
+        .collect::<Vec<_>>()));
     }
 
     let block = Block::bordered()
@@ -686,10 +760,59 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(theme.panel_bg()).bg(theme.accent()),
             )));
         } else {
-            lines.push(Line::from(vec![
-                Span::styled(label, Style::default().fg(theme.muted())),
-                Span::styled(hint, Style::default().fg(theme.faint())),
-            ]));
+            // Highlight query matches in label and hint
+            if !query.is_empty() {
+                let highlight_style = Style::default()
+                    .fg(theme.accent())
+                    .add_modifier(Modifier::BOLD);
+                let label_spans = text::highlight_matches(&label, &query, highlight_style);
+                let hint_spans = text::highlight_matches(&hint, &query, Style::default().fg(theme.accent()));
+
+                let mut label_line_spans = Vec::new();
+                let mut current_width = 0;
+                for span in &label_spans {
+                    let span_width = text::width(&span.content);
+                    if current_width + span_width <= inner_w.saturating_sub(3 + text::width(&hint)) {
+                        label_line_spans.push(Span::styled(span.content.clone(), span.style));
+                        current_width += span_width;
+                    } else {
+                        let mut remaining = inner_w.saturating_sub(3 + text::width(&hint)) - current_width;
+                        let mut truncated = String::new();
+                        for ch in span.content.chars() {
+                            let cw = text::width(&ch.to_string());
+                            if remaining < cw {
+                                break;
+                            }
+                            truncated.push(ch);
+                            remaining -= cw;
+                        }
+                        if !truncated.is_empty() {
+                            label_line_spans.push(Span::styled(truncated, span.style));
+                        }
+                        break;
+                    }
+                }
+                if label_line_spans.is_empty() {
+                    label_line_spans.push(Span::styled(String::new(), Style::default().fg(theme.muted())));
+                }
+
+                let mut hint_line_spans = Vec::new();
+                for span in &hint_spans {
+                    hint_line_spans.push(span.clone());
+                }
+
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default().fg(theme.muted())),
+                ].into_iter()
+                .chain(label_line_spans)
+                .chain(hint_line_spans)
+                .collect::<Vec<_>>()));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(label, Style::default().fg(theme.muted())),
+                    Span::styled(hint, Style::default().fg(theme.faint())),
+                ]));
+            }
         }
     }
 

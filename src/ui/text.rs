@@ -31,6 +31,41 @@ pub fn truncate(s: &str, max: usize) -> String {
     out
 }
 
+/// Highlights all occurrences of `query` in `text` by wrapping matches in a styled span.
+/// Case-insensitive, matches whole words or substrings.
+pub fn highlight_matches(text: &str, query: &str, highlight_style: Style) -> Vec<Span<'static>> {
+    if query.trim().is_empty() {
+        return vec![Span::styled(text.to_string(), Style::default())];
+    }
+
+    let query = query.to_lowercase();
+    let text_lower = text.to_lowercase();
+    let mut spans = Vec::new();
+    let mut last_end = 0;
+
+    while let Some(pos) = text_lower[last_end..].find(&query) {
+        let actual_pos = last_end + pos;
+        if actual_pos > last_end {
+            spans.push(Span::styled(
+                text[last_end..actual_pos].to_string(),
+                Style::default(),
+            ));
+        }
+        let end = actual_pos + query.len();
+        spans.push(Span::styled(
+            text[actual_pos..end].to_string(),
+            highlight_style,
+        ));
+        last_end = end;
+    }
+
+    if last_end < text.len() {
+        spans.push(Span::styled(text[last_end..].to_string(), Style::default()));
+    }
+
+    spans
+}
+
 /// Keeps the tail of a path visible (`src/…/runtime.rs`) when trimming the head.
 pub fn truncate_head(s: &str, max: usize) -> String {
     if width(s) <= max {
@@ -813,5 +848,42 @@ mod tests {
         let out = markdown("| a | b |\n| 1 | 2 |", 40, &st);
         assert_eq!(out.len(), 2, "no rule without a divider row");
         assert!(!out[0].to_string().starts_with('─'));
+    }
+
+    #[test]
+    fn highlight_matches_basic() {
+        let style = Style::default().fg(ratatui::style::Color::Red);
+        let spans = highlight_matches("hello world hello", "hello", style);
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content, "hello");
+        assert_eq!(spans[0].style.fg, Some(ratatui::style::Color::Red));
+        assert_eq!(spans[1].content, " world ");
+        assert_eq!(spans[2].content, "hello");
+        assert_eq!(spans[2].style.fg, Some(ratatui::style::Color::Red));
+    }
+
+    #[test]
+    fn highlight_matches_case_insensitive() {
+        let style = Style::default().fg(ratatui::style::Color::Red);
+        let spans = highlight_matches("Hello WORLD hello", "hello", style);
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content, "Hello");
+        assert_eq!(spans[0].style.fg, Some(ratatui::style::Color::Red));
+        assert_eq!(spans[2].content, "hello");
+        assert_eq!(spans[2].style.fg, Some(ratatui::style::Color::Red));
+    }
+
+    #[test]
+    fn highlight_matches_empty_query() {
+        let spans = highlight_matches("hello world", "", Style::default());
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "hello world");
+    }
+
+    #[test]
+    fn highlight_matches_no_match() {
+        let spans = highlight_matches("hello world", "xyz", Style::default().fg(ratatui::style::Color::Red));
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "hello world");
     }
 }

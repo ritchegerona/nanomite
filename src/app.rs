@@ -14,6 +14,7 @@ use crate::improve::{
 use crate::memory::policy::MemoryPolicy;
 use crate::memory::MemoryEngine;
 use crate::session::{self, StoredSession};
+use crate::ui::chat;
 use crate::ui::composer::Composer;
 use crate::ui::theme::Theme;
 use crate::ui::theme::ThemeId;
@@ -725,6 +726,8 @@ pub struct App {
     quit: bool,
     /// Painted composer text width, synced each frame by `ui::render`.
     pub composer_layout_width: usize,
+    /// Text selection state for chat area
+    pub selection: Option<Selection>,
 }
 
 impl App {
@@ -732,7 +735,7 @@ impl App {
         cfg: Config,
         handle: tokio::runtime::Handle,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let theme = Theme::with_id(ThemeId::from_label(&cfg.theme).unwrap_or(ThemeId::Mono));
+        let theme = Theme::with_id(ThemeId::from_label(&cfg.theme).unwrap_or(ThemeId::Umbrella));
         let cwd = cfg.workspace.clone();
 
         let provider: Arc<dyn crate::agent::provider::AgentProvider> = match cfg.provider {
@@ -819,6 +822,7 @@ impl App {
             quit: false,
             // Pre-first-frame fallback; `ui::render` syncs it to the painted width.
             composer_layout_width: 80,
+            selection: None,
             cfg,
         };
 
@@ -2681,6 +2685,135 @@ impl App {
         self.mark_dirty();
     }
 
+    /// Start visual selection mode (like Vim's v/V)
+    fn start_visual_selection(&mut self, mode: SelectionMode) {
+        // Find the visible entry under the cursor
+        let _top = self.view.scroll_from_bottom;
+        let view_h = self.view.content_height;
+        if self.entries.is_empty() || view_h == 0 {
+            return;
+        }
+        
+        // Use the cached offsets to find which entry is at the top of the viewport
+        let mut entry_idx = 0;
+        let mut found = false;
+        for (i, _entry) in self.entries.iter().enumerate() {
+            let entry_start = self.view.offsets[i];
+            let entry_end = self.view.offsets[i + 1];
+            let entry_h = entry_end.saturating_sub(entry_start);
+            if entry_h > 0 {
+                // This entry has visible content
+                entry_idx = i;
+                found = true;
+                break;
+            }
+        }
+        
+        if !found {
+            return;
+        }
+        
+        // Calculate the row within the entry (0 for line mode, cursor position for char mode)
+        let row_within_entry = match mode {
+            SelectionMode::Line => 0,
+            SelectionMode::Char => 0, // Will be refined
+            SelectionMode::Block => 0,
+        };
+        
+        let (start_col, end_col) = match mode {
+            SelectionMode::Line => (0, usize::MAX), // Full line
+            SelectionMode::Char => (0, 0), // Will expand with cursor movement
+            SelectionMode::Block => (0, 0),
+        };
+        
+        self.selection = Some(Selection {
+            start: (entry_idx, row_within_entry, start_col),
+            end: (entry_idx, row_within_entry, end_col),
+            dragging: false,
+            mode: Some(mode),
+        });
+        self.toast(&format!("Visual {} mode", match mode {
+            SelectionMode::Char => "char",
+            SelectionMode::Line => "line",
+            SelectionMode::Block => "block",
+        }));
+        self.mark_dirty();
+    }
+
+    /// Update visual selection end position based on cursor movement
+    fn update_visual_selection(&mut self, delta_entry: isize, delta_row: isize, delta_col: isize) {
+        if let Some(sel) = &mut self.selection {
+            if sel.mode.is_some() {
+                let (mut entry_idx, mut row, mut col) = sel.end;
+                
+                // Update entry index
+                if delta_entry != 0 {
+                    entry_idx = (entry_idx as isize + delta_entry).clamp(0, self.entries.len().saturating_sub(1) as isize) as usize;
+                }
+                
+                // Update row within entry
+                if delta_row != 0 {
+                    if let Some(entry) = self.entries.get(entry_idx) {
+                        if let Some(cached) = &entry.cache {
+                            let max_row = cached.lines.len().saturating_sub(1);
+                            row = (row as isize + delta_row).clamp(0, max_row as isize) as usize;
+                        }
+                    }
+                }
+                
+                // Update column
+                if delta_col != 0 {
+                    if let Some(entry) = self.entries.get(entry_idx) {
+                        if let Some(cached) = &entry.cache {
+                            if row < cached.lines.len() {
+                                let line_text: String = cached.lines[row].spans.iter().map(|s| s.content.as_ref()).collect();
+                                let max_col = line_text.chars().count();
+                                col = (col as isize + delta_col).clamp(0, max_col as isize) as usize;
+                            }
+                        }
+                    }
+                }
+                
+                sel.end = (entry_idx, row, col);
+                self.mark_dirty();
+            }
+        }
+    }
+
+    /// Exit visual selection mode
+    fn exit_visual_selection(&mut self) {
+        if let Some(sel) = &self.selection {
+            if sel.mode.is_some() {
+                self.selection = None;
+                self.toast("Visual mode exited");
+                self.mark_dirty();
+            }
+        }
+    }
+
+    /// Copy the current visual selection to clipboard
+    fn copy_visual_selection(&mut self) {
+        if let Some(sel) = self.selection.clone() {
+            if sel.mode.is_some() {
+                let text = self.get_selected_text(&sel);
+                if !text.trim().is_empty() {
+                    if self.control_tx.is_none() {
+                        self.toast("clipboard unavailable - no terminal writer");
+                        self.mark_dirty();
+                        return;
+                    }
+                    self.control_send(Control::Copy(text));
+                    self.toast("selection copied to clipboard");
+                    // Exit visual mode after copy
+                    self.selection = None;
+                } else {
+                    self.toast("empty selection");
+                }
+            }
+        }
+        self.mark_dirty();
+    }
+
     /// Extracts the last code block from the most recent assistant message
     /// and sets it as ghost text for inline completion.
     fn update_ghost_text(&mut self) {
@@ -2699,13 +2832,11 @@ impl App {
         let mut last_code_block = None;
         let mut in_fence = false;
         let mut current_block = String::new();
-        let mut fence_lang = String::new();
         
         for line in text.lines() {
-            if let Some(lang) = line.trim_start().strip_prefix("```") {
+            if line.trim_start().starts_with("```") {
                 if !in_fence {
                     in_fence = true;
-                    fence_lang = lang.trim().to_string();
                     current_block.clear();
                 } else {
                     in_fence = false;
@@ -2801,15 +2932,6 @@ impl App {
             // ` (backtick) opens fuzzy history search picker
             KeyCode::Char('`') => self.open_history_picker(),
 
-            KeyCode::Esc => {
-                if self.is_busy() {
-                    self.interrupt();
-                } else if !self.composer.is_empty() {
-                    self.composer.clear();
-                    self.mark_dirty();
-                }
-            }
-
             KeyCode::Enter if alt => self.composer.newline(),
             KeyCode::Char('j') if ctrl => self.composer.newline(),
             KeyCode::Enter => self.submit(),
@@ -2822,34 +2944,186 @@ impl App {
             KeyCode::Char('p') if ctrl => self.composer.recall_prev(),
             KeyCode::Char('n') if ctrl => self.composer.recall_next(),
 
+            // Visual selection mode: v = char-wise, V = line-wise (like Vim)
+            KeyCode::Char('v') if !ctrl && !alt => self.start_visual_selection(SelectionMode::Char),
+            KeyCode::Char('v') if ctrl && !alt => self.start_visual_selection(SelectionMode::Block),
+            KeyCode::Char('v') if !ctrl && alt => self.start_visual_selection(SelectionMode::Char), // alt+v
+            KeyCode::Char('V') if !ctrl && !alt => self.start_visual_selection(SelectionMode::Line),
+
+            // Visual selection cursor movement
+            KeyCode::Up => {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        self.update_visual_selection(0, -1, 0);
+                    } else {
+                        self.composer_or_scroll(key, -1);
+                    }
+                } else {
+                    self.composer_or_scroll(key, -1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        self.update_visual_selection(0, 1, 0);
+                    } else {
+                        self.composer_or_scroll(key, 1);
+                    }
+                } else {
+                    self.composer_or_scroll(key, 1);
+                }
+            }
             KeyCode::Left => {
-                if ctrl || alt {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        self.update_visual_selection(0, 0, -1);
+                    } else if ctrl || alt {
+                        self.composer.move_word_left();
+                    } else {
+                        self.composer.move_left();
+                    }
+                } else if ctrl || alt {
                     self.composer.move_word_left();
                 } else {
                     self.composer.move_left();
                 }
             }
             KeyCode::Right => {
-                if ctrl || alt {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        self.update_visual_selection(0, 0, 1);
+                    } else if ctrl || alt {
+                        self.composer.move_word_right();
+                    } else {
+                        self.composer.move_right();
+                    }
+                } else if ctrl || alt {
                     self.composer.move_word_right();
                 } else {
                     self.composer.move_right();
                 }
             }
-            KeyCode::Home if !ctrl => self.composer.move_home(),
-            KeyCode::End if !ctrl => self.composer.move_end(),
-            KeyCode::Home => self.view.scroll_to_top(),
-            KeyCode::End => self.scroll_to_end(),
-            KeyCode::Backspace => self.composer.backspace(),
-            KeyCode::Delete => self.composer.delete_forward(),
+            KeyCode::PageUp => {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        self.update_visual_selection(0, -10, 0); // Page up = 10 lines
+                    } else {
+                        self.scroll_page(1);
+                    }
+                } else {
+                    self.scroll_page(1);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        self.update_visual_selection(0, 10, 0); // Page down = 10 lines
+                    } else {
+                        self.scroll_page(-1);
+                    }
+                } else {
+                    self.scroll_page(-1);
+                }
+            }
+            KeyCode::Home => {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        // Move to start of line
+                        if let Some(entry) = self.entries.get(sel.end.0) {
+                            if let Some(cached) = &entry.cache {
+                                if sel.end.1 < cached.lines.len() {
+                                    self.selection.as_mut().unwrap().end.2 = 0;
+                                    self.mark_dirty();
+                                }
+                            }
+                        }
+                    } else if ctrl {
+                        self.view.scroll_to_top();
+                    } else {
+                        self.composer.move_home();
+                    }
+                } else if ctrl {
+                    self.view.scroll_to_top();
+                } else {
+                    self.composer.move_home();
+                }
+            }
+            KeyCode::End => {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        // Move to end of line
+                        if let Some(entry) = self.entries.get(sel.end.0) {
+                            if let Some(cached) = &entry.cache {
+                                if sel.end.1 < cached.lines.len() {
+                                    let line_text: String = cached.lines[sel.end.1].spans.iter().map(|s| s.content.as_ref()).collect();
+                                    self.selection.as_mut().unwrap().end.2 = line_text.chars().count();
+                                    self.mark_dirty();
+                                }
+                            }
+                        }
+                    } else if ctrl {
+                        self.scroll_to_end();
+                    } else {
+                        self.composer.move_end();
+                    }
+                } else if ctrl {
+                    self.scroll_to_end();
+                } else {
+                    self.composer.move_end();
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        // Exit visual mode on backspace
+                        self.exit_visual_selection();
+                    } else {
+                        self.composer.backspace();
+                    }
+                } else {
+                    self.composer.backspace();
+                }
+            }
+            KeyCode::Delete => {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        // Exit visual mode on delete
+                        self.exit_visual_selection();
+                    } else {
+                        self.composer.delete_forward();
+                    }
+                } else {
+                    self.composer.delete_forward();
+                }
+            }
+            KeyCode::Esc => {
+                if self.is_busy() {
+                    self.interrupt();
+                } else if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        self.exit_visual_selection();
+                    } else if !self.composer.is_empty() {
+                        self.composer.clear();
+                        self.mark_dirty();
+                    }
+                } else if !self.composer.is_empty() {
+                    self.composer.clear();
+                    self.mark_dirty();
+                }
+            }
 
-            KeyCode::Up => self.composer_or_scroll(key, -1),
-            KeyCode::Down => self.composer_or_scroll(key, 1),
-            KeyCode::PageUp => self.scroll_page(1),
-            KeyCode::PageDown => self.scroll_page(-1),
-
-            // Transcript actions: y = yank/copy last assistant message, > = quote into composer
-            KeyCode::Char('y') => self.copy_selection(),
+            // Transcript actions: y = yank/copy, > = quote into composer
+            KeyCode::Char('y') => {
+                if let Some(sel) = &self.selection {
+                    if sel.mode.is_some() {
+                        self.copy_visual_selection();
+                    } else {
+                        self.copy_selection();
+                    }
+                } else {
+                    self.copy_selection();
+                }
+            }
             KeyCode::Char('>') => self.quote_last_assistant(),
 
             // Tab accepts inline completion (ghost text from last assistant code block)
@@ -3179,23 +3453,208 @@ impl App {
             }
         }
     }
+}
 
-    pub fn on_mouse(&mut self, kind: crossterm::event::MouseEventKind) {
+/// Text selection mode for visual selection (like Vim's v/V)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionMode {
+    /// Character-wise selection (v)
+    Char,
+    /// Line-wise selection (V)
+    Line,
+    /// Block-wise selection (Ctrl-v) - not yet implemented
+    Block,
+}
+
+/// Text selection state for chat area
+#[derive(Debug, Clone)]
+pub struct Selection {
+    /// Start position (entry index, row within entry, column)
+    pub start: (usize, usize, usize),
+    /// End position (entry index, row within entry, column)
+    pub end: (usize, usize, usize),
+    /// Whether we're currently dragging (mouse)
+    pub dragging: bool,
+    /// Visual selection mode (keyboard-driven)
+    pub mode: Option<SelectionMode>,
+}
+
+impl App {
+    /// Handle mouse events: scroll wheel and right-click text selection
+    pub fn on_mouse(&mut self, event: crossterm::event::MouseEvent) {
         use crossterm::event::MouseEventKind;
-        match kind {
-            // OpenCode/standard direction: wheel up scrolls toward older
-            // messages, wheel down toward newer (scroll_by(+) moves back
-            // into history; delta 0 pins to the live bottom).
-            MouseEventKind::ScrollUp => self.scroll_by(3),
-            MouseEventKind::ScrollDown => self.scroll_by(-3),
+        
+        // Handle scroll wheel first
+        match event.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_by(3);
+                return;
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_by(-3);
+                return;
+            }
+            _ => {}
+        }
+        
+        // Handle right-click text selection in chat area
+        self.handle_chat_mouse(event);
+    }
+    
+    /// Handle mouse events in the chat area for text selection
+    fn handle_chat_mouse(&mut self, event: crossterm::event::MouseEvent) {
+        use crossterm::event::{MouseEventKind, MouseButton};
+        
+        let Some(chat_rect) = self.view.cached_chat_rect() else { return };
+        
+        // Convert mouse position to chat-relative coordinates
+        let col = event.column.saturating_sub(chat_rect.x) as usize;
+        let row = event.row.saturating_sub(chat_rect.y) as usize;
+        
+        // Width of chat content area (accounting for gutter and scrollbar)
+        let content_width = chat_rect.width.saturating_sub(1) as usize;
+        let inner_width = content_width.saturating_sub(chat::GUTTER).max(8);
+        
+        // Find which entry and position the mouse is over
+        let (entry_idx, entry_row, entry_col) = match self.mouse_to_text_position(row, col, inner_width) {
+            Some(pos) => pos,
+            None => return,
+        };
+        
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Start left-click selection (like opencode)
+                self.selection = Some(Selection {
+                    start: (entry_idx, entry_row, entry_col),
+                    end: (entry_idx, entry_row, entry_col),
+                    dragging: true,
+                    mode: None,
+                });
+                self.mark_dirty();
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                // Start right-click selection (also works)
+                self.selection = Some(Selection {
+                    start: (entry_idx, entry_row, entry_col),
+                    end: (entry_idx, entry_row, entry_col),
+                    dragging: true,
+                    mode: None,
+                });
+                self.mark_dirty();
+            }
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Right) => {
+                // Update selection end for both left and right drag
+                if let Some(sel) = &mut self.selection {
+                    if sel.dragging {
+                        sel.end = (entry_idx, entry_row, entry_col);
+                        self.mark_dirty();
+                    }
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) | MouseEventKind::Up(MouseButton::Right) => {
+                // End selection and copy to clipboard
+                if let Some(sel) = self.selection.take() {
+                    if sel.dragging {
+                        let text = self.get_selected_text(&sel);
+                        if !text.trim().is_empty() {
+                            self.control_send(crate::app::Control::Copy(text));
+                            self.toast("selection copied to clipboard");
+                        }
+                    }
+                    self.mark_dirty();
+                }
+            }
             _ => {}
         }
     }
-}
-
-impl View {
-    pub fn viewport_rows(&self) -> u16 {
-        self.cached_chat_height().unwrap_or(10)
+    
+    /// Convert mouse row/col to entry index, row within entry, and column
+    fn mouse_to_text_position(&self, mouse_row: usize, mouse_col: usize, _inner_width: usize) -> Option<(usize, usize, usize)> {
+        if self.entries.is_empty() || mouse_row >= self.view.content_height as usize {
+            return None;
+        }
+        
+        let (top, _) = self.view.window();
+        let virtual_row = top as usize + mouse_row;
+        
+        // Walk through entries to find which one contains this virtual row
+        let mut current_row = 0usize;
+        for (idx, entry) in self.entries.iter().enumerate() {
+            let entry_h = entry.status_rows() as usize + entry.height() as usize + 1; // +1 for separator
+            if virtual_row < current_row + entry_h {
+                // Found the entry
+                let local_row = virtual_row - current_row;
+                let status_rows = entry.status_rows() as usize;
+                
+                if local_row < status_rows {
+                    // In status line - skip
+                    return None;
+                }
+                
+                let body_row = local_row - status_rows;
+                let cached = entry.cache.as_ref()?;
+                if body_row >= cached.lines.len() {
+                    return None;
+                }
+                
+                // Calculate column from mouse position
+                // Account for gutter (2 chars) and prompt marker (2 chars for user)
+                let gutter = chat::GUTTER;
+                let col = mouse_col.saturating_sub(gutter);
+                
+                return Some((idx, body_row, col.min(cached.lines[body_row].spans.iter().map(|s| s.content.chars().count()).sum::<usize>())));
+            }
+            current_row += entry_h;
+        }
+        
+        None
+    }
+    
+    /// Extract selected text from the transcript
+    fn get_selected_text(&self, sel: &Selection) -> String {
+        let (start_entry, start_row, start_col) = sel.start;
+        let (end_entry, end_row, end_col) = sel.end;
+        
+        // Ensure start is before end
+        let (start_entry, start_row, start_col, end_entry, end_row, end_col) = 
+            if (start_entry, start_row, start_col) <= (end_entry, end_row, end_col) {
+                (start_entry, start_row, start_col, end_entry, end_row, end_col)
+            } else {
+                (end_entry, end_row, end_col, start_entry, start_row, start_col)
+            };
+        
+        let mut result = String::new();
+        
+        for entry_idx in start_entry..=end_entry.min(self.entries.len().saturating_sub(1)) {
+            let entry = &self.entries[entry_idx];
+            let cached = match &entry.cache {
+                Some(c) => c,
+                None => continue,
+            };
+            
+            let row_start = if entry_idx == start_entry { start_row } else { 0 };
+            let row_end = if entry_idx == end_entry { end_row.min(cached.lines.len().saturating_sub(1)) } else { cached.lines.len().saturating_sub(1) };
+            
+            for row_idx in row_start..=row_end {
+                if row_idx >= cached.lines.len() { continue; }
+                let line = &cached.lines[row_idx];
+                let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                
+                let col_start = if entry_idx == start_entry && row_idx == start_row { start_col } else { 0 };
+                let col_end = if entry_idx == end_entry && row_idx == end_row { end_col.min(line_text.chars().count()) } else { line_text.chars().count() };
+                
+                if col_start < line_text.chars().count() {
+                    let chars: Vec<char> = line_text.chars().collect();
+                    let selected: String = chars[col_start..col_end.min(chars.len())].iter().collect();
+                    result.push_str(&selected);
+                    if row_idx < row_end || entry_idx < end_entry {
+                        result.push('\n');
+                    }
+                }
+            }
+        }
+        
+        result
     }
 }
 

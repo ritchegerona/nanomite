@@ -36,7 +36,7 @@ pub struct View {
     offsets_dirty: bool,
     offset_width: u16,
     offset_view: u16,
-    layout: Option<(Rect, u16, u16, Rects)>,
+    pub layout: Option<(Rect, u16, u16, Rects)>,
     footer: Option<(String, Line<'static>)>,
 }
 
@@ -63,6 +63,16 @@ impl View {
 
     pub fn cached_chat_height(&self) -> Option<u16> {
         self.layout.map(|(_, _, _, r)| r.chat.height)
+    }
+    
+    /// Get the cached chat area rect for mouse hit testing
+    pub fn cached_chat_rect(&self) -> Option<Rect> {
+        self.layout.map(|(_, _, _, r)| r.chat)
+    }
+    
+    /// Get the viewport row count (chat area height)
+    pub fn viewport_rows(&self) -> u16 {
+        self.cached_chat_height().unwrap_or(10)
     }
 
     pub fn invalidate_layout(&mut self) {
