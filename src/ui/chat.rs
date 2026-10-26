@@ -14,6 +14,18 @@ pub const GUTTER: usize = 2;
 /// Transcripts up to this many entries get measured exactly before drawing.
 pub const WARM_LIMIT: usize = 400;
 
+/// Maximum columns for the tool detail when `/details` is off (compact mode).
+pub const COMPACT_TOOL_DETAIL_WIDTH: usize = 40;
+
+/// Glyphs for compact tool status display.
+pub mod tool_glyph {
+    pub const RUNNING: &str = "◐";
+    pub const SUCCESS: &str = "✓";
+    pub const FAILURE: &str = "✗";
+    pub const DIFF_ADD: &str = "+";
+    pub const DIFF_DEL: &str = "−";
+}
+
 pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     if area.width < 12 || area.height == 0 {
         return;
@@ -253,6 +265,16 @@ fn status_line(entry: &Entry, theme: &Theme, spinner: usize) -> Option<Line<'sta
                     ));
                 }
             }
+            // Streaming token counter
+            if let Some(usage) = &entry.usage {
+                let tokens = usage.completion_tokens.saturating_add(usage.prompt_tokens);
+                if tokens > 0 {
+                    spans.push(Span::styled(
+                        format!("  ▋ {} tok", text::format_tokens(tokens as u64)),
+                        Style::default().fg(theme.accent_soft()),
+                    ));
+                }
+            }
             Some(Line::from(spans))
         }
         Phase::Failed => {
@@ -419,16 +441,43 @@ impl Entry {
                     } else {
                         (glyph::CROSS, Style::default().fg(theme.danger()))
                     };
-                    // `/details` off keeps the row to just the tool name.
-                    let detail = if details {
-                        text::truncate(
+                    // Compact mode: show `name · status · duration` on one line.
+                    // Mini-diff chip for edit_file: `+3 −1` next to tool name.
+                    let (detail, diff_chip) = if details {
+                        let detail = text::truncate(
                             &tool.detail,
                             inner.saturating_sub(tool.name.chars().count() + 6),
-                        )
+                        );
+                        (if detail.is_empty() {
+                            String::new()
+                        } else {
+                            format!("  {detail}")
+                        }, None)
                     } else {
-                        String::new()
+                        // Compact mode: build `name · status · duration`
+                        let mut compact = tool.name.clone();
+                        // Status
+                        let status = if tool.running {
+                            format!("{} running", tool_glyph::RUNNING)
+                        } else if tool.ok {
+                            format!("{} ok", tool_glyph::SUCCESS)
+                        } else {
+                            format!("{} failed", tool_glyph::FAILURE)
+                        };
+                        compact.push_str(&format!(" · {status}"));
+                        // Duration (if available via elapsed in entry)
+                        if let Some(elapsed) = self.elapsed {
+                            compact.push_str(&format!(" · {}", text::format_duration(elapsed)));
+                        }
+                        // Mini-diff chip for edit_file
+                        let diff_chip = if tool.name == "edit_file" {
+                            tool.edit_replacements.map(|r| format!(" {} {}1", tool_glyph::DIFF_ADD, tool_glyph::DIFF_DEL))
+                        } else {
+                            None
+                        };
+                        (compact, diff_chip)
                     };
-                    lines.push(Line::from(vec![
+                    let mut spans = vec![
                         Span::raw("  "),
                         Span::styled(format!("{marker} "), marker_style),
                         Span::styled(
@@ -437,15 +486,19 @@ impl Entry {
                                 .fg(theme.tool())
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(
-                            if detail.is_empty() {
-                                String::new()
-                            } else {
-                                format!("  {detail}")
-                            },
-                            Style::default().fg(theme.faint()),
-                        ),
-                    ]));
+                    ];
+                    if let Some(chip) = diff_chip {
+                        spans.push(Span::styled(chip, Style::default().fg(theme.diff_add())));
+                    }
+                    spans.push(Span::styled(
+                        if detail.is_empty() {
+                            String::new()
+                        } else {
+                            format!("  {detail}")
+                        },
+                        Style::default().fg(theme.faint()),
+                    ));
+                    lines.push(Line::from(spans));
                     // Live preview of what the tool is writing/running
                     // (OpenCode-style): bounded at construction, rendered under
                     // the row while the tool runs. `/details` off collapses it.

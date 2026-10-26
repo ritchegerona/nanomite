@@ -421,6 +421,10 @@ pub mod glyph {
     /// Context-meter cells: filled and empty.
     pub const BLOCK: &str = "█";
     pub const BLOCK_LIGHT: &str = "░";
+    /// Notification bell for the header.
+    pub const BELL: &str = "🔔";
+    /// Brain glyph for context window display.
+    pub const BRAIN: &str = "🧠";
 }
 
 #[cfg(test)]

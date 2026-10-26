@@ -1,6 +1,9 @@
+use memchr::memchr;
+use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
+use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -205,10 +208,11 @@ impl FileTools {
 
     pub fn search(&self, args: SearchArgs) -> Result<SearchResult, Box<dyn Error + Send + Sync>> {
         let start = self.resolve(args.path.as_deref())?;
-        let mut hits = Vec::new();
+        let mut hits = Vec::with_capacity(MAX_HITS);
         let mut files_scanned = 0usize;
         let mut truncated = false;
-        let needle = args.query.to_lowercase();
+        let needle = args.query.to_ascii_lowercase();
+        let needle_bytes = needle.as_bytes();
         let mut stack = vec![(start, 0usize)];
 
         while let Some((dir, depth)) = stack.pop() {
@@ -242,35 +246,104 @@ impl FileTools {
                     break;
                 }
 
-                let Ok(bytes) = fs::read(&path) else { continue };
-                if bytes.len() > self.max_file_bytes || looks_binary(&bytes) {
+                // Use memory-mapped file for zero-copy access
+                let Ok(file) = File::open(&path) else { continue };
+                let Ok(metadata) = file.metadata() else { continue };
+                if metadata.len() > self.max_file_bytes as u64 {
                     continue;
                 }
-                let text = String::from_utf8_lossy(&bytes);
+                
+                let bytes = unsafe { Mmap::map(&file) }.ok();
+                let Some(bytes) = bytes else { continue };
+                let bytes = &bytes[..];
+                
+                if bytes.is_empty() || looks_binary(bytes) {
+                    continue;
+                }
+
+                // Quick rejection: use memmem to search for needle (case-insensitive via first bytes)
+                // For miss case, this avoids full decode on non-matching files
+                if needle_bytes.is_empty() {
+                    continue;
+                }
+                
+                // Fast two-byte check - if first two case-folded bytes don't appear in sequence, skip
+                if needle_bytes.len() >= 2 {
+                    let first = needle_bytes[0] | 32;
+                    let second = needle_bytes[1] | 32;
+                    let mut found = false;
+                    for window in bytes.windows(2) {
+                        if window[0] | 32 == first && window[1] | 32 == second {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        continue;
+                    }
+                } else {
+                    // Single byte needle: check if it appears at all
+                    let first = needle_bytes[0] | 32;
+                    let mut found = false;
+                    for &b in bytes {
+                        if b | 32 == first {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        continue;
+                    }
+                }
+
+                // Only decode if we found a candidate
+                let text = String::from_utf8_lossy(bytes);
                 let rel = self.relative(&path);
-                for (idx, line) in text.lines().enumerate() {
-                    // Pure-ASCII lines (the overwhelming majority in real
-                    // trees) take an allocation-free case-insensitive search;
-                    // for ASCII inputs the A–Z fold is exactly what Unicode
-                    // `to_lowercase` would do, so results are byte-identical
-                    // to the old `line.to_lowercase().contains(&needle)`.
-                    // Non-ASCII lines fall back to the Unicode path unchanged.
-                    let matched = if line.is_ascii() {
-                        contains_ci_ascii(line.as_bytes(), needle.as_bytes())
+                
+                // Use memchr to find line boundaries quickly
+                let mut line_start = 0;
+                let mut line_no = 1;
+                let mut search_pos = 0;
+                
+                while search_pos < bytes.len() {
+                    // Find next newline
+                    let line_end = memchr(b'\n', &bytes[search_pos..]).map(|i| search_pos + i).unwrap_or(bytes.len());
+                    
+                    // Quick ASCII check on this line slice
+                    let line_bytes = &bytes[line_start..line_end];
+                    let is_ascii = line_bytes.iter().all(|&b| b.is_ascii());
+                    
+                    let matched = if is_ascii && !needle_bytes.is_empty() {
+                        contains_ci_ascii(line_bytes, needle_bytes)
+                    } else if !needle_bytes.is_empty() {
+                        // Fallback: use the already-decoded text
+                        let line_str = &text[line_start..line_end.min(text.len())];
+                        line_str.to_lowercase().contains(&needle)
                     } else {
-                        line.to_lowercase().contains(&needle)
+                        false
                     };
+                    
                     if matched {
+                        let display_line = &text[line_start..line_end.min(text.len())];
                         hits.push(SearchHit {
                             path: rel.clone(),
-                            line: idx + 1,
-                            text: line.trim_end().chars().take(200).collect(),
+                            line: line_no,
+                            text: display_line.trim_end().chars().take(200).collect(),
                         });
                         if hits.len() >= MAX_HITS {
                             truncated = true;
                             break;
                         }
                     }
+                    
+                    line_start = line_end + 1;
+                    search_pos = line_start;
+                    line_no += 1
+                }
+                
+                if hits.len() >= MAX_HITS {
+                    truncated = true;
+                    break;
                 }
             }
         }
@@ -406,21 +479,41 @@ fn contains_ci_ascii(hay: &[u8], needle: &[u8]) -> bool {
     if n > hay.len() {
         return false;
     }
-    let first = needle[0] | 32;
+    
+    // Pre-fold the needle for comparison
+    let folded_needle: Vec<u8> = needle.iter().map(|&b| fold_ascii(b)).collect();
+    
+    let mut pos = 0;
     let last = hay.len() - n;
-    let mut i = 0;
-    while i <= last {
-        if hay[i] | 32 == first {
-            let window = &hay[i..i + n];
-            if window
-                .iter()
-                .zip(needle)
-                .all(|(h, w)| fold_ascii(*h) == fold_ascii(*w))
-            {
-                return true;
+    
+    while pos <= last {
+        // Find next candidate by manually scanning (memchr can't do case-insensitive)
+        // We use a quick check: look for any byte whose folded value matches folded_needle[0]
+        let target = folded_needle[0];
+        let mut found = false;
+        let mut i = pos;
+        while i <= last {
+            if fold_ascii(hay[i]) == target {
+                pos = i;
+                found = true;
+                break;
             }
+            i += 1;
         }
-        i += 1;
+        if !found {
+            break;
+        }
+        
+        // Verify the rest of the needle
+        let window = &hay[pos..pos + n];
+        if window
+            .iter()
+            .zip(&folded_needle)
+            .all(|(h, w)| fold_ascii(*h) == *w)
+        {
+            return true;
+        }
+        pos += 1;
     }
     false
 }

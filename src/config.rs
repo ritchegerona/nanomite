@@ -235,6 +235,184 @@ fn preset_for_url(url: &str) -> Option<&'static ProviderPreset> {
         .find(|p| !p.base_url.is_empty() && p.base_url == url)
 }
 
+/// Known model context window sizes (in tokens).
+/// Returns the context limit for a given model name, or a default if unknown.
+pub fn model_context_limit(model: &str) -> usize {
+    let m = model.to_ascii_lowercase();
+    // OpenAI
+    if m.contains("gpt-5.4") || m.contains("gpt-5.5") || m.contains("gpt-5.6") || m.contains("gpt-6") {
+        return 1_050_000; // ~1.05M
+    }
+    if m.contains("gpt-5") {
+        return 400_000; // GPT-5, 5.1, 5.2, 5.3
+    }
+    if m.contains("gpt-4.1") {
+        return 1_047_576; // ~1M
+    }
+    if m.contains("gpt-4o") || m.contains("gpt-4.5") {
+        return 128_000;
+    }
+    if m.contains("gpt-4") {
+        return 128_000;
+    }
+    if m.contains("o1") || m.contains("o3") || m.contains("o4") {
+        return 200_000;
+    }
+    if m.contains("gpt-3.5") {
+        return 16_384;
+    }
+    // Anthropic
+    if m.contains("claude-5") || m.contains("claude-4") || m.contains("claude-opus-4") || m.contains("claude-sonnet-4") || m.contains("claude-haiku-4") || m.contains("claude-fable") || m.contains("claude-mythos") {
+        return 1_000_000;
+    }
+    if m.contains("claude-3.5-sonnet") || m.contains("claude-3.7-sonnet") {
+        return 200_000;
+    }
+    if m.contains("claude-3.5-haiku") || m.contains("claude-3.5-opus") {
+        return 200_000;
+    }
+    if m.contains("claude-3") {
+        return 200_000;
+    }
+    // Google
+    if m.contains("gemini-4") {
+        return 1_048_576; // 1M unified
+    }
+    if m.contains("gemini-3") {
+        return 1_048_576; // 1M
+    }
+    if m.contains("gemini-2.5") {
+        return 1_000_000;
+    }
+    if m.contains("gemini-2.0") {
+        return 2_000_000;
+    }
+    if m.contains("gemini-1.5") {
+        return 2_000_000;
+    }
+    if m.contains("gemini") {
+        return 1_000_000;
+    }
+    // xAI
+    if m.contains("grok-4.7") || m.contains("grok-4.6") || m.contains("grok-4.5") || m.contains("grok-4.3") || m.contains("grok-4.2") || m.contains("grok-4.1") {
+        return 1_000_000;
+    }
+    if m.contains("grok-4") {
+        return 500_000; // grok-4, grok-4-fast
+    }
+    if m.contains("grok-3") {
+        return 128_000;
+    }
+    if m.contains("grok") {
+        return 128_000;
+    }
+    // NVIDIA Nemotron
+    if m.contains("nemotron") {
+        return 1_000_000;
+    }
+    // DeepSeek
+    if m.contains("deepseek-v4") {
+        return 1_000_000;
+    }
+    if m.contains("deepseek-r1") || m.contains("deepseek-v3") {
+        return 128_000;
+    }
+    if m.contains("deepseek") {
+        return 128_000;
+    }
+    // Meta / Llama
+    if m.contains("llama-4-scout") {
+        return 10_000_000; // 10M
+    }
+    if m.contains("llama-4") {
+        return 1_048_576; // 1M
+    }
+    if m.contains("llama-3.3") {
+        return 128_000;
+    }
+    if m.contains("llama-3.2") {
+        return 128_000;
+    }
+    if m.contains("llama-3.1") {
+        return 128_000;
+    }
+    if m.contains("llama-3") {
+        return 8_192;
+    }
+    if m.contains("llama") {
+        return 4_096;
+    }
+    // Mistral
+    if m.contains("mistral-large-4") || m.contains("mistral-large-24") {
+        return 1_000_000;
+    }
+    if m.contains("mistral-large") || m.contains("mistral-medium") || m.contains("mistral-small") {
+        return 256_000; // Mistral Large 3, Medium 3.5, Small 4
+    }
+    if m.contains("mistral") {
+        return 32_768;
+    }
+    // Qwen
+    if m.contains("qwen3.8-max") || m.contains("qwen3.7-max") || m.contains("qwen3.8-plus") || m.contains("qwen3.7-plus") {
+        return 1_000_000;
+    }
+    if m.contains("qwen3-max") || m.contains("qwen3.5-max") || m.contains("qwen3.6-max") {
+        return 262_144; // 256K
+    }
+    if m.contains("qwen3-coder") || m.contains("qwen3-next") || m.contains("qwen3.6") || m.contains("qwen3.8") || m.contains("qwen3.5") || m.contains("qwen3") {
+        return 262_144; // 256K native (some extensible to 1M via YaRN)
+    }
+    if m.contains("qwen-2.5") || m.contains("qwen-2") {
+        return 128_000;
+    }
+    if m.contains("qwen") {
+        return 128_000;
+    }
+    // Yi
+    if m.contains("yi-1.5") || m.contains("yi-") {
+        return 200_000;
+    }
+    // Phi
+    if m.contains("phi-4") {
+        return 128_000;
+    }
+    if m.contains("phi-3.5") || m.contains("phi-3") {
+        return 128_000;
+    }
+    // GLM / Zhipu
+    if m.contains("glm-4") {
+        return 128_000;
+    }
+    // Test/scripted models
+    if m.contains("scripted-model") {
+        return 200_000;
+    }
+    // Generic fallbacks for common patterns
+    if m.contains("32k") || m.contains("32000") {
+        return 32_768;
+    }
+    if m.contains("128k") || m.contains("128000") {
+        return 128_000;
+    }
+    if m.contains("200k") || m.contains("200000") {
+        return 200_000;
+    }
+    if m.contains("256k") || m.contains("256000") || m.contains("262144") {
+        return 262_144;
+    }
+    if m.contains("1m") || m.contains("1000000") || m.contains("1048576") {
+        return 1_000_000;
+    }
+    if m.contains("2m") || m.contains("2000000") || m.contains("2097152") {
+        return 2_000_000;
+    }
+    if m.contains("10m") || m.contains("10000000") || m.contains("10485760") {
+        return 10_000_000;
+    }
+    // Default conservative estimate
+    8_192
+}
+
 /// Reasoning effort forwarded to models that expose the `reasoning_effort` knob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Reasoning {
@@ -295,6 +473,8 @@ pub struct Config {
     pub max_tool_calls: usize,
     pub max_file_bytes: usize,
     pub step_timeout_ms: u64,
+    /// Disable animations (spinners, fades) for reduced-motion preference.
+    pub reduced_motion: bool,
     pub workspace: PathBuf,
     /// Shown once in the transcript when something needs the user's attention.
     pub notice: Option<String>,
@@ -319,6 +499,7 @@ struct Stored {
     theme: Option<String>,
     disabled_tools: Option<String>,
     prompt_file: Option<String>,
+    reduced_motion: Option<bool>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
@@ -345,6 +526,7 @@ fn parse_stored(text: &str) -> Stored {
             "theme" => stored.theme = Some(value),
             "disabled_tools" => stored.disabled_tools = Some(value),
             "prompt_file" => stored.prompt_file = Some(value),
+            "reduced_motion" => stored.reduced_motion = value.parse().ok(),
             _ => {}
         }
     }
@@ -428,6 +610,7 @@ fn stored_text(cfg: &Config) -> String {
             quote(&path.display().to_string())
         ));
     }
+    lines.push(format!("reduced_motion = {}", cfg.reduced_motion));
     lines.push(String::new());
     lines.join("\n")
 }
@@ -661,6 +844,13 @@ impl Config {
             notice,
             store_path,
             prompt_file,
+            reduced_motion: if use_env {
+                first_env_one("NANOMITE_REDUCED_MOTION")
+                    .map(|v| v.parse().unwrap_or(false))
+                    .unwrap_or(false)
+            } else {
+                stored.reduced_motion.unwrap_or(false)
+            },
         }
     }
 
@@ -1003,5 +1193,100 @@ mod tests {
             Some(std::path::PathBuf::from("/tmp/saved-prompt.md"))
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn model_context_limit_returns_known_windows() {
+        // OpenAI
+        assert_eq!(model_context_limit("gpt-5.4"), 1_050_000);
+        assert_eq!(model_context_limit("gpt-5.5"), 1_050_000);
+        assert_eq!(model_context_limit("gpt-5.6"), 1_050_000);
+        assert_eq!(model_context_limit("gpt-6"), 1_050_000);
+        assert_eq!(model_context_limit("gpt-5"), 400_000);
+        assert_eq!(model_context_limit("gpt-5.1"), 400_000);
+        assert_eq!(model_context_limit("gpt-5.2"), 400_000);
+        assert_eq!(model_context_limit("gpt-5.3"), 400_000);
+        assert_eq!(model_context_limit("gpt-4.1"), 1_047_576);
+        assert_eq!(model_context_limit("gpt-4o"), 128_000);
+        assert_eq!(model_context_limit("gpt-4o-mini"), 128_000);
+        assert_eq!(model_context_limit("gpt-4"), 128_000);
+        assert_eq!(model_context_limit("o1-preview"), 200_000);
+        assert_eq!(model_context_limit("o3-mini"), 200_000);
+        assert_eq!(model_context_limit("gpt-3.5-turbo"), 16_384);
+
+        // Anthropic
+        assert_eq!(model_context_limit("claude-5"), 1_000_000);
+        assert_eq!(model_context_limit("claude-4-opus"), 1_000_000);
+        assert_eq!(model_context_limit("claude-4-sonnet"), 1_000_000);
+        assert_eq!(model_context_limit("claude-4-haiku"), 1_000_000);
+        assert_eq!(model_context_limit("claude-fable-5"), 1_000_000);
+        assert_eq!(model_context_limit("claude-mythos-5"), 1_000_000);
+        assert_eq!(model_context_limit("claude-3.5-sonnet"), 200_000);
+        assert_eq!(model_context_limit("claude-3.7-sonnet"), 200_000);
+        assert_eq!(model_context_limit("claude-3-haiku"), 200_000);
+
+        // Google
+        assert_eq!(model_context_limit("gemini-4-argon"), 1_048_576);
+        assert_eq!(model_context_limit("gemini-3-pro"), 1_048_576);
+        assert_eq!(model_context_limit("gemini-2.5-pro"), 1_000_000);
+        assert_eq!(model_context_limit("gemini-2.0-flash"), 2_000_000);
+        assert_eq!(model_context_limit("gemini-1.5-pro"), 2_000_000);
+
+        // xAI
+        assert_eq!(model_context_limit("grok-4.7"), 1_000_000);
+        assert_eq!(model_context_limit("grok-4.6"), 1_000_000);
+        assert_eq!(model_context_limit("grok-4.5"), 1_000_000);
+        assert_eq!(model_context_limit("grok-4.3"), 1_000_000);
+        assert_eq!(model_context_limit("grok-4.2"), 1_000_000);
+        assert_eq!(model_context_limit("grok-4"), 500_000);
+        assert_eq!(model_context_limit("grok-3"), 128_000);
+
+        // NVIDIA Nemotron
+        assert_eq!(model_context_limit("nvidia/nemotron-3-ultra-550b-a55b"), 1_000_000);
+        assert_eq!(model_context_limit("nemotron-3-ultra"), 1_000_000);
+
+        // DeepSeek
+        assert_eq!(model_context_limit("deepseek-v4-pro"), 1_000_000);
+        assert_eq!(model_context_limit("deepseek-r1"), 128_000);
+        assert_eq!(model_context_limit("deepseek-v3"), 128_000);
+
+        // Llama
+        assert_eq!(model_context_limit("llama-4-scout"), 10_000_000);
+        assert_eq!(model_context_limit("llama-4-maverick"), 1_048_576);
+        assert_eq!(model_context_limit("llama-3.3-70b"), 128_000);
+        assert_eq!(model_context_limit("llama-3.2-3b"), 128_000);
+        assert_eq!(model_context_limit("llama-3.1-8b"), 128_000);
+        assert_eq!(model_context_limit("llama-3-8b"), 8_192);
+
+        // Mistral
+        assert_eq!(model_context_limit("mistral-large-4"), 1_000_000);
+        assert_eq!(model_context_limit("mistral-large"), 256_000);
+        assert_eq!(model_context_limit("mistral-medium"), 256_000);
+        assert_eq!(model_context_limit("mistral-small"), 256_000);
+
+        // Qwen
+        assert_eq!(model_context_limit("qwen3.8-max"), 1_000_000);
+        assert_eq!(model_context_limit("qwen3.7-max"), 1_000_000);
+        assert_eq!(model_context_limit("qwen3-max"), 262_144);
+        assert_eq!(model_context_limit("qwen3-coder"), 262_144);
+        assert_eq!(model_context_limit("qwen3.6"), 262_144);
+        assert_eq!(model_context_limit("qwen3.5"), 262_144);
+        assert_eq!(model_context_limit("qwen3"), 262_144);
+        assert_eq!(model_context_limit("qwen-2.5-72b"), 128_000);
+
+        // Test models
+        assert_eq!(model_context_limit("scripted-model"), 200_000);
+
+        // Generic pattern matching
+        assert_eq!(model_context_limit("my-model-32k"), 32_768);
+        assert_eq!(model_context_limit("my-model-128k"), 128_000);
+        assert_eq!(model_context_limit("my-model-200k"), 200_000);
+        assert_eq!(model_context_limit("my-model-256k"), 262_144);
+        assert_eq!(model_context_limit("my-model-1m"), 1_000_000);
+        assert_eq!(model_context_limit("my-model-2m"), 2_000_000);
+        assert_eq!(model_context_limit("my-model-10m"), 10_000_000);
+
+        // Unknown model gets default
+        assert_eq!(model_context_limit("unknown-model-xyz"), 8_192);
     }
 }

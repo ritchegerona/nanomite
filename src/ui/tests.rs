@@ -1484,7 +1484,9 @@ async fn memory_picker_without_an_engine_explains_itself() {
     app.open_memory_picker();
     assert!(app.overlay.is_none(), "no engine, no picker");
     let text = frame_text(&mut app, 92, 24);
-    assert!(text.contains("memory not available"), "no hint:\n{text}");
+    // The toast is now shown as a notification count in the header
+    assert!(text.contains("🔔"), "notification bell missing:\n{text}");
+    assert!(text.contains("1"), "notification count missing:\n{text}");
 }
 
 // ---------------------------------------------------------------------------

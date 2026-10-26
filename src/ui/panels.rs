@@ -6,6 +6,7 @@ use crate::app::{
     PickerItem, PickerValue, CONNECT_FIELDS, IMPROVE_DETAIL_LINES,
 };
 use crate::commands::Command;
+use crate::config::model_context_limit;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -42,11 +43,48 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         glyph::DOT
     };
+
+    // Model context window and current usage
+    let ctx_limit = model_context_limit(&app.cfg.model).max(1);
+    let usage = app.usage.total_tokens as usize;
+    let ctx = usage.min(ctx_limit);
+    let pct = (usage * 100 / ctx_limit).min(999);
+    let ctx_str = text::format_tokens(ctx as u64);
+    let limit_str = text::format_tokens(ctx_limit as u64);
+
+    // Context meter: proportional solid bar (8 cells)
+    let meter_cells = 8usize;
+    let filled = (ctx * meter_cells / ctx_limit).min(meter_cells);
+    let _meter_style = if pct >= 95 {
+        Style::default().fg(theme.danger())
+    } else if pct >= 80 {
+        Style::default().fg(theme.warn())
+    } else {
+        Style::default().fg(theme.border_focus())
+    };
+    let meter = format!(
+        "[{}{}]",
+        glyph::BLOCK.repeat(filled),
+        glyph::BLOCK_LIGHT.repeat(meter_cells - filled)
+    );
+
+    // Add notification count if any
+    let notif_str = if app.notifications > 0 {
+        format!(" {} {}", glyph::BELL, app.notifications)
+    } else {
+        String::new()
+    };
+    let notif_chars = notif_str.chars().count();
+
+    // Calculate budget for model name
+    let ctx_display = format!(" {} {meter} {ctx_str}/{limit_str} · {pct}% ", glyph::BRAIN);
+    let ctx_chars = ctx_display.chars().count();
     let fixed = glyph::DOT.width() + 2 * glyph::CHEVRON.width() + 2;
     let model_budget = width
-        .saturating_sub(fixed + app.cfg.reasoning.label().len() + 2)
+        .saturating_sub(fixed + app.cfg.reasoning.label().len() + ctx_chars + notif_chars + 4)
         .max(8);
     let model = text::truncate_head(&app.model_label(), model_budget);
+
     let right = Line::from(vec![
         Span::styled(
             format!("{mark} "),
@@ -62,6 +100,12 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(theme.faint()),
         ),
         Span::styled(app.cfg.reasoning.label(), theme.faint_style()),
+        Span::styled(
+            format!(" {} ", glyph::CHEVRON),
+            Style::default().fg(theme.faint()),
+        ),
+        Span::styled(ctx_display, theme.faint_style()),
+        Span::styled(notif_str, Style::default().fg(theme.warn())),
     ])
     .right_aligned();
     frame.render_widget(Paragraph::new(right), area);
@@ -90,119 +134,62 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 
     let mut left: Vec<Span<'static>> = Vec::new();
-    match &app.toast {
-        Some((msg, _)) if !msg.is_empty() => {
-            let lower = msg.to_lowercase();
-            let bad = lower.contains("failed")
-                || lower.contains("error")
-                || lower.contains("unknown")
-                || lower.contains("refused");
-            if bad {
-                left.push(Span::styled(
-                    format!("{} ", glyph::CROSS),
-                    Style::default().fg(theme.danger()),
-                ));
-            } else if lower.contains("connected")
-                || lower.contains("saved")
-                || lower.contains("switched")
-                || lower.contains("applied")
-            {
-                left.push(Span::styled(
-                    format!("{} ", glyph::CHECK),
-                    Style::default().fg(theme.success()),
-                ));
-            } else {
-                left.push(Span::styled(
-                    format!("{} ", glyph::DOT),
-                    Style::default().fg(theme.faint()),
-                ));
-            }
-            left.push(Span::styled(msg.clone(), theme.dim()));
-        }
-        _ if app.is_busy() => {
-            let elapsed = app
-                .turn_started
-                .map(|t| text::format_duration(t.elapsed()))
-                .unwrap_or_default();
+    if app.is_busy() {
+        let elapsed = app
+            .turn_started
+            .map(|t| text::format_duration(t.elapsed()))
+            .unwrap_or_default();
+        left.push(Span::styled(
+            format!(
+                "{} ",
+                glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()]
+            ),
+            Style::default().fg(theme.accent()),
+        ));
+        left.push(Span::styled("working", Style::default().fg(theme.muted())));
+        left.push(Span::styled(format!(" {elapsed}"), theme.faint_style()));
+        // Steps and tool calls so far this turn, when there are any.
+        let (steps, tools) = app
+            .active
+            .and_then(|i| app.entries.get(i))
+            .map(|e| (e.steps, e.tools.iter().filter(|t| !t.running).count()))
+            .unwrap_or((0, 0));
+        if steps > 0 || tools > 0 {
             left.push(Span::styled(
-                format!(
-                    "{} ",
-                    glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()]
-                ),
-                Style::default().fg(theme.accent()),
+                format!(" · {steps} step{}", if steps == 1 { "" } else { "s" }),
+                theme.faint_style(),
             ));
-            left.push(Span::styled("working", Style::default().fg(theme.muted())));
-            left.push(Span::styled(format!(" {elapsed}"), theme.faint_style()));
-            // Steps and tool calls so far this turn, when there are any.
-            let (steps, tools) = app
-                .active
-                .and_then(|i| app.entries.get(i))
-                .map(|e| (e.steps, e.tools.iter().filter(|t| !t.running).count()))
-                .unwrap_or((0, 0));
-            if steps > 0 || tools > 0 {
+            if tools > 0 {
                 left.push(Span::styled(
-                    format!(" · {steps} step{}", if steps == 1 { "" } else { "s" }),
+                    format!(" · {tools} tool{}", if tools == 1 { "" } else { "s" }),
                     theme.faint_style(),
                 ));
-                if tools > 0 {
-                    left.push(Span::styled(
-                        format!(" · {tools} tool{}", if tools == 1 { "" } else { "s" }),
-                        theme.faint_style(),
-                    ));
-                }
-            }
-            if app.pending_editor {
-                left.push(Span::styled(" · editor open", theme.faint_style()));
             }
         }
-        _ => {
+        if app.pending_editor {
+            left.push(Span::styled(" · editor open", theme.faint_style()));
+        }
+    } else {
+        left.push(Span::styled(
+            format!("{} ready", glyph::DOT),
+            Style::default().fg(theme.faint()),
+        ));
+        // Quiet one-time note when persistent memory is not attached. It
+        // sits next to "ready" rather than in the toast slot: an absent or
+        // unwritable memory directory is a normal state, not a failure.
+        if let Some(hint) = app.memory_hint().or_else(|| app.prompt_hint()) {
+            left.push(Span::styled(format!("  {hint}"), theme.faint_style()));
+        }
+        if !app.view.follow {
+            // `end` (or clicking the scrollbar's bottom) re-follows the live tail.
             left.push(Span::styled(
-                format!("{} ready", glyph::DOT),
-                Style::default().fg(theme.faint()),
+                format!("  {} scrolled up (end)", glyph::ARROW_UP),
+                Style::default().fg(theme.warn()),
             ));
-            // Quiet one-time note when persistent memory is not attached. It
-            // sits next to "ready" rather than in the toast slot: an absent or
-            // unwritable memory directory is a normal state, not a failure.
-            if let Some(hint) = app.memory_hint().or_else(|| app.prompt_hint()) {
-                left.push(Span::styled(format!("  {hint}"), theme.faint_style()));
-            }
-            if !app.view.follow {
-                // `end` (or clicking the scrollbar's bottom) re-follows the live tail.
-                left.push(Span::styled(
-                    format!("  {} scrolled up (end)", glyph::ARROW_UP),
-                    Style::default().fg(theme.warn()),
-                ));
-            }
         }
     }
 
-    let usage = app.usage.total_tokens as usize;
-    let limit = app.cfg.context_limit.max(1);
-    let ctx = usage.min(limit);
-    let pct = (usage * 100 / limit).min(999);
-    // Context meter: proportional solid bar, amber past 80%, red past 95%.
-    let meter_cells = 10usize;
-    let filled = (ctx * meter_cells / limit).min(meter_cells);
-    let meter_style = if pct >= 95 {
-        Style::default().fg(theme.danger())
-    } else if pct >= 80 {
-        Style::default().fg(theme.warn())
-    } else {
-        Style::default().fg(theme.border_focus())
-    };
-    let meter = format!(
-        "[{}{}] ",
-        glyph::BLOCK.repeat(filled),
-        glyph::BLOCK_LIGHT.repeat(meter_cells - filled)
-    );
-    // A real budget readout: absolute tokens over the limit, so the bar is
-    // never the only signal (and an empty-looking bar still carries numbers).
-    let ctx_tail = format!(
-        "{}/{} · {}%",
-        text::format_tokens(ctx as u64),
-        text::format_tokens(limit as u64),
-        pct
-    );
+    // Right side: prompt / completion token counts only (context meter moved to header)
     let right = Line::from(vec![
         Span::styled(format!("{} ", glyph::ARROW_UP), theme.faint_style()),
         Span::styled(
@@ -215,12 +202,6 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
             text::format_tokens(app.usage.completion_tokens as u64),
             theme.dim(),
         ),
-        Span::styled(
-            format!("  {}", text::format_tokens(ctx as u64)),
-            theme.faint_style(),
-        ),
-        Span::styled(format!(" {meter}"), meter_style),
-        Span::styled(format!(" {ctx_tail}"), theme.faint_style()),
     ])
     .right_aligned();
 
@@ -602,7 +583,7 @@ pub fn connect(frame: &mut Frame, area: Rect, app: &App) {
 /// Cache key for the status strip.
 fn footer_key(app: &App) -> String {
     format!(
-        "{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         app.usage.prompt_tokens,
         app.usage.completion_tokens,
         app.usage.total_tokens,
@@ -610,7 +591,6 @@ fn footer_key(app: &App) -> String {
         app.turn_started
             .map(|t| t.elapsed().as_millis() / 100)
             .unwrap_or(0),
-        app.toast.as_ref().map(|(m, _)| m.as_str()).unwrap_or(""),
     )
 }
 

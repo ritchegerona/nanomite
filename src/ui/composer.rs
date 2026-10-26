@@ -17,6 +17,8 @@ pub struct Composer {
     history: VecDeque<String>,
     history_idx: Option<usize>,
     draft: String,
+    /// Ghost text for inline completions (from last assistant code block).
+    ghost: Option<String>,
 }
 
 impl std::fmt::Debug for Composer {
@@ -42,6 +44,7 @@ impl Composer {
             history: VecDeque::new(),
             history_idx: None,
             draft: String::new(),
+            ghost: None,
         }
     }
 
@@ -51,6 +54,11 @@ impl Composer {
 
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
+    }
+
+    /// Returns a reference to the history for external access (e.g., history picker).
+    pub fn history(&self) -> &VecDeque<String> {
+        &self.history
     }
 
     /// Caret position as a char index.
@@ -203,6 +211,31 @@ impl Composer {
         }
         self.clear();
         Some(value)
+    }
+
+    /// Sets ghost text for inline completion (from last assistant code block).
+    pub fn set_ghost(&mut self, ghost: String) {
+        self.ghost = Some(ghost);
+    }
+
+    /// Clears the ghost text.
+    pub fn clear_ghost(&mut self) {
+        self.ghost = None;
+    }
+
+    /// Returns the ghost text if available.
+    pub fn ghost(&self) -> Option<&str> {
+        self.ghost.as_deref()
+    }
+
+    /// Accepts the ghost text at the cursor position.
+    pub fn accept_ghost(&mut self) -> bool {
+        if let Some(ghost) = self.ghost.take() {
+            self.insert_str(&ghost);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn recall_prev(&mut self) {
@@ -565,7 +598,30 @@ pub fn render(
     // Keep the cursor row visible when the buffer exceeds the box.
     let cursor_row = layout.cursor.0;
     let first = cursor_row.saturating_sub(text_h - 1);
-    let visible: Vec<Line<'static>> = layout.lines.iter().skip(first).cloned().collect();
+    let mut visible: Vec<_> = layout
+        .lines
+        .iter()
+        .skip(first)
+        .map(|l| {
+            Line::from(
+                l.spans
+                    .iter()
+                    .map(|s| Span::styled(s.content.to_string(), s.style))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+
+    // Render ghost text as a faint continuation on the last visible line
+    if let Some(ghost) = app.composer.ghost() {
+        if let Some(last_line) = visible.last_mut() {
+            let ghost_style = Style::default().fg(theme.faint());
+            // Add ghost text as a faint span
+            let ghost_span = Span::styled(ghost, ghost_style);
+            last_line.spans.push(ghost_span);
+        }
+    }
+
     frame.render_widget(
         Paragraph::new(ratatui::text::Text::from(visible)),
         Rect {

@@ -146,6 +146,7 @@ pub enum PickerMode {
     Sessions,
     Themes,
     Memory,
+    History,
 }
 
 /// What a picker row selects.
@@ -157,6 +158,7 @@ pub enum PickerValue {
     Session(std::path::PathBuf),
     Theme(crate::ui::theme::ThemeId),
     Memory(MemoryRow),
+    History(String), // The selected history entry text
 }
 
 /// One `/memory` row: the projection of a stored record the UI needs. Kept
@@ -277,6 +279,7 @@ impl Picker {
             PickerMode::Sessions => "sessions",
             PickerMode::Themes => "themes",
             PickerMode::Memory => "memory entries",
+            PickerMode::History => "history",
         }
     }
 
@@ -287,6 +290,7 @@ impl Picker {
             PickerMode::Sessions => "pick a session to resume",
             PickerMode::Themes => "pick a colour theme",
             PickerMode::Memory => "filter stored memories",
+            PickerMode::History => "search prompt history",
         }
     }
 
@@ -329,6 +333,7 @@ impl Picker {
                                 format!("{} {}", row.title, row.content)
                             }
                             PickerValue::Action(a) => format!("{a:?}"),
+                            PickerValue::History(h) => h.clone(),
                             PickerValue::Command(c) => {
                                 // Aliases stay searchable even though they are not displayed.
                                 let mut v = format!("{c:?}");
@@ -660,6 +665,8 @@ pub struct App {
     pub turn_started: Option<Instant>,
     pub view: View,
     pub toast: Option<(String, Instant)>,
+    /// Number of pending notifications (shown in header).
+    pub notifications: usize,
     /// Toggles behind `/details` and `/thinking`.
     pub show_tool_details: bool,
     pub show_thinking: bool,
@@ -776,6 +783,7 @@ impl App {
             usage: Usage::default(),
             turn_started: None,
             toast: None,
+            notifications: 0,
             show_tool_details: true,
             show_thinking: true,
             pending_editor: false,
@@ -1044,6 +1052,7 @@ impl App {
 
     fn toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), Instant::now()));
+        self.notifications = self.notifications.saturating_add(1);
     }
 
     // -- events -------------------------------------------------------------
@@ -1232,6 +1241,8 @@ impl App {
                 self.note_history_appended();
                 self.trim_history();
                 self.finish_turn();
+                // Update ghost text for inline completion from the completed assistant message
+                self.update_ghost_text();
             }
             AgentEvent::Interrupted => {
                 if let Some(entry) = self.entries.get_mut(index) {
@@ -1297,6 +1308,14 @@ impl App {
         }
     }
 
+    /// Mark all notifications as read (called when user views them).
+    pub fn clear_notifications(&mut self) {
+        if self.notifications > 0 {
+            self.notifications = 0;
+            self.mark_dirty();
+        }
+    }
+
     // -- actions ------------------------------------------------------------
 
     pub fn submit(&mut self) {
@@ -1334,6 +1353,8 @@ impl App {
         let Some(prompt) = self.composer.submit() else {
             return;
         };
+        // Clear ghost text when user submits a new prompt
+        self.composer.clear_ghost();
         if self.is_busy() {
             // One turn at a time: requeue by telling the user instead of dropping text.
             self.composer.insert_str(&prompt);
@@ -2461,6 +2482,10 @@ impl App {
                 self.cfg.save();
                 self.toast(format!("model: {model}"));
             }
+            PickerValue::History(text) => {
+                self.composer.insert_str(&text);
+                self.toast("history entry inserted");
+            }
         }
         self.mark_dirty();
     }
@@ -2485,6 +2510,7 @@ impl App {
         self.active = None;
         self.turn_started = None;
         self.view.scroll_from_bottom = 0;
+        self.composer.clear_ghost();
         if let Some(notice) = self.cfg.notice.clone() {
             self.entries.push(Entry::new(EntryRole::System, notice));
         }
@@ -2501,6 +2527,7 @@ impl App {
     pub fn clear_transcript(&mut self) {
         self.entries.clear();
         self.turn_history.clear();
+        self.composer.clear_ghost();
         if let Some(notice) = self.cfg.notice.clone() {
             self.entries.push(Entry::new(EntryRole::System, notice));
         }
@@ -2596,6 +2623,25 @@ impl App {
         self.mark_dirty();
     }
 
+    /// Opens the fuzzy history search picker.
+    fn open_history_picker(&mut self) {
+        let rows: Vec<PickerItem> = self
+            .composer
+            .history()
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(i, h)| PickerItem {
+                label: h.clone(),
+                hint: format!("{} ago", i + 1),
+                value: PickerValue::History(h.clone()),
+                current: false,
+            })
+            .collect();
+        self.overlay = Some(Overlay::Picker(Picker::new(PickerMode::History, rows)));
+        self.mark_dirty();
+    }
+
     /// `/copy`: hand the last assistant message to the terminal clipboard.
     ///
     /// The transcript tracks no text selection, so the newest assistant reply
@@ -2622,6 +2668,82 @@ impl App {
         self.control_send(Control::Copy(text));
         self.toast("selection copied to clipboard");
         self.mark_dirty();
+    }
+
+    /// Quotes the last assistant message into the composer with `> ` prefix.
+    fn quote_last_assistant(&mut self) {
+        let Some(text) = self
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.role == EntryRole::Assistant && !e.text.trim().is_empty())
+            .map(|e| e.text.trim().to_string())
+        else {
+            self.toast("nothing to quote yet");
+            self.mark_dirty();
+            return;
+        };
+        let quoted = text
+            .lines()
+            .map(|line| format!("> {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.composer.insert_str(&quoted);
+        self.toast("quoted last assistant message");
+        self.mark_dirty();
+    }
+
+    /// Extracts the last code block from the most recent assistant message
+    /// and sets it as ghost text for inline completion.
+    fn update_ghost_text(&mut self) {
+        let Some(text) = self
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.role == EntryRole::Assistant && !e.text.trim().is_empty())
+            .map(|e| e.text.trim().to_string())
+        else {
+            self.composer.clear_ghost();
+            return;
+        };
+        
+        // Find the last fenced code block
+        let mut last_code_block = None;
+        let mut in_fence = false;
+        let mut current_block = String::new();
+        let mut fence_lang = String::new();
+        
+        for line in text.lines() {
+            if let Some(lang) = line.trim_start().strip_prefix("```") {
+                if !in_fence {
+                    in_fence = true;
+                    fence_lang = lang.trim().to_string();
+                    current_block.clear();
+                } else {
+                    in_fence = false;
+                    // Only keep code blocks with substantial content
+                    if current_block.lines().count() > 2 {
+                        last_code_block = Some(current_block.clone());
+                    }
+                    current_block.clear();
+                }
+            } else if in_fence {
+                current_block.push_str(line);
+                current_block.push('\n');
+            }
+        }
+        
+        if let Some(block) = last_code_block {
+            // Trim trailing newline and set as ghost
+            let ghost = block.trim_end().to_string();
+            if !ghost.is_empty() {
+                self.composer.set_ghost(ghost);
+            } else {
+                self.composer.clear_ghost();
+            }
+        } else {
+            self.composer.clear_ghost();
+        }
     }
 
     pub fn close_overlay(&mut self) {
@@ -2688,6 +2810,9 @@ impl App {
             KeyCode::Char('l') if ctrl => self.clear_transcript(),
             KeyCode::Char('r') if ctrl => self.cycle_reasoning(),
 
+            // ` (backtick) opens fuzzy history search picker
+            KeyCode::Char('`') => self.open_history_picker(),
+
             KeyCode::Esc => {
                 if self.is_busy() {
                     self.interrupt();
@@ -2734,6 +2859,18 @@ impl App {
             KeyCode::Down => self.composer_or_scroll(key, 1),
             KeyCode::PageUp => self.scroll_page(1),
             KeyCode::PageDown => self.scroll_page(-1),
+
+            // Transcript actions: y = yank/copy last assistant message, > = quote into composer
+            KeyCode::Char('y') => self.copy_selection(),
+            KeyCode::Char('>') => self.quote_last_assistant(),
+
+            // Tab accepts inline completion (ghost text from last assistant code block)
+            KeyCode::Tab => {
+                if self.composer.accept_ghost() {
+                    self.mark_dirty();
+                    return;
+                }
+            }
 
             KeyCode::Char(c) => {
                 if ctrl || alt {
