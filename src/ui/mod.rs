@@ -20,7 +20,6 @@ const MEMORY_OVERLAY_ROWS: u16 = 28;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rects {
     pub header: Rect,
-    pub rule: Rect,
     pub chat: Rect,
     pub footer: Rect,
     pub composer: Rect,
@@ -166,7 +165,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let rects = app.view.layout(area, composer_rows);
 
     panels::header(frame, rects.header, app);
-    panels::rule(frame, rects.rule, &theme);
     chat::render(frame, rects.chat, app);
     panels::footer(frame, rects.footer, app);
 
@@ -231,7 +229,6 @@ impl View {
         }
         let areas = ratatui::layout::Layout::vertical([
             ratatui::layout::Constraint::Length(1),
-            ratatui::layout::Constraint::Length(1),
             ratatui::layout::Constraint::Min(3),
             ratatui::layout::Constraint::Length(1),
             ratatui::layout::Constraint::Length(composer_rows),
@@ -241,10 +238,9 @@ impl View {
 
         let rects = Rects {
             header: areas[0],
-            rule: areas[1],
-            chat: areas[2],
-            footer: areas[3],
-            composer: areas[4],
+            chat: areas[1],
+            footer: areas[2],
+            composer: areas[3],
         };
         self.layout = Some((area, composer_rows, 0, rects));
         rects

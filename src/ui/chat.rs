@@ -471,7 +471,7 @@ impl Entry {
                         }
                         // Mini-diff chip for edit_file
                         let diff_chip = if tool.name == "edit_file" {
-                            tool.edit_replacements.map(|r| format!(" {} {}1", tool_glyph::DIFF_ADD, tool_glyph::DIFF_DEL))
+                            tool.edit_replacements.map(|_r| format!(" {} {}1", tool_glyph::DIFF_ADD, tool_glyph::DIFF_DEL))
                         } else {
                             None
                         };

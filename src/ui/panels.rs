@@ -9,22 +9,21 @@ use crate::commands::Command;
 use crate::config::model_context_limit;
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Style, Modifier};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-/// One row: brand + workspace on the left, model · effort · status on the right.
-/// The model label is truncated with its tail kept visible (`…/gpt-oss-20b`),
-/// so long ids never push the status off a narrow terminal.
+/// Single-row header: brand · path | model · reasoning · ctx meter
 pub fn header(frame: &mut Frame, area: Rect, app: &App) {
     let theme = &app.theme;
     let width = area.width as usize;
 
+    // Left: brand + workspace
     let mut left = vec![
         Span::styled(glyph::HEX, Style::default().fg(theme.accent())),
-        Span::styled(" nanomite", theme.bold()),
+        Span::styled(" NANOMITE", Style::default().fg(theme.accent()).add_modifier(Modifier::BOLD)),
     ];
     let path_budget = width.saturating_sub(24).min(40);
     if path_budget >= 6 {
@@ -35,16 +34,14 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
         ));
         left.push(Span::styled(path, theme.faint_style()));
     }
-    frame.render_widget(Paragraph::new(Line::from(left)), area);
 
-    // Right side: spinner while a turn runs, a quiet ready dot otherwise.
+    // Right: spinner/dot · model · reasoning · ctx meter
     let mark = if app.is_busy() {
         glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()]
     } else {
         glyph::DOT
     };
 
-    // Model context window and current usage
     let ctx_limit = model_context_limit(&app.cfg.model).max(1);
     let usage = app.usage.total_tokens as usize;
     let ctx = usage.min(ctx_limit);
@@ -52,36 +49,19 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
     let ctx_str = text::format_tokens(ctx as u64);
     let limit_str = text::format_tokens(ctx_limit as u64);
 
-    // Context meter: proportional solid bar (8 cells)
     let meter_cells = 8usize;
     let filled = (ctx * meter_cells / ctx_limit).min(meter_cells);
-    let _meter_style = if pct >= 95 {
-        Style::default().fg(theme.danger())
-    } else if pct >= 80 {
-        Style::default().fg(theme.warn())
-    } else {
-        Style::default().fg(theme.border_focus())
-    };
     let meter = format!(
         "[{}{}]",
         glyph::BLOCK.repeat(filled),
         glyph::BLOCK_LIGHT.repeat(meter_cells - filled)
     );
 
-    // Add notification count if any
-    let notif_str = if app.notifications > 0 {
-        format!(" {} {}", glyph::BELL, app.notifications)
-    } else {
-        String::new()
-    };
-    let notif_chars = notif_str.chars().count();
-
-    // Calculate budget for model name
     let ctx_display = format!(" {} {meter} {ctx_str}/{limit_str} · {pct}% ", glyph::BRAIN);
     let ctx_chars = ctx_display.chars().count();
     let fixed = glyph::DOT.width() + 2 * glyph::CHEVRON.width() + 2;
     let model_budget = width
-        .saturating_sub(fixed + app.cfg.reasoning.label().len() + ctx_chars + notif_chars + 4)
+        .saturating_sub(fixed + app.cfg.reasoning.label().len() + ctx_chars + 4)
         .max(8);
     let model = text::truncate_head(&app.model_label(), model_budget);
 
@@ -105,21 +85,20 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(theme.faint()),
         ),
         Span::styled(ctx_display, theme.faint_style()),
-        Span::styled(notif_str, Style::default().fg(theme.warn())),
     ])
     .right_aligned();
-    frame.render_widget(Paragraph::new(right), area);
+
+    // Combine left and right into one line
+    let mut spans = left;
+    spans.push(Span::raw(" "));
+    spans.extend(right.spans);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Hairline separator under the header.
+/// Hairline separator under the header - removed for compact mode
 pub fn rule(frame: &mut Frame, area: Rect, theme: &Theme) {
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            glyph::RULE.repeat(area.width as usize),
-            Style::default().fg(theme.border()),
-        ))),
-        area,
-    );
+    // Empty - header is now 1 row, no separator needed
+    let _ = (frame, area, theme);
 }
 
 /// Status strip above the composer. Rebuilt only when its inputs change.
@@ -187,6 +166,12 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
                 Style::default().fg(theme.warn()),
             ));
         }
+    }
+
+    // Show toast if present
+    if let Some((toast_msg, _)) = &app.toast {
+        left.push(Span::styled("  ", theme.faint_style()));
+        left.push(Span::styled(toast_msg.clone(), Style::default().fg(theme.warn())));
     }
 
     // Right side: prompt / completion token counts only (context meter moved to header)

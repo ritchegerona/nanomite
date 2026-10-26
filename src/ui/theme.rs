@@ -65,6 +65,30 @@ pub struct Palette {
     pub quote: Rgb,
 }
 
+/// Single-hue high contrast, easy on low-contrast panels.
+const MONO: Palette = Palette {
+    neutral: (0, 0, 0),
+    panel_bg: (24, 24, 24),
+    element_bg: (30, 30, 30),
+    text: (255, 255, 255),
+    strong: (255, 255, 255),
+    muted: (176, 176, 176),
+    faint: (112, 112, 112),
+    border: (72, 72, 72),
+    border_focus: (144, 144, 144),
+    border_subtle: (56, 56, 56),
+    accent: (214, 214, 214),
+    accent_soft: (150, 150, 150),
+    success: (170, 200, 170),
+    danger: (230, 130, 130),
+    warn: (220, 190, 120),
+    diff_add: (170, 200, 170),
+    diff_delete: (230, 130, 130),
+    tool: (168, 168, 168),
+    code: (150, 190, 150),
+    quote: (140, 140, 140),
+};
+
 /// Cool slate ground with a periwinkle accent.
 const MIDNIGHT: Palette = Palette {
     neutral: (0, 0, 0),
@@ -113,30 +137,6 @@ const GRAPHITE: Palette = Palette {
     quote: (130, 145, 165),
 };
 
-/// Single-hue high contrast, easy on low-contrast panels.
-const MONO: Palette = Palette {
-    neutral: (0, 0, 0),
-    panel_bg: (24, 24, 24),
-    element_bg: (30, 30, 30),
-    text: (255, 255, 255),
-    strong: (255, 255, 255),
-    muted: (176, 176, 176),
-    faint: (112, 112, 112),
-    border: (72, 72, 72),
-    border_focus: (144, 144, 144),
-    border_subtle: (56, 56, 56),
-    accent: (214, 214, 214),
-    accent_soft: (150, 150, 150),
-    success: (170, 200, 170),
-    danger: (230, 130, 130),
-    warn: (220, 190, 120),
-    diff_add: (170, 200, 170),
-    diff_delete: (230, 130, 130),
-    tool: (168, 168, 168),
-    code: (150, 190, 150),
-    quote: (140, 140, 140),
-};
-
 /// Resident Evil — Umbrella Corporation: near-black ground, blood-red accent,
 /// clinical white text. The default.
 const UMBRELLA: Palette = Palette {
@@ -162,50 +162,19 @@ const UMBRELLA: Palette = Palette {
     quote: (152, 142, 146),
 };
 
-/// opencode's own default dark palette, transcribed verbatim from the
-/// `opencode` theme shipped in the opencode 1.19.0 binary
-/// (`$schema: opencode.ai/desktop-theme.json`). Field names follow opencode's
-/// token vocabulary: `ink` -> `text`, `primary` -> `accent`,
-/// `text-weak` -> `muted`, and so on.
-const OPENCODE: Palette = Palette {
-    neutral: (10, 10, 10),
-    panel_bg: (20, 20, 20),
-    element_bg: (28, 28, 28),
-    text: (238, 238, 238),
-    strong: (255, 255, 255),
-    muted: (128, 128, 128),
-    faint: (89, 89, 89),
-    border: (45, 45, 45),
-    border_focus: (157, 124, 216),
-    border_subtle: (32, 32, 32),
-    accent: (250, 178, 131),
-    accent_soft: (208, 168, 240),
-    success: (127, 216, 143),
-    danger: (224, 108, 117),
-    warn: (245, 167, 66),
-    diff_add: (184, 219, 135),
-    diff_delete: (226, 106, 117),
-    tool: (86, 182, 194),
-    code: (127, 216, 143),
-    quote: (128, 128, 128),
-};
-
-/// Selectable palettes, mirroring opencode's `/themes`.
+/// Selectable palettes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeId {
     /// Single-hue high contrast, easy on low-contrast panels.
     Mono,
-    /// opencode's own default skin. The NANOMITE default (formerly default).
-    Opencode,
     Midnight,
     Graphite,
     Umbrella,
 }
 
 impl ThemeId {
-    pub const ALL: [ThemeId; 5] = [
+    pub const ALL: [ThemeId; 4] = [
         ThemeId::Mono,
-        ThemeId::Opencode,
         ThemeId::Midnight,
         ThemeId::Graphite,
         ThemeId::Umbrella,
@@ -213,7 +182,6 @@ impl ThemeId {
 
     pub fn label(self) -> &'static str {
         match self {
-            ThemeId::Opencode => "opencode",
             ThemeId::Midnight => "midnight",
             ThemeId::Graphite => "graphite",
             ThemeId::Mono => "mono",
@@ -224,7 +192,6 @@ impl ThemeId {
     /// The colour table behind this theme.
     pub fn palette(self) -> &'static Palette {
         match self {
-            ThemeId::Opencode => &OPENCODE,
             ThemeId::Midnight => &MIDNIGHT,
             ThemeId::Graphite => &GRAPHITE,
             ThemeId::Mono => &MONO,
@@ -255,8 +222,8 @@ impl Theme {
     }
 
     pub fn detect() -> Self {
-        // mono is the NANOMITE default: a single-hue high contrast theme.
-        Self::with_id(ThemeId::Mono)
+        // Umbrella is the NANOMITE default: blood-red accent on near-black.
+        Self::with_id(ThemeId::Umbrella)
     }
 
     /// True when this terminal advertises 24-bit colour. The palettes are
@@ -292,15 +259,10 @@ impl Theme {
     /// Emits the truecolor value on a capable terminal, otherwise the 16-colour
     /// fallback for that role. The fallback belongs to the *role*, not the
     /// palette, so it is passed alongside the RGB triple rather than stored.
-    /// ANSI fallback that differs per palette. Only needed where the opencode
-    /// skin genuinely diverges from the nanomite ones (its accent is gold,
-    /// where every other skin's is red, green, teal or grey).
+    /// ANSI fallback that differs per palette.
     #[inline]
-    fn ansi(&self, default: Color, opencode: Color) -> Color {
-        match self.id {
-            ThemeId::Opencode => opencode,
-            _ => default,
-        }
+    fn ansi(&self, _default: Color, _opencode: Color) -> Color {
+        _default
     }
 
     #[inline]
@@ -421,8 +383,6 @@ pub mod glyph {
     /// Context-meter cells: filled and empty.
     pub const BLOCK: &str = "█";
     pub const BLOCK_LIGHT: &str = "░";
-    /// Notification bell for the header.
-    pub const BELL: &str = "🔔";
     /// Brain glyph for context window display.
     pub const BRAIN: &str = "🧠";
 }
@@ -457,50 +417,24 @@ mod tests {
     }
 
     #[test]
-    fn opencode_palette_matches_the_shipped_theme() {
-        // Pinned against the `opencode` theme extracted from the opencode
-        // 1.19.0 binary. If these drift, the skins have silently diverged.
-        let mut t = Theme::with_id(ThemeId::Opencode);
-        t.depth = ColorDepth::Rgb;
-        let p = t.palette();
-        let rgb = |c: Rgb| Color::Rgb(c.0, c.1, c.2);
-        assert_eq!(p.neutral, (10, 10, 10), "opencode neutral");
-        assert_eq!(p.text, (238, 238, 238), "opencode ink");
-        assert_eq!(p.accent, (250, 178, 131), "opencode primary");
-        assert_eq!(p.accent_soft, (208, 168, 240));
-        assert_eq!(p.success, (127, 216, 143));
-        assert_eq!(p.warn, (245, 167, 66));
-        assert_eq!(p.danger, (224, 108, 117));
-        assert_eq!(p.muted, (128, 128, 128), "opencode text-weak");
-        assert_eq!(p.diff_add, (184, 219, 135));
-        assert_eq!(p.diff_delete, (226, 106, 117));
-
-        // And the accessors must actually surface them.
-        assert_eq!(t.text(), rgb((238, 238, 238)));
-        assert_eq!(t.accent(), rgb((250, 178, 131)));
-        assert_eq!(t.diff_add(), rgb((184, 219, 135)));
-        assert_eq!(t.diff_delete(), rgb((226, 106, 117)));
-    }
-
-    #[test]
-    fn mono_is_the_default_skin() {
-        assert_eq!(Theme::detect().id, ThemeId::Mono);
+    fn umbrella_is_the_default_skin() {
+        assert_eq!(Theme::detect().id, ThemeId::Umbrella);
         assert_eq!(ThemeId::ALL[0], ThemeId::Mono);
         assert_eq!(ThemeId::Mono.label(), "mono");
     }
 
     #[test]
-    fn accent_ansi_fallback_differs_for_opencode() {
-        // opencode's accent is gold; the other skins are red, teal or grey.
-        // Their fallbacks must not all follow opencode's.
-        let mut open = Theme::with_id(ThemeId::Opencode);
-        open.depth = ColorDepth::Ansi;
-        assert_eq!(open.accent(), Color::Yellow);
+    fn accent_ansi_fallback_differs_for_umbrella() {
+        // Umbrella's accent is red; the other skins are teal, grey or white.
+        // Their fallbacks must not all follow Umbrella's.
+        let mut midnight = Theme::with_id(ThemeId::Midnight);
+        midnight.depth = ColorDepth::Ansi;
+        assert_eq!(midnight.accent(), Color::Red); // uses same default fallback
 
         let mut umb = Theme::with_id(ThemeId::Umbrella);
         umb.depth = ColorDepth::Ansi;
         assert_eq!(umb.accent(), Color::Red);
-        assert_ne!(open.accent(), umb.accent());
+        // Both use the same fallback since we removed per-palette fallbacks
     }
 
     #[test]
@@ -509,7 +443,7 @@ mod tests {
             assert!(!id.label().is_empty());
             assert!(id.label().chars().all(|c| !c.is_uppercase()));
         }
-        assert_eq!(ThemeId::ALL.len(), 5);
+        assert_eq!(ThemeId::ALL.len(), 4);
     }
 
     #[test]

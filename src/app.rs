@@ -665,8 +665,6 @@ pub struct App {
     pub turn_started: Option<Instant>,
     pub view: View,
     pub toast: Option<(String, Instant)>,
-    /// Number of pending notifications (shown in header).
-    pub notifications: usize,
     /// Toggles behind `/details` and `/thinking`.
     pub show_tool_details: bool,
     pub show_thinking: bool,
@@ -783,7 +781,6 @@ impl App {
             usage: Usage::default(),
             turn_started: None,
             toast: None,
-            notifications: 0,
             show_tool_details: true,
             show_thinking: true,
             pending_editor: false,
@@ -1052,7 +1049,6 @@ impl App {
 
     fn toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), Instant::now()));
-        self.notifications = self.notifications.saturating_add(1);
     }
 
     // -- events -------------------------------------------------------------
@@ -1305,14 +1301,6 @@ impl App {
                 self.toast = None;
                 self.mark_dirty();
             }
-        }
-    }
-
-    /// Mark all notifications as read (called when user views them).
-    pub fn clear_notifications(&mut self) {
-        if self.notifications > 0 {
-            self.notifications = 0;
-            self.mark_dirty();
         }
     }
 
@@ -3293,7 +3281,6 @@ fn board_store_path() -> Option<PathBuf> {
 fn theme_descriptor(id: ThemeId) -> &'static str {
     match id {
         ThemeId::Mono => "single hue · high contrast",
-        ThemeId::Opencode => "warm gold on near-black",
         ThemeId::Midnight => "cool slate · periwinkle accent",
         ThemeId::Graphite => "teal · orange on deep charcoal",
         ThemeId::Umbrella => "blood red · clinical white",

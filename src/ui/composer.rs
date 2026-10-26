@@ -471,7 +471,7 @@ fn wrap_ranges(line: &str, width: usize) -> Vec<(usize, usize)> {
 // ---------------------------------------------------------------------------
 
 /// Shortest composer body (keeps the chatbox roomy even when empty).
-pub const MIN_INNER_ROWS: usize = 3;
+pub const MIN_INNER_ROWS: usize = 1;
 
 /// Longest composer expansion before the viewport starts scrolling internally.
 pub const MAX_INNER_ROWS: usize = 8;
