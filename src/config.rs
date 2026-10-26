@@ -1069,8 +1069,8 @@ mod tests {
         let loaded = Config::load_from(&path);
         assert_eq!(
             loaded.theme,
-            crate::ui::theme::ThemeId::Mono.label(),
-            "unknown label must fall back"
+            crate::ui::theme::ThemeId::Umbrella.label(),
+            "unknown label must fall back to the default skin"
         );
         let _ = fs::remove_file(&path);
     }

@@ -505,13 +505,15 @@ async fn theme_switch_persists_and_updates_config() {
     let mut app = test_app().await;
     app.cfg.store_path =
         Some(std::env::temp_dir().join(format!("nanomite-ui-theme-{}.toml", std::process::id())));
-    app.apply_theme(crate::ui::theme::ThemeId::Umbrella);
-    assert_eq!(app.theme.id, crate::ui::theme::ThemeId::Umbrella);
-    assert_eq!(app.cfg.theme, "umbrella");
+    // Umbrella is the default skin, so switch to Mono: applying the current
+    // theme is a deliberate no-op and must not touch the disk.
+    app.apply_theme(crate::ui::theme::ThemeId::Mono);
+    assert_eq!(app.theme.id, crate::ui::theme::ThemeId::Mono);
+    assert_eq!(app.cfg.theme, "mono");
     let path = app.cfg.store_path.clone().unwrap();
     let stored = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(
-        stored.contains("theme = \"umbrella\""),
+        stored.contains("theme = \"mono\""),
         "theme not persisted: {stored}"
     );
     let _ = std::fs::remove_file(&path);

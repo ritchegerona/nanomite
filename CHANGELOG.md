@@ -165,6 +165,18 @@ never listed as released.
   capture, with comments explaining the ordering.
   Verified: `cargo test --lib` 371 passed (3 pre-existing failures unchanged
   from HEAD), release build and clippy clean.
+- **Header context meter no longer clipped on narrow terminals.**
+  `ui::panels::header` budgeted the right side (model · reasoning · 🧠
+  `used/limit · pct`) against the full terminal width while rendering it on the
+  same row as the brand + workspace path, so when the two collided the tail —
+  the absolute token readout — was silently cut (`15.0k/200.0` with no `k · 7%`).
+  The right side is now budgeted against `width − left_width − 1` and
+  head-truncated (`truncate_spans_head`) so the readout at the tail always
+  survives. Also fixes the two tests left red by the theme-default switch
+  (`theme_roundtrips…` still asserted the old `mono` fallback;
+  `theme_switch_persists…` applied Umbrella, which is now the default and
+  short-circuits as a no-op): both updated, and the full suite is green again —
+  374 passed, 0 failed.
 - `edit_file` previews render a real unified diff (`diff_add`/`diff_delete`
   roles via `ui/diff.rs`) instead of a flat replacement blob.
 - Composer caret math is measured in display columns, so CJK and other wide

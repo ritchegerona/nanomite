@@ -69,7 +69,7 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
         .max(8);
     let model = text::truncate_head(&app.model_label(), model_budget);
 
-    let right = Line::from(vec![
+    let mut right = Line::from(vec![
         Span::styled(
             format!("{mark} "),
             if app.is_busy() {
@@ -92,11 +92,47 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .right_aligned();
 
-    // Combine left and right into one line
+    // Combine left and right into one line. The right side must be budgeted
+    // against what the left side already consumes - otherwise the context
+    // meter gets clipped on narrow terminals.
     let mut spans = left;
     spans.push(Span::raw(" "));
+    let left_width: usize = spans.iter().map(|s| s.content.width()).sum();
+    let right_width: usize = right.spans.iter().map(|s| s.content.width()).sum();
+    let right_budget = width.saturating_sub(left_width + 1);
+    if right_width > right_budget {
+        right.spans = truncate_spans_head(right.spans, right_width - right_budget);
+    }
     spans.extend(right.spans);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Drops `drop` display columns from the front of a span list, keeping the
+/// style of whatever survives. The tail of the header's right side carries
+/// the absolute token readout, so truncation must eat the head, not the tail.
+fn truncate_spans_head(spans: Vec<Span<'static>>, drop: usize) -> Vec<Span<'static>> {
+    use unicode_width::UnicodeWidthChar;
+    let mut remaining = drop;
+    let mut out = Vec::with_capacity(spans.len());
+    for span in spans {
+        if remaining == 0 {
+            out.push(span);
+            continue;
+        }
+        let mut keep = String::new();
+        for ch in span.content.chars() {
+            let w = ch.width().unwrap_or(1);
+            if remaining >= w && w > 0 {
+                remaining -= w;
+            } else {
+                keep.push(ch);
+            }
+        }
+        if !keep.is_empty() {
+            out.push(Span::styled(keep, span.style));
+        }
+    }
+    out
 }
 
 /// Hairline separator under the header - removed for compact mode
