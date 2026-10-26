@@ -2975,10 +2975,19 @@ impl App {
             KeyCode::Char('n') if ctrl => self.composer.recall_next(),
 
             // Visual selection mode: v = char-wise, V = line-wise (like Vim)
-            KeyCode::Char('v') if !ctrl && !alt => self.start_visual_selection(SelectionMode::Char),
-            KeyCode::Char('v') if ctrl && !alt => self.start_visual_selection(SelectionMode::Block),
-            KeyCode::Char('v') if !ctrl && alt => self.start_visual_selection(SelectionMode::Char), // alt+v
-            KeyCode::Char('V') if !ctrl && !alt => self.start_visual_selection(SelectionMode::Line),
+            // Only enter visual mode when NOT in composer (transcript navigation mode)
+            KeyCode::Char('v') if !ctrl && !alt && !self.composer_focused() => {
+                self.start_visual_selection(SelectionMode::Char)
+            }
+            KeyCode::Char('v') if ctrl && !alt && !self.composer_focused() => {
+                self.start_visual_selection(SelectionMode::Block)
+            }
+            KeyCode::Char('v') if !ctrl && alt && !self.composer_focused() => {
+                self.start_visual_selection(SelectionMode::Char)
+            } // alt+v
+            KeyCode::Char('V') if !ctrl && !alt && !self.composer_focused() => {
+                self.start_visual_selection(SelectionMode::Line)
+            }
 
             // Visual selection cursor movement
             KeyCode::Up => {
