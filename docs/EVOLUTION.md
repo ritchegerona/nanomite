@@ -3,9 +3,9 @@
 How NANOMITE improves itself: deliberately, measurably, reversibly. The full
 lifecycle (proposal → approval → isolated experiment → tests/security checks →
 baseline comparison → evaluation → controlled release → verification →
-changelog → history) is **planned, not implemented**. This file defines the
-maturity scale, the milestone order adapted to the actual code, and the rules
-that already bind any change.
+changelog → history) is **partially implemented** — see milestones below.
+This file defines the maturity scale, the milestone order adapted to the
+actual code, and the rules that already bind any change.
 
 ## Capability maturity levels
 
@@ -18,37 +18,28 @@ that already bind any change.
 | L4 | Benchmark-validated and monitored | reproducible benches + in-use metrics, no regressions |
 
 Levels move on **evidence** (tests, benches, review), never on code volume or
-changelog prose. Current levels: `docs/AUDIT-2026-10-14.md` §6.
+changelog prose. Current levels: `docs/AUDIT-2026-10-14.md` §6 (outdated —
+see `docs/ARCHITECTURE.md` for current module map).
 
-## Milestones (adapted to the 2026-10-14 tree)
+## Milestones (adapted to the 2026-10-26 tree)
 
-1. **Audit + baseline** — done (`docs/AUDIT-2026-10-14.md`). Keep
-   `d59f2ef`/55-green as the rollback reference until superseded.
-2. **Authorization + memory integration.** Central policy engine for tool
-   calls (deny-by-default for privileged ops, user approvals, audit log);
-   wire the memory subsystem into runtime/UI (`memory_tools.rs` is landing —
-   finish, review, regression-test); root-cause the open consolidation
-   failure. Do not proceed until the suite is fully green.
-3. **File intelligence.** Land the extractor/index workstream with per-format
-   extractors, incremental indexing, containment + macro-safety tests.
-4. **Tokens + performance.** Instrumentation first (latency/token/tool stats),
-   then retrieval injection, budgeting, compaction — every claim measured.
-5. **Validated learning.** Capture task outcomes → lessons with provenance +
-   validation state; dedupe/conflict/expiry; user review + poison resistance.
-6. **Capability registry + history.** Machine-readable registry with levels,
-   evidence links, and limitations; `/capabilities` UI; persisted evolution log.
-7. **Isolated self-maintenance.** Branch/worktree workflow, fmt/build/
-   lint/test/security gates, diff review, benchmark comparison, release
-   candidate + verified rollback. Never touches the live checkout.
-8. **Secure self-update.** Per `docs/RELEASES.md`; blocked on real release
-   infrastructure — ship interfaces + honest "unsupported" status if absent.
-9. **Local models + offline.** Health-checked local providers, offline
-   indicator + gating + queueing, network-isolation tests.
-10. **UI evolution.** Live indicators (provider locality, offline, memory,
-    approvals, updates, evolution history) fed by real state; small-terminal
-    and no-color safe.
-11. **Docs + changelog + review.** This set of files maintained per-change;
-    release notes generated from records, history, and test results.
+| # | Milestone | Status | Notes |
+|---|---|---|---|
+| 1 | Audit + baseline | ✅ Done | `docs/AUDIT-2026-10-14.md` |
+| 2 | Authorization + memory integration | ✅ Done | Central `ToolPolicy` (Auto/Plan/Readonly) + memory L3 |
+| 3 | Git tool suite | ✅ Done | 5 tools: status/diff/log/commit/branch |
+| 4 | Test runner | ✅ Done | `run_tests` (cargo/npm/pytest/jest/go/custom) |
+| 5 | Symbol index | ✅ Done | `index_symbols`/`find_symbol`/`find_references` |
+| 6 | Policy engine + `/policy` | ✅ Done | Auto/Plan/Readonly, persisted, immediate effect |
+| 7 | Plan/task list system | ✅ Done | 5 tools with deps/tags/status, JSON persistence |
+| 8 | **Plan mode enforcement** | 🔄 Next | Restrict to Safe + plan tools in Plan mode |
+| 9 | Session persistence | ⬜ Backlog | Serialize/restore conversation + plan state |
+| 10 | Hooks/event system | ⬜ Backlog | Pre/post tool call hooks, guardrails |
+| 11 | External Tool SDK | ⬜ Backlog | User-defined tools via `~/.config/nanomite/tools/*.toml` |
+| 12 | Parallel worktrees | ⬜ Backlog | Multiple agents on git worktrees |
+| 13 | File intelligence (extractors/indexing) | ⬜ Backlog | Per-format extractors, incremental indexing |
+| 14 | CI + Packaging | ⬜ Backlog | GitHub Actions, crates.io, COPR, Flatpak |
+| 15 | Docs overhaul | ⬜ In progress | 11 docs being updated |
 
 ## Rules (binding now)
 

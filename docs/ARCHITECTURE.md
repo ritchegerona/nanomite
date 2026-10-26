@@ -4,7 +4,7 @@ Single-crate Rust binary (`nanomite`, edition 2021) over a library crate:
 `src/main.rs` owns the terminal, everything testable lives in `src/lib.rs`,
 which declares `agent`, `app`, `board`, `commands`, `config`, `extract`,
 `improve`, `memory` (behind a deliberate `#[allow(dead_code)]` for its API
-superset), `session`, `tools`, `ui`. Updated 2026-10-16.
+superset), `session`, `tools`, `ui`. Updated 2026-10-26.
 
 ```
 src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::render
@@ -16,7 +16,11 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
        │                                │              (openai.rs: any /v1 endpoint)
        │                          ToolSet ──▶ files / document / exec / web
        │                                            ├─▶ memory*   (policy-gated)
-       │                                            └─▶ improve*  (stage only)
+       │                                            ├─▶ improve*  (stage only)
+       │                                            ├─▶ git*       (workspace-confined)
+       │                                            ├─▶ test*      (run_tests)
+       │                                            ├─▶ index*     (symbol index)
+       │                                            └─▶ plan*      (task plans)
        │                          Swarm ──▶ BoardEngine (src/board/)
        └─ Config (defaults <- config.toml <- env)   Session (JSON v1)
 ```
@@ -30,10 +34,11 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
   `text.rs` wrapping + minimal markdown. All state lives in `App`; rendering is
   a pure function of `&App` per frame, redrawn only when dirty.
 - **App (`src/app.rs`)** — the state machine: key handling, overlay stack,
-  provider/model pickers, command router (`src/commands.rs`, 24 commands
-  including `/memory`, `/copy`, `/tools`, `/panel`, `/improve`, all parsed
-  locally), session persist/restore, engine pump. Agent turns run as
-  background tasks feeding `AgentEvent`s; the UI never blocks.
+  provider/model pickers, command router (`src/commands.rs`, 28 commands
+  including `/memory`, `/copy`, `/tools`, `/panel`, `/improve`, `/policy`,
+  `/models`, `/prev`, `/next`, all parsed locally), session persist/restore,
+  engine pump. Agent turns run as background tasks feeding `AgentEvent`s;
+  the UI never blocks.
 - **Agent (`src/agent/`)** — `provider.rs` defines the `AgentProvider` trait
   (`stream_chat`, `list_models`, `chat_completion` helper) and the streaming
   event model (`Delta` / `ToolCall` / `Usage` / `Done`) with a fragment
@@ -42,6 +47,7 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
   stream → dispatch tools via `spawn_blocking` → append results → repeat,
   bounded by `max_steps` and `max_tool_calls` (both unlimited by default,
   overridable by env), a per-step timeout, and cooperative `Cancel`.
+  `policy.rs` enforces `ToolPolicy` (Auto / Plan / Readonly) at dispatch.
   `swarm.rs` runs several providers in parallel and is what the board convenes
   on.
 - **Tools (`src/tools/`)** — `catalog.rs` holds the inventory as data
@@ -50,10 +56,14 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
   refuse escapes; `document_tools.rs` (`read_document`) reuses the bounded
   `extract/` pipeline. Exec tools run `sh -c` in the workspace with a hard
   timeout and capped output; SSH is key-only with `BatchMode=yes`. Web tools
-  speak http(s) only and truncate before returning text to the model. Dispatch
-  is a `match` in `runtime.rs::run_tool` — there is **no central policy engine**
-  (see `docs/SECURITY.md`), but a tool named in `disabled_tools` is filtered out
-  of the schema list *and* refused at dispatch.
+  speak http(s) only and truncate before returning text to the model. Git tools
+  run `git` directly in the workspace. Test runner supports cargo, npm, pytest,
+  jest, go, and custom commands. Symbol index uses ctags with regex fallback.
+  Plan tools create/update/list/delete task plans with dependencies. Dispatch
+  is a `match` in `runtime.rs::run_tool` with a **central policy engine**
+  (`agent/policy.rs`): `ToolPolicy` (Auto / Plan / Readonly) is checked before
+  dispatch; a disabled tool is filtered from the schema list *and* refused at
+  dispatch.
 - **Board (`src/board/`)** — `personas.rs` defines Architect, Engineer,
   Scientist and Critic plus a Chair; `BoardEngine::convene` runs two rounds of
   parallel discussion through `Swarm` and then a chair synthesis, checking for
@@ -72,7 +82,7 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
   serves every preset (17 cloud + ollama/lmstudio/vllm/llamacpp + `custom`).
   Setup persists to `~/.config/nanomite/config.toml` (atomic write, `0600`);
   precedence is built-in defaults < file < environment (`NANOMITE_*`). The
-  file also carries `theme`, `disabled_tools` and `prompt_file`.
+  file also carries `theme`, `disabled_tools`, `tool_policy` and `prompt_file`.
 - **Sessions (`src/session.rs`)** — `StoredSession` v1 JSON: provider, model,
   cwd, transcript entries. Markdown export for `/export` and `/share`.
 - **Memory (`src/memory/`)** — SQLite (bundled) is authoritative; markdown
@@ -93,17 +103,8 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
 3. The API key is never logged and is stored `0600`.
 4. Model output, memory records, board messages, files, and tool results are
    **untrusted data**; none of them can authorize privileged operations.
-   Enforcement today is structural — per-subsystem gates (`MemoryPolicy`,
-   `disabled_tools`, the `/improve` proposal gate), not a central policy engine;
-   closing that gap is Milestone 2 work.
+   Enforcement: central `ToolPolicy` at dispatch + per-subsystem gates
+   (`MemoryPolicy`, `disabled_tools`, the `/improve` proposal gate).
 5. A self-edit may never target the safety layer: `src/memory/security.rs`,
    `src/memory/policy.rs`, `src/main.rs`. And apply is reachable only from the
    user's `/improve` approval, never from a tool call.
-
-## What is deliberately absent (2026-10-16)
-
-Central authorization, the evolution lifecycle beyond `/improve`
-(experiment → evaluate → release), telemetry, file index, authenticated
-self-update — see `docs/AUDIT-2026-10-14.md` §5 and `docs/EVOLUTION.md`.
-Performance measurement does exist: `benches/perf.rs` (`cargo bench`) — see
-`docs/PERFORMANCE.md`.

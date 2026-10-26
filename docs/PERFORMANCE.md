@@ -6,7 +6,7 @@ run it with `cargo bench`. No runtime telemetry or profiling hooks exist yet
 (see Rules 4). This file records the benchmark methodology, the current
 baseline, and the rules for future optimization.
 
-## Benchmarks (measured 2026-10-15, bench profile ≈ release)
+## Benchmarks (measured 2026-10-26, bench profile ≈ release)
 
 Harness: `benches/perf.rs` — median of 7 in-process batches after warmup,
 zero external deps. Machine noise between full runs is ±8–15% (all benches

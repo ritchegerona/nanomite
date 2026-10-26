@@ -6,8 +6,8 @@ call the matching `ToolSet` group → return `(payload, summary)`. Every call
 runs on the blocking pool with a hard timeout; failures are returned to the
 model as errors, never panics.
 
-Status: the full **18-tool** inventory is **L3** (integrated + regression-tested,
-370-test suite) as of 2026-10-16. `src/tools/catalog.rs` is the single
+Status: the full **33-tool** inventory is **L3** (integrated + regression-tested,
+409-test suite) as of 2026-10-26. `src/tools/catalog.rs` is the single
 inventory: `ToolSpec { name, description, category }`, with tests asserting the
 catalog matches the exposed schema list exactly — add a tool to one and the
 test fails instead of the two drifting apart.
@@ -29,6 +29,20 @@ test fails instead of the two drifting apart.
 | `memory_*` (6) | Memory | save/search/get/update/delete/list | `MemoryPolicy` gate, `confirm=true` on delete |
 | `propose_self_edit` | Self-improve | stage an edit to config, prompt file or source | **cannot apply** — see `docs/SECURITY.md` |
 | `list_self_edits` | Self-improve | list pending proposals | read-only |
+| `git_status` | Git | branch, ahead/behind, staged/unstaged/untracked | read-only |
+| `git_diff` | Git | working tree or staged diff | per-path, staged/untracked options |
+| `git_log` | Git | recent commits with optional diffs | limit 200 |
+| `git_commit` | Git | create commit with message | stages files, `allow_empty` option |
+| `git_branch` | Git | list/create/delete branches | `force` for unmerged delete |
+| `run_tests` | Test | cargo/npm/pytest/jest/go/custom | timeout 300s, output cap 50k |
+| `index_symbols` | Index | build/rebuild symbol index | ctags + regex fallback |
+| `find_symbol` | Index | search symbol index | wildcard, kind/language filters |
+| `find_references` | Index | find references to symbol | cross-file, limit 200 |
+| `create_plan` | Plan | create task plan with deps/tags | max 200 tasks, 500 chars/task |
+| `get_plan` | Plan | retrieve plan by name or latest | — |
+| `update_task` | Plan | update task status/desc/deps/tags | — |
+| `list_plans` | Plan | list all plans with summaries | — |
+| `delete_plan` | Plan | delete plan by name (confirm) | `confirm=true` required |
 
 Filesystem tools are sandboxed to the workspace root: absolute paths, `..`,
 and symlink escapes are refused. `read_document` reuses the same bounded
@@ -66,4 +80,4 @@ result · side-effect classification · timeout + output limits · error mapping
 · tests. A new tool must be added to **both** `catalog.rs` and the schema list
 (the tests enforce this) and must dispatch through the same `run_tool` path —
 never around it. Destructive or remote tools require explicit user confirmation
-at the tool layer until the central policy engine (Milestone 2) exists.
+at the tool layer until the central policy engine (`agent/policy.rs`) exists.
