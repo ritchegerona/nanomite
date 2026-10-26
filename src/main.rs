@@ -1,8 +1,9 @@
 use nanomite::app::{App, Control};
 use nanomite::ui;
 use ratatui::crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind,
+    DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind,
 };
+use std::sync::mpsc;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
@@ -31,9 +32,45 @@ async fn main() -> io::Result<()> {
 
     let (control_tx, mut control_rx) = tokio::sync::mpsc::unbounded_channel::<Control>();
     app.set_control_channel(control_tx);
-    let mut events = EventStream::new();
     let mut ticker = tokio::time::interval(ANIMATION_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // Terminal events are pumped on a plain OS thread and handed over through a
+    // channel. crossterm's async `EventStream` cannot be polled inside
+    // `tokio::select!` here: the 90 ms animation tick cancels its `next()`
+    // future on every loop pass, and a cancelled read DROPS any bytes already
+    // buffered from the tty. A mouse escape sequence (`ESC [ < b ; c ; d M`)
+    // often arrives split across two reads, so dropping the tail leaves
+    // `35;93;33M`-style fragments in the input queue that later surface as
+    // garbage keypresses the moment the mouse moves. The synchronous
+    // `event::read()` on a dedicated thread never drops anything: it blocks
+    // until a complete event has parsed.
+    let (event_tx, event_rx_async) = mpsc::channel::<Event>();
+    std::thread::Builder::new()
+        .name("crossterm-events".into())
+        .spawn(move || {
+            // Blocks until a complete event parses; never drops partial input.
+            while let Ok(event) = ratatui::crossterm::event::read() {
+                if event_tx.send(event).is_err() {
+                    break; // receiver gone: app is shutting down
+                }
+            }
+            // `read()` only errors when the tty is closed or raw mode is gone.
+        })
+        .expect("spawn crossterm event thread");
+
+    // Async bridge so `select!` can await events. A blocking task relays from
+    // the std channel into an unbounded tokio channel; a cancelled poll in the
+    // select arm only releases the tokio receiver, never an event already
+    // queued, so nothing is lost between loop passes.
+    let (relay_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    tokio::task::spawn_blocking(move || {
+        while let Ok(event) = event_rx_async.recv() {
+            if relay_tx.send(event).is_err() {
+                break;
+            }
+        }
+    });
 
     let result = loop {
         if app.needs_redraw() {
@@ -42,7 +79,10 @@ async fn main() -> io::Result<()> {
         }
 
         tokio::select! {
-            Some(Ok(event)) = futures_util::StreamExt::next(&mut events) => {
+            // Cancellation-safe: the unbounded channel's `recv` keeps any
+            // event already delivered when the poll is dropped by a tick, so
+            // nothing from the tty is ever lost between loop passes.
+            Some(event) = event_rx.recv() => {
                 match event {
                     Event::Key(key) if key.kind != KeyEventKind::Release => app.on_key(key),
                     Event::Mouse(m) => app.on_mouse(m),
@@ -144,24 +184,29 @@ fn write_clipboard(text: &str) -> Result<(), Box<dyn std::error::Error + Send + 
 }
 
 fn suspend(terminal: &mut Terminal<Backend>) -> io::Result<()> {
-    ratatui::crossterm::terminal::disable_raw_mode()?;
+    // Mouse capture is disabled BEFORE raw mode so the terminal never sees a
+    // mouse report land while the tty is back in echo mode: a report printed
+    // then would appear as raw `ESC[<..M` text (the bug this fixes).
     ratatui::crossterm::execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
         LeaveAlternateScreen,
         ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
     )?;
+    ratatui::crossterm::terminal::disable_raw_mode()?;
     terminal.show_cursor()?;
     Ok(())
 }
 
 fn resume(terminal: &mut Terminal<Backend>) -> io::Result<()> {
+    // Raw mode must be back BEFORE mouse capture is re-enabled; otherwise any
+    // motion event squeezed into the gap is echoed as plain text.
+    ratatui::crossterm::terminal::enable_raw_mode()?;
     ratatui::crossterm::execute!(
         terminal.backend_mut(),
         EnterAlternateScreen,
         EnableMouseCapture
     )?;
-    ratatui::crossterm::terminal::enable_raw_mode()?;
     terminal.hide_cursor()?;
     terminal.clear()?;
     Ok(())
@@ -172,13 +217,16 @@ fn resume(terminal: &mut Terminal<Backend>) -> io::Result<()> {
 fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = ratatui::crossterm::terminal::disable_raw_mode();
+        // Order matters: mouse capture OFF while the tty is still echoing makes
+        // the terminal print pending motion reports as literal text. Stop
+        // reporting first, then drop out of raw mode and the alternate screen.
         let _ = ratatui::crossterm::execute!(
             io::stdout(),
             DisableMouseCapture,
             LeaveAlternateScreen,
             ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
         );
+        let _ = ratatui::crossterm::terminal::disable_raw_mode();
         previous(info);
     }));
 }
@@ -201,13 +249,14 @@ fn setup_terminal() -> io::Result<Terminal<Backend>> {
 }
 
 fn restore_terminal(terminal: &mut Terminal<Backend>) -> io::Result<()> {
-    ratatui::crossterm::terminal::disable_raw_mode()?;
+    // Same ordering as `suspend`: capture off first, raw mode off second.
     ratatui::crossterm::execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
         LeaveAlternateScreen,
         ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
     )?;
+    ratatui::crossterm::terminal::disable_raw_mode()?;
     terminal.show_cursor()?;
     Ok(())
 }

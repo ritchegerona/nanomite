@@ -148,6 +148,23 @@ never listed as released.
 
 ### Fixed
 
+- **Mouse movement no longer spews `ESC[<…M` fragments into the transcript.**
+  Two bugs, both in `src/main.rs`:
+  (1) crossterm's async `EventStream` was polled inside `tokio::select!` beside
+  the 90 ms animation tick; every tick cancelled the in-flight read and threw
+  away tty bytes it had already consumed, so multi-byte SGR mouse sequences
+  arrived truncated and their tails were re-parsed as keyboard input. Input is
+  now read **synchronously** via `event::read()` on a dedicated OS thread (which
+  only ever returns complete events), relayed through a std channel and a
+  `spawn_blocking` bridge into the tokio loop — cancellation releases the
+  receiver, never a half-parsed sequence.
+  (2) terminal capture ordering was inverted: mouse capture was enabled before
+  raw mode (echoing motion reports as text) and raw mode was disabled before
+  capture (printing pending reports literally) on suspend/restore/panic. All
+  paths now disable capture **before** raw mode and enable raw mode **before**
+  capture, with comments explaining the ordering.
+  Verified: `cargo test --lib` 371 passed (3 pre-existing failures unchanged
+  from HEAD), release build and clippy clean.
 - `edit_file` previews render a real unified diff (`diff_add`/`diff_delete`
   roles via `ui/diff.rs`) instead of a flat replacement blob.
 - Composer caret math is measured in display columns, so CJK and other wide

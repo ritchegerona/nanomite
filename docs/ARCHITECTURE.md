@@ -8,6 +8,9 @@ superset), `session`, `tools`, `ui`. Updated 2026-10-16.
 
 ```
 src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::render
+       │  (input: sync event::read() on a dedicated OS thread —
+       │   never `EventStream`, whose polls are cancelled by the
+       │   90ms tick and drop partial SGR mouse sequences)
        │                                │
        │                          AgentRuntime ──▶ AgentProvider ──▶ HTTPS
        │                                │              (openai.rs: any /v1 endpoint)
