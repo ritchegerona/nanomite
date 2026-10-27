@@ -1,6 +1,6 @@
 # TODO — nanomite roadmap
 
-**All stages complete (F–L).** Stages A–E landed in v0.4.0; F–L in v0.5.0.
+**All stages complete (F–L).** Stages A–E landed in v0.4.0; F–L finalized in v0.5.0 (commit ed56eac, live on GitHub).
 
 ## Stage F: Plan Mode Enforcement
 - [x] Enforce `ToolPolicy::Plan` in runtime: restrict to `Safe` tools + plan tools
