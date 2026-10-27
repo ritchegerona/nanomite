@@ -34,6 +34,7 @@ pub enum Command {
     Prev,
     Next,
     Policy,
+    Worktrees,
 }
 
 pub struct Entry {
@@ -214,6 +215,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &["/mode"],
         hint: "cycle tool policy: auto · plan · readonly",
         kind: Command::Policy,
+    },
+    Entry {
+        command: "/worktrees",
+        aliases: &["/wt"],
+        hint: "list git worktrees for parallel agents",
+        kind: Command::Worktrees,
     },
 ];
 

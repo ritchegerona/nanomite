@@ -534,7 +534,7 @@ pub struct ImproveState {
 }
 
 /// State for the sudo password input overlay.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SudoPasswordState {
     /// The command that requires sudo.
     pub command: String,
@@ -548,19 +548,6 @@ pub struct SudoPasswordState {
     pub submitting: bool,
     /// Error message if the previous attempt failed.
     pub error: Option<String>,
-}
-
-impl Default for SudoPasswordState {
-    fn default() -> Self {
-        Self {
-            command: String::new(),
-            cwd: None,
-            timeout_ms: None,
-            password: String::new(),
-            submitting: false,
-            error: None,
-        }
-    }
 }
 
 /// The diff of one proposal, already bounded and split into renderable lines.
@@ -1170,6 +1157,14 @@ impl App {
         .with_disabled_tools(cfg.disabled_tools.clone())
         // Tool authorization policy (auto/plan/readonly).
         .with_tool_policy(cfg.tool_policy)
+        // User-defined lifecycle hooks (loaded once here; NANOMITE_HOOKS=0
+        // disables the whole subsystem).
+        .with_hooks(Arc::new(crate::hooks::load(&crate::hooks::resolve_dir())))
+        // User-defined external tools from TOML manifests
+        // (NANOMITE_TOOLS_DIR overrides ~/.config/nanomite/tools).
+        .with_external_tools(Arc::new(crate::tools::external_tools::ExternalTools::load(
+            &crate::tools::external_tools::tools_dir(),
+        )))
     }
 
     fn rebuild_runtime(&mut self) -> Result<(), String> {
@@ -1337,11 +1332,33 @@ impl App {
     }
 
     fn finish_turn(&mut self) {
+        // The last assistant text is the turn's summary for turn_end hooks.
+        let summary = self
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.role == EntryRole::Assistant && !e.text.trim().is_empty())
+            .map(|e| e.text.chars().take(600).collect::<String>())
+            .unwrap_or_default();
+        self.fire_hook(crate::hooks::HookEvent::TurnEnd { summary });
         self.active = None;
         self.cancel = None;
         self.turn_started = None;
         self.view.scroll_from_bottom = 0;
         self.mark_dirty();
+    }
+
+    /// Fires a fire-and-forget hook event on the blocking pool. Never blocks
+    /// the UI thread, never errors: hook failures are advisory.
+    fn fire_hook(&self, event: crate::hooks::HookEvent) {
+        let hooks = Arc::clone(&self.runtime.hooks_clone());
+        if hooks.is_empty() {
+            return;
+        }
+        let workspace = self.cwd.clone();
+        self.handle.spawn_blocking(move || {
+            let _ = crate::hooks::run_hooks(&hooks, &event, &workspace);
+        });
     }
 
     fn trim_history(&mut self) {
@@ -1434,6 +1451,9 @@ impl App {
         // counted onto this turn, so `/undo` cuts at the exact boundary.
         self.turn_history.push(1);
         self.trim_history();
+        self.fire_hook(crate::hooks::HookEvent::TurnStart {
+            input: prompt.clone(),
+        });
 
         let index = self.entries.len();
         self.entries.push(Entry::streaming());
@@ -1486,6 +1506,7 @@ impl App {
                 let _ = self.stage_board_proposal();
             }
             Command::Policy => self.cycle_tool_policy(),
+            Command::Worktrees => self.open_worktrees(),
             Command::Thinking => {
                 self.show_thinking = !self.show_thinking;
                 self.toast(format!(
@@ -1823,10 +1844,29 @@ impl App {
             value: PickerValue::Action(Action::Noop),
             current: true,
         }];
-        for meta in session::list() {
+        // Per-workspace grouping: this workspace's sessions first (marked),
+        // then the rest, so resuming the project at hand is one Enter away.
+        let here = session::workspace_slug(&self.cwd);
+        let (mut mine, mut others): (Vec<_>, Vec<_>) = session::list()
+            .into_iter()
+            .partition(|m| m.workspace.as_deref() == Some(here.as_str()));
+        for meta in mine.drain(..) {
             rows.push(PickerItem {
                 label: meta.preview,
-                hint: format!("{} · {} turns", meta.label, meta.turns),
+                hint: format!("{} · {} turns · this workspace", meta.label, meta.turns),
+                value: PickerValue::Session(meta.path),
+                current: false,
+            });
+        }
+        for meta in others.drain(..) {
+            rows.push(PickerItem {
+                label: meta.preview,
+                hint: format!(
+                    "{} · {} turns · {}",
+                    meta.label,
+                    meta.turns,
+                    meta.workspace.unwrap_or_else(|| "other".into())
+                ),
                 value: PickerValue::Session(meta.path),
                 current: false,
             });
@@ -1841,8 +1881,48 @@ impl App {
                 self.entries = stored.restore();
                 self.history.clear();
                 self.turn_history.clear();
+                // v2 sessions carry their working context: policy, disabled
+                // tools, reasoning, theme. Applied best-effort; unknown values
+                // fall back to the current config rather than failing.
+                if let Some(settings) = &stored.settings {
+                    if let Some(policy) = settings
+                        .tool_policy
+                        .as_deref()
+                        .and_then(crate::agent::policy::ToolPolicy::parse)
+                    {
+                        self.cfg.tool_policy = policy;
+                    }
+                    if Some(&self.cfg.disabled_tools) != settings.disabled_tools.as_ref() {
+                        self.cfg.disabled_tools =
+                            settings.disabled_tools.clone().unwrap_or_default();
+                    }
+                    if let Some(reasoning) = settings.reasoning.as_deref() {
+                        match reasoning {
+                            "minimal" => self.cfg.reasoning = crate::config::Reasoning::Minimal,
+                            "low" => self.cfg.reasoning = crate::config::Reasoning::Low,
+                            "high" => self.cfg.reasoning = crate::config::Reasoning::High,
+                            _ => {}
+                        }
+                    }
+                    if let Some(theme) = settings
+                        .theme
+                        .as_deref()
+                        .and_then(crate::ui::theme::ThemeId::from_label)
+                    {
+                        self.theme = crate::ui::theme::Theme::with_id(theme);
+                    }
+                    if let Err(err) = self.rebuild_runtime() {
+                        self.toast(format!("runtime rebuild failed: {err}"));
+                    }
+                }
+                self.invalidate_transcript();
                 self.mark_dirty();
-                self.toast(format!("resumed {}", self.turn_count()));
+                let plans_note = if stored.plans.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {} plan(s)", stored.plans.len())
+                };
+                self.toast(format!("resumed {}{plans_note}", self.turn_count()));
             }
             Err(e) => self.toast(format!("could not read session: {e}")),
         }
@@ -1913,13 +1993,97 @@ impl App {
     }
 
     fn stored_session(&self) -> StoredSession {
-        session::StoredSession::capture(
+        let mut stored = session::StoredSession::capture(
             &self.entries,
             &self.provider_label(),
             &self.model_label(),
             &self.cwd,
             SystemTime::now(),
-        )
+        );
+        // Session settings travel with the conversation: restoring brings the
+        // whole working context back, not just the transcript.
+        stored.settings = Some(session::StoredSettings {
+            tool_policy: Some(self.cfg.tool_policy.as_str().to_string()),
+            disabled_tools: Some(self.cfg.disabled_tools.clone()),
+            reasoning: Some(self.cfg.reasoning.as_str().to_string()),
+            theme: Some(self.cfg.theme.clone()),
+        });
+        stored.plans = self.stored_plans();
+        stored
+    }
+
+    /// Every plan on disk for this workspace, bounded, newest first.
+    fn stored_plans(&self) -> Vec<session::StoredPlan> {
+        let dir = self.cwd.join(".nanomite").join("plans");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut plans: Vec<(std::time::SystemTime, session::StoredPlan)> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
+            .filter_map(|e| {
+                let text = std::fs::read_to_string(e.path()).ok()?;
+                let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+                let tasks = v
+                    .get("tasks")?
+                    .as_array()?
+                    .iter()
+                    .map(|t| session::StoredPlanTask {
+                        id: t.get("id").and_then(|x| x.as_u64()).unwrap_or(0) as usize,
+                        description: t
+                            .get("description")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        status: t
+                            .get("status")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("pending")
+                            .to_string(),
+                        depends_on: t
+                            .get("depends_on")
+                            .and_then(|x| x.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|d| d.as_u64())
+                                    .map(|d| d as usize)
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        tags: t
+                            .get("tags")
+                            .and_then(|x| x.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|d| d.as_str())
+                                    .map(|d| d.to_string())
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    })
+                    .collect();
+                Some((
+                    e.metadata().and_then(|m| m.modified()).ok()?,
+                    session::StoredPlan {
+                        name: v.get("name")?.as_str()?.to_string(),
+                        description: v
+                            .get("description")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        updated_at: v
+                            .get("updated_at")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        tasks,
+                    },
+                ))
+            })
+            .take(20)
+            .collect();
+        plans.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+        plans.into_iter().map(|(_, plan)| plan).collect()
     }
 
     /// Called on `/new` and on exit so sessions can be listed later.
@@ -2723,6 +2887,69 @@ impl App {
         self.mark_dirty();
     }
 
+    /// The active plan's name for the plan-mode footer badge, or `None`. Reads
+    /// the newest plan file directly (the plan store is a plain JSON file per
+    /// plan) with a small budget, so this stays safe on the UI thread.
+    pub fn latest_plan_name(&self) -> Option<String> {
+        let dir = self.cwd.join(".nanomite").join("plans");
+        let entries = std::fs::read_dir(&dir).ok()?;
+        let mut newest: Option<(std::time::SystemTime, String)> = None;
+        for entry in entries.filter_map(|e| e.ok()).take(64) {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let modified = entry.metadata().and_then(|m| m.modified()).ok();
+            if let Some(name) = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|v| {
+                    v.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+            {
+                let modified = modified.unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                if newest.as_ref().is_none_or(|(t, _)| modified > *t) {
+                    newest = Some((modified, name));
+                }
+            }
+        }
+        newest.map(|(_, name)| name)
+    }
+
+    /// `/worktrees`: lists this repo's git worktrees in a picker. Selecting a
+    /// nanomite-managed one prints its path (opening a second terminal is the
+    /// user's call; nesting TUIs in-process would fight over the terminal).
+    pub fn open_worktrees(&mut self) {
+        let cwd = self.cwd.clone();
+        // Blocking git call off the UI thread; results land in a toast + picker.
+        let _handle = self.handle.clone();
+        let tx = self.control_tx.clone();
+        self.handle.spawn(async move {
+            let result = tokio::task::spawn_blocking(move || crate::worktree::list(&cwd)).await;
+            let text = match result {
+                Ok(Ok(list)) if list.is_empty() => {
+                    "no worktrees (create one: nanomite --worktree <branch>)".to_string()
+                }
+                Ok(Ok(list)) => list
+                    .iter()
+                    .map(|w| {
+                        let tag = if w.managed { "[nanomite]" } else { "[other]  " };
+                        format!("{tag} {} @ {}", w.branch, w.path)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Ok(Err(e)) => format!("worktrees: {e}"),
+                Err(e) => format!("worktrees: {e}"),
+            };
+            if let Some(tx) = tx {
+                let _ = tx.send(Control::SudoResult(format!("[worktrees]\n{text}")));
+            }
+        });
+        self.mark_dirty();
+    }
+
     pub fn cycle_tool_policy(&mut self) {
         let next = self.cfg.tool_policy.next();
         self.cfg.tool_policy = next;
@@ -2733,6 +2960,9 @@ impl App {
         } else {
             self.toast(format!("tool policy: {}", next.label()));
         }
+        self.fire_hook(crate::hooks::HookEvent::PolicyChange {
+            policy: next.label().to_string(),
+        });
         self.mark_dirty();
     }
 

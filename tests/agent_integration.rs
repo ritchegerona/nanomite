@@ -6,7 +6,7 @@
 use nanomite::app::{Entry, EntryRole};
 use nanomite::config::Config;
 use nanomite::memory::model::{
-    MemoryCategory, MemorySource, NewMemory, SearchOrder, SearchQuery, Sensitivity, SourceKind,
+    MemoryCategory, MemorySource, NewMemory, SearchQuery, Sensitivity, SourceKind,
 };
 use nanomite::memory::policy::MemoryPolicy;
 use nanomite::memory::MemoryEngine;
@@ -215,4 +215,57 @@ async fn document_extraction_text() {
 
     assert!(result.text.contains("Hello, world!"));
     assert!(result.text.contains("This is a test."));
+}
+
+#[test]
+fn session_v2_roundtrip_carries_settings_and_plans() {
+    use nanomite::session::{self, StoredPlan, StoredPlanTask, StoredSession, StoredSettings};
+
+    let dir = std::env::temp_dir().join(format!("nanomite-sess-v2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let mut session = StoredSession::capture(
+        &[],
+        "openai",
+        "test-model",
+        &dir,
+        std::time::SystemTime::now(),
+    );
+    session.settings = Some(StoredSettings {
+        tool_policy: Some("plan".into()),
+        disabled_tools: Some(vec!["web_search".into()]),
+        reasoning: Some("high".into()),
+        theme: Some("midnight".into()),
+    });
+    session.plans = vec![StoredPlan {
+        name: "feature-x".into(),
+        description: "do x".into(),
+        updated_at: "2026-10-27T00:00:00Z".into(),
+        tasks: vec![StoredPlanTask {
+            id: 1,
+            description: "step one".into(),
+            status: "done".into(),
+            depends_on: vec![],
+            tags: vec!["api".into()],
+        }],
+    }];
+
+    let path = session::save(&session).unwrap();
+    let loaded = session::load(&path).unwrap();
+    assert_eq!(loaded.version, 2);
+    let settings = loaded.settings.expect("settings stored");
+    assert_eq!(settings.tool_policy.as_deref(), Some("plan"));
+    assert_eq!(
+        settings.disabled_tools.as_deref(),
+        Some(&["web_search".to_string()][..])
+    );
+    assert_eq!(loaded.plans.len(), 1);
+    assert_eq!(loaded.plans[0].tasks[0].status, "done");
+    assert!(loaded.workspace.is_some());
+
+    // The listing carries the workspace slug for per-workspace grouping.
+    let metas = session::list();
+    assert!(metas.iter().any(|m| m.workspace.is_some()));
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

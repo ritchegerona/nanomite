@@ -61,6 +61,7 @@ pub struct SshRunResult {
     pub timed_out: bool,
 }
 
+#[derive(Clone)]
 pub struct ExecTools {
     root: PathBuf,
 }
@@ -365,14 +366,27 @@ fn strip_leading_sudo(command: &str) -> &str {
     stripped
 }
 
-/// Spawns `cmd`, drains both pipes on helper threads, polls for exit, kills on timeout.
-/// Shared with the git tools, which run `git` directly instead of through a shell.
+/// Kills a child's whole process group: a killed parent otherwise leaves
+/// grandchildren (e.g. `sleep 30` from a hook script) running and holding the
+/// pipe write-ends, which keeps the output readers blocked until they exit.
+pub(crate) fn kill_process_group(child: &std::process::Child) {
+    unsafe {
+        // SIGKILL to the negative pid = every process in the group.
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+}
+
+/// Spawns `cmd` in its own process group, drains both pipes on helper threads,
+/// polls for exit, kills the whole group on timeout. Shared with the git tools,
+/// which run `git` directly instead of through a shell.
 pub(crate) fn run_with_timeout(
     cmd: &mut Command,
     what: &str,
     timeout: Duration,
     label: &str,
 ) -> Result<(String, String, i32, bool), String> {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("{what} failed to spawn: {e}"))?;
@@ -398,7 +412,7 @@ pub(crate) fn run_with_timeout(
             Ok(None) => {
                 if started.elapsed() >= timeout {
                     timed_out = true;
-                    let _ = child.kill();
+                    kill_process_group(&child);
                     let _ = child.wait();
                     break None;
                 }
@@ -453,7 +467,7 @@ pub(crate) fn run_with_timeout_child(
             Ok(None) => {
                 if started.elapsed() >= timeout {
                     timed_out = true;
-                    let _ = child.kill();
+                    kill_process_group(&child);
                     let _ = child.wait();
                     break None;
                 }

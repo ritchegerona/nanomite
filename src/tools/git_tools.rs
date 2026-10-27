@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Hard cap for one git command.
 const MAX_TIMEOUT_MS: u64 = 120_000;
@@ -125,6 +125,7 @@ pub struct GitBranchResult {
     pub action: String, // "listed" | "created" | "deleted"
 }
 
+#[derive(Clone)]
 pub struct GitTools {
     root: PathBuf,
 }
@@ -178,7 +179,7 @@ impl GitTools {
         let path = self.resolve_path(args.path.as_deref())?;
         let rel = path.strip_prefix(&self.root).unwrap_or(&path);
         let rel_str = rel.to_string_lossy().to_string();
-        let path_arg = if rel_str == "" { "." } else { &rel_str };
+        let path_arg = if rel_str.is_empty() { "." } else { &rel_str };
 
         // Get branch + upstream tracking
         let (out, _, code, _) = self.run_git(&["rev-parse", "--abbrev-ref", "HEAD"], 5_000)?;
@@ -245,10 +246,10 @@ impl GitTools {
                 } else if line.len() >= 4 {
                     let xy = &line[1..3];
                     let p = line[4..].trim();
-                    if xy.chars().next() != Some(' ') && xy.chars().next() != Some('?') {
+                    if !xy.starts_with(' ') && !xy.starts_with('?') {
                         staged.push(p.to_string());
                     }
-                    if xy.chars().nth(1) != Some(' ') {
+                    if !xy[1..].starts_with(' ') {
                         unstaged.push(p.to_string());
                     }
                 }
@@ -270,7 +271,7 @@ impl GitTools {
         let path = self.resolve_path(args.path.as_deref())?;
         let rel = path.strip_prefix(&self.root).unwrap_or(&path);
         let rel_str = rel.to_string_lossy().to_string();
-        let path_arg = if rel_str == "" { "." } else { &rel_str };
+        let path_arg = if rel_str.is_empty() { "." } else { &rel_str };
 
         let mut git_args = vec!["diff"];
         if args.staged {
@@ -281,7 +282,7 @@ impl GitTools {
         }
         git_args.push(path_arg);
 
-        let (out, _, code, timed_out) = self.run_git(&git_args, 30_000)?;
+        let (out, _, _code, _timed_out) = self.run_git(&git_args, 30_000)?;
 
         let (diff, truncated) = if out.chars().count() > crate::tools::exec_tools::MAX_OUTPUT {
             let capped: String = out
@@ -378,7 +379,7 @@ impl GitTools {
 
         // Check if there's anything to commit (unless allow_empty)
         if !args.allow_empty {
-            let (out, _, code, _) = self.run_git(&["diff", "--cached", "--quiet"], 5_000)?;
+            let (_out, _, code, _) = self.run_git(&["diff", "--cached", "--quiet"], 5_000)?;
             if code == 0 {
                 return Err("refused: nothing to commit (use allow_empty=true to override)".into());
             }

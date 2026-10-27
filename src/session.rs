@@ -14,6 +14,48 @@ pub struct StoredSession {
     pub model: String,
     pub cwd: String,
     pub entries: Vec<StoredEntry>,
+    /// Workspace slug (v2): lets the /sessions picker group by project.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    /// Session settings snapshot (v2): tool policy, disabled tools,
+    /// reasoning effort, theme - restored with the conversation.
+    #[serde(default)]
+    pub settings: Option<StoredSettings>,
+    /// Plan snapshots (v2): every plan touched in this session, with task
+    /// statuses, so resuming restores the work breakdown too.
+    #[serde(default)]
+    pub plans: Vec<StoredPlan>,
+}
+
+/// Settings that travel with a session (v2). All optional so v1 files load.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredSettings {
+    #[serde(default)]
+    pub tool_policy: Option<String>,
+    #[serde(default)]
+    pub disabled_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    #[serde(default)]
+    pub theme: Option<String>,
+}
+
+/// One plan as persisted inside a session (v2).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredPlan {
+    pub name: String,
+    pub description: String,
+    pub updated_at: String,
+    pub tasks: Vec<StoredPlanTask>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredPlanTask {
+    pub id: usize,
+    pub description: String,
+    pub status: String,
+    pub depends_on: Vec<usize>,
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,12 +76,15 @@ impl StoredSession {
     ) -> Self {
         let now = now_secs();
         Self {
-            version: 1,
+            version: 2,
             started: unix_secs(started),
             updated: now,
             provider: provider.to_string(),
             model: model.to_string(),
             cwd: cwd.to_string_lossy().into_owned(),
+            workspace: Some(workspace_slug(cwd)),
+            settings: None,
+            plans: Vec::new(),
             entries: entries
                 .iter()
                 .filter(|e| !e.text.trim().is_empty() || !e.tools.is_empty())
@@ -104,6 +149,19 @@ impl StoredSession {
     }
 }
 
+/// Slugified workspace path: the per-project grouping key for the sessions
+/// picker. Sessions still live in the data dir (never inside the repo - a
+/// `.nanomite/sessions/` directory would risk being committed); grouping is
+/// per workspace via this slug.
+pub fn workspace_slug(cwd: &Path) -> String {
+    cwd.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| cwd.to_string_lossy().into_owned())
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 /// `~/.local/share/nanomite/sessions` (or the platform equivalent).
 pub fn sessions_dir() -> PathBuf {
     let base = dirs::data_dir()
@@ -123,7 +181,14 @@ pub fn save(session: &StoredSession) -> std::io::Result<PathBuf> {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .take(24)
         .collect();
-    let path = dir.join(format!("{stamp}-{slug}.json"));
+    // Sub-second nanos keep concurrent saves from racing on one filename
+    // (two sessions in the same second with the same model would otherwise
+    // check-then-write over each other).
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let path = dir.join(format!("{stamp}{nanos:09}-{slug}.json"));
     std::fs::write(&path, serde_json::to_vec_pretty(session)?)?;
     Ok(path)
 }
@@ -135,6 +200,8 @@ pub struct SessionMeta {
     pub label: String,
     pub turns: usize,
     pub preview: String,
+    /// Workspace slug the session ran in (v2 sessions only).
+    pub workspace: Option<String>,
 }
 
 /// Reads every saved session, newest first.
@@ -161,6 +228,7 @@ pub fn list() -> Vec<SessionMeta> {
                 label: session.model.clone(),
                 turns: session.turns(),
                 preview: preview.chars().take(60).collect(),
+                workspace: session.workspace.clone(),
             })
         })
         .collect();

@@ -1,6 +1,7 @@
 pub mod catalog;
 pub mod document_tools;
 pub mod exec_tools;
+pub mod external_tools;
 pub mod file_tools;
 pub mod git_tools;
 pub mod improve_tools;
@@ -16,6 +17,7 @@ use crate::memory::MemoryEngine;
 use std::sync::Arc;
 
 /// The full capability set handed to the agent runtime.
+#[derive(Clone)]
 pub struct ToolSet {
     pub files: crate::tools::file_tools::FileTools,
     pub exec: crate::tools::exec_tools::ExecTools,
@@ -34,6 +36,8 @@ pub struct ToolSet {
     pub git: crate::tools::git_tools::GitTools,
     /// Test runner tools. Always present.
     pub test: crate::tools::test_tools::TestTools,
+    /// User-defined external tools (empty unless manifests are configured).
+    pub external: std::sync::Arc<crate::tools::external_tools::ExternalTools>,
     /// Symbol index tools. Always present.
     pub index: crate::tools::index_tools::IndexTools,
     /// Plan/task list tools. Always present.
@@ -57,6 +61,7 @@ impl ToolSet {
             improve: None,
             git: crate::tools::git_tools::GitTools::new(workspace.clone()),
             test: crate::tools::test_tools::TestTools::new(workspace.clone()),
+            external: std::sync::Arc::new(crate::tools::external_tools::ExternalTools::default()),
             index: crate::tools::index_tools::IndexTools::new(workspace.clone()),
             plan: crate::tools::plan_tools::PlanTools::new(workspace.clone()),
             improve_roots: None,

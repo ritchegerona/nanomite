@@ -1,7 +1,13 @@
 [package]
 name = "nanomite"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
+description = "A microscopic terminal coding agent: streaming chat with any OpenAI-compatible model, 33 tools, persistent memory, multi-agent board, polished TUI"
+license = "MIT"
+repository = "https://github.com/ritchegerona/nanomite"
+readme = "README.md"
+keywords = ["cli", "terminal", "ai", "agent", "tui"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 crossterm = { version = "0.29.0", features = ["event-stream"] }
@@ -14,6 +20,10 @@ regex = "1.10"
 walkdir = "2.5"
 async-trait = "0.1.92"
 dirs = "7.0.0"
+# Process-group kill for hook/exec children: on timeout, grandchildren (e.g.
+# `sleep 30` spawned by a hook script) must die too, or they hold the pipe
+# write-ends and the reader threads block until the grandchild exits.
+libc = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 memchr = "2.7"
 memmap2 = "0.9"

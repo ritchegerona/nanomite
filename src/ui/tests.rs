@@ -1217,7 +1217,7 @@ async fn sudo_password_modal_renders_with_theme_chrome() {
     let mut terminal = ratatui::Terminal::new(TestBackend::new(90, 24)).expect("terminal");
     terminal.draw(|f| render(f, &mut app)).expect("draw");
     let buffer = terminal.backend().buffer().clone();
-    let theme = app.theme.clone();
+    let theme = app.theme;
 
     // Some cell inside the frame must carry the focused-border color (the
     // rounded border box) and the title cell must carry the accent color.
@@ -1623,6 +1623,9 @@ fn dispatch(app: &App, name: &str, args: serde_json::Value) -> Result<(String, S
     crate::agent::runtime::run_tool(
         &tools,
         &[],
+        crate::agent::policy::ToolPolicy::Auto,
+        &[],
+        std::path::Path::new("."),
         &crate::agent::provider::ToolCall {
             id: "test-call".into(),
             name: name.into(),

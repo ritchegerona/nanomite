@@ -2,6 +2,7 @@ use crate::agent::policy::ToolPolicy;
 use crate::agent::provider::{
     AgentProvider, ChatMessage, DynError, Role, StreamEvent, ToolCall, ToolCallAccumulator, Usage,
 };
+use crate::hooks::{HookConfig, HookEvent};
 use crate::memory::{TurnObservation, TurnOutcome};
 use crate::tools::document_tools::ReadDocumentArgs;
 use crate::tools::exec_tools::{RunCommandArgs, SshRunArgs};
@@ -9,22 +10,15 @@ use crate::tools::file_tools::{
     EditFileArgs, ListFilesArgs, ReadFileArgs, SearchArgs, WriteFileArgs,
 };
 use crate::tools::git_tools::{
-    GitBranchArgs, GitBranchResult, GitCommitArgs, GitCommitResult, GitDiffArgs, GitDiffResult,
-    GitLogArgs, GitLogResult, GitStatusArgs, GitStatusResult,
+    GitBranchArgs, GitCommitArgs, GitDiffArgs, GitLogArgs, GitStatusArgs,
 };
-use crate::tools::index_tools::{
-    FindReferencesArgs, FindReferencesResult, FindSymbolArgs, FindSymbolResult, IndexSymbolsArgs,
-    IndexSymbolsResult,
-};
+use crate::tools::index_tools::{FindReferencesArgs, FindSymbolArgs, IndexSymbolsArgs};
 use crate::tools::memory_tools::{
     MemoryDeleteArgs, MemoryGetArgs, MemoryListArgs, MemorySaveArgs, MemorySearchArgs,
     MemoryUpdateArgs,
 };
-use crate::tools::plan_tools::{
-    CreatePlanArgs, CreatePlanResult, CreateTaskArgs, DeletePlanArgs, DeletePlanResult,
-    GetPlanArgs, GetPlanResult, ListPlansResult, PlanSummary, UpdateTaskArgs, UpdateTaskResult,
-};
-use crate::tools::test_tools::{RunTestsArgs, RunTestsResult};
+use crate::tools::plan_tools::{CreatePlanArgs, DeletePlanArgs, GetPlanArgs, UpdateTaskArgs};
+use crate::tools::test_tools::RunTestsArgs;
 use crate::tools::web_tools::{WebFetchArgs, WebSearchArgs};
 use crate::tools::ToolSet;
 use serde_json::json;
@@ -147,6 +141,10 @@ pub struct AgentRuntime {
     /// Central tool authorization policy: controls which risk classes are
     /// permitted (Auto / Plan / Readonly). Defaults to Auto.
     tool_policy: ToolPolicy,
+    /// User-defined lifecycle hooks: pre-tool-call deny gates run inline
+    /// (before dispatch), everything else fires after the fact. Empty by
+    /// default: no hooks, zero overhead.
+    hooks: Arc<Vec<HookConfig>>,
 }
 
 impl AgentRuntime {
@@ -180,6 +178,7 @@ impl AgentRuntime {
             max_file_bytes,
             disabled_tools: Arc::new(Vec::new()),
             tool_policy: ToolPolicy::default(),
+            hooks: Arc::new(Vec::new()),
         }
     }
 
@@ -273,6 +272,51 @@ impl AgentRuntime {
     pub fn with_tool_policy(mut self, policy: ToolPolicy) -> Self {
         self.tool_policy = policy;
         self
+    }
+
+    /// Attaches user-defined lifecycle hooks. Pre-tool-call deny hooks run
+    /// inline before dispatch and can refuse a call; all other events fire
+    /// after the fact and never block.
+    pub fn with_hooks(mut self, hooks: Arc<Vec<HookConfig>>) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    /// Attaches user-defined external tools from TOML manifests. Their
+    /// schemas are appended to what the model sees; dispatch happens by name
+    /// through the same run_tool gate as built-ins.
+    pub fn with_external_tools(
+        mut self,
+        tools: Arc<crate::tools::external_tools::ExternalTools>,
+    ) -> Self {
+        if !tools.is_empty() {
+            let mut schemas = (*self.tools_schema).clone();
+            for name in tools.names() {
+                if let Some(tool) = tools.get(&name) {
+                    schemas.push(crate::agent::provider::Tool::new(
+                        &name,
+                        &tool.description,
+                        if tool.parameters.is_null() {
+                            serde_json::json!({"type": "object"})
+                        } else {
+                            tool.parameters.clone()
+                        },
+                    ));
+                }
+            }
+            self.tools_schema = Arc::new(filter_disabled_schemas(schemas, &self.disabled_tools));
+        }
+        // The tool set carries the executor; run_tool dispatches by name.
+        let mut toolset = (*self.tools).clone();
+        toolset.external = tools;
+        self.tools = Arc::new(toolset);
+        self
+    }
+
+    /// A shared handle to the configured hooks, for fire-and-forget events
+    /// outside the tool loop (turn start/end, policy changes).
+    pub fn hooks_clone(&self) -> Arc<Vec<HookConfig>> {
+        Arc::clone(&self.hooks)
     }
 
     pub fn provider(&self) -> &Arc<dyn AgentProvider> {
@@ -500,9 +544,38 @@ impl AgentRuntime {
                 // File IO is blocking: keep it off the async runtime's worker threads.
                 let tools = Arc::clone(&self.tools);
                 let disabled = Arc::clone(&self.disabled_tools);
+                let policy = self.tool_policy;
+                let hooks = Arc::clone(&self.hooks);
+                let workspace = self.workspace.clone();
                 let call_for_task = call.clone();
+                let tool_name = call.name.clone();
                 let outcome = tokio::task::spawn_blocking(move || {
-                    run_tool(&tools, &disabled, &call_for_task)
+                    let result = run_tool(
+                        &tools,
+                        &disabled,
+                        policy,
+                        &hooks,
+                        &workspace,
+                        &call_for_task,
+                    );
+                    // Post-tool-call hooks fire after the result is known,
+                    // detached so they never delay the turn.
+                    if !hooks.is_empty() {
+                        let (ok, detail) = match &result {
+                            Ok((_, summary)) => (true, summary.clone()),
+                            Err(e) => (false, e.clone()),
+                        };
+                        let event = HookEvent::PostToolCall {
+                            tool: tool_name,
+                            ok,
+                            detail,
+                        };
+                        let workspace2 = workspace.clone();
+                        std::thread::spawn(move || {
+                            let _ = crate::hooks::run_hooks(&hooks, &event, &workspace2);
+                        });
+                    }
+                    result
                 })
                 .await
                 .unwrap_or_else(|e| Err(format!("tool panicked: {e}")));
@@ -582,9 +655,17 @@ fn filter_disabled_schemas(
 /// `disabled` carries the configuration-disabled tool names (lowercased): a
 /// disabled tool is refused even though the schema list should already have
 /// hidden it - the model can still hallucinate a name.
+/// `tool_policy` is the central authorization gate (Auto/Plan/Readonly).
+/// `hooks` carries user-defined lifecycle hooks: pre-tool-call deny hooks run
+/// inline before dispatch (non-zero exit = refused with the hook's stderr),
+/// post-tool-call hooks fire after the result is known (detached, never
+/// blocking the turn).
 pub(crate) fn run_tool(
     tools: &ToolSet,
     disabled: &[String],
+    tool_policy: ToolPolicy,
+    hooks: &[HookConfig],
+    workspace: &std::path::Path,
     call: &ToolCall,
 ) -> Result<(String, String), String> {
     let requested = call.name.trim().to_ascii_lowercase();
@@ -592,6 +673,27 @@ pub(crate) fn run_tool(
         return Err(
             "{\"error\":\"tool disabled by configuration\",\"code\":\"tool_disabled\"}".to_string(),
         );
+    }
+    // Central tool policy gate: authorize before dispatch.
+    tool_policy.authorize(&requested)?;
+    // Pre-tool-call hooks: a deny hook's non-zero exit refuses the call.
+    if !hooks.is_empty() {
+        let event = HookEvent::PreToolCall {
+            tool: requested.clone(),
+            args_json: call.arguments.clone(),
+        };
+        for (_command, outcome) in crate::hooks::run_hooks(hooks, &event, workspace) {
+            if outcome.denied {
+                let reason = if outcome.stderr.trim().is_empty() {
+                    "denied by hook".to_string()
+                } else {
+                    outcome.stderr.trim().chars().take(200).collect()
+                };
+                return Err(format!(
+                    "{{\"error\":\"hook denied this tool call: {reason}\",\"code\":\"hook_denied\"}}"
+                ));
+            }
+        }
     }
     let args: serde_json::Value = if call.arguments.trim().is_empty() {
         json!({})
@@ -911,8 +1013,8 @@ pub(crate) fn run_tool(
             let parsed: GitLogArgs =
                 serde_json::from_value(args).map_err(|e| format!("bad git_log arguments: {e}"))?;
             let path = parsed.path.clone().unwrap_or_else(|| ".".to_string());
-            let limit = parsed.limit;
-            let show_diff = parsed.show_diff;
+            let _limit = parsed.limit;
+            let _show_diff = parsed.show_diff;
             let result = tools
                 .git
                 .log(parsed)
@@ -1093,7 +1195,25 @@ pub(crate) fn run_tool(
             let payload = serde_json::to_string(&result).unwrap_or_default();
             Ok((payload, summary))
         }
-        other => Err(format!("unknown tool `{other}`")),
+        other => {
+            // External tools dispatch by name through the same gate.
+            if tools.external.get(other).is_some() {
+                let args_json = call.arguments.clone();
+                let result = tools
+                    .external
+                    .run(other, &args_json)
+                    .map_err(|e| format!("{other} failed: {e}"))?;
+                let summary = if result.timed_out {
+                    "timed out".to_string()
+                } else {
+                    format!("exit {}", result.exit_code)
+                };
+                let payload = serde_json::to_string(&result).unwrap_or_default();
+                Ok((payload, format!("{} · {summary}", shorten(other, 32))))
+            } else {
+                Err(format!("unknown tool `{other}`"))
+            }
+        }
     }
 }
 
@@ -1515,6 +1635,9 @@ mod tests {
         let (payload, _) = run_tool(
             &tools,
             &[],
+            ToolPolicy::Auto,
+            &[],
+            std::path::Path::new("."),
             &ToolCall {
                 id: "t1".into(),
                 name: "memory_save".into(),
@@ -1532,6 +1655,9 @@ mod tests {
         let (payload, _) = run_tool(
             &tools,
             &[],
+            ToolPolicy::Auto,
+            &[],
+            std::path::Path::new("."),
             &ToolCall {
                 id: "t2".into(),
                 name: "memory_search".into(),
@@ -1547,6 +1673,9 @@ mod tests {
         let refusal = run_tool(
             &tools,
             &[],
+            ToolPolicy::Auto,
+            &[],
+            std::path::Path::new("."),
             &ToolCall {
                 id: "t3".into(),
                 name: "memory_delete".into(),
@@ -1564,6 +1693,9 @@ mod tests {
         let outcome = run_tool(
             &runtime.tools,
             &[],
+            ToolPolicy::Auto,
+            &[],
+            std::path::Path::new("."),
             &ToolCall {
                 id: "t1".into(),
                 name: "memory_list".into(),
@@ -1699,6 +1831,94 @@ mod tests {
     }
 
     #[test]
+    fn plan_mode_refuses_writes_at_dispatch_through_run_tool() {
+        let provider: Arc<dyn AgentProvider> = Arc::new(RecordingProvider::new());
+        let _runtime = runtime_with(provider, None).with_tool_policy(ToolPolicy::Plan);
+        let tools = ToolSet::new(
+            std::env::temp_dir().join("nanomite-runtime-test-workspace"),
+            64 * 1024,
+        );
+        let call = ToolCall {
+            id: "tp1".into(),
+            name: "write_file".into(),
+            arguments: r#"{"path":"x.txt","content":"hi"}"#.to_string(),
+            index: 0,
+        };
+        let err = run_tool(
+            &tools,
+            &[],
+            ToolPolicy::Plan,
+            &[],
+            std::path::Path::new("."),
+            &call,
+        )
+        .unwrap_err();
+        assert!(err.contains("plan_mode"), "{err}");
+        // Plan tools still run in plan mode.
+        let call = ToolCall {
+            id: "tp2".into(),
+            name: "list_plans".into(),
+            arguments: "{}".to_string(),
+            index: 0,
+        };
+        let (payload, _) = run_tool(
+            &tools,
+            &[],
+            ToolPolicy::Plan,
+            &[],
+            std::path::Path::new("."),
+            &call,
+        )
+        .expect("plan tools run in plan mode");
+        assert!(payload.contains("\"plans\""), "{payload}");
+    }
+
+    #[test]
+    fn deny_hooks_block_a_tool_call_before_dispatch() {
+        let dir = std::env::temp_dir().join(format!("nanomite-hook-gate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("deny-write.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nread -r payload\ncase \"$payload\" in *write_file*) echo blocked-by-hook >&2; exit 1;; esac\nexit 0\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let hooks = vec![HookConfig {
+            event: "pre_tool_call".into(),
+            command: script.display().to_string(),
+            timeout_ms: 5_000,
+            deny: true,
+        }];
+        let tools = ToolSet::new(
+            std::env::temp_dir().join("nanomite-runtime-test-workspace"),
+            64 * 1024,
+        );
+        let call = ToolCall {
+            id: "h1".into(),
+            name: "write_file".into(),
+            arguments: r#"{"path":"blocked.txt","content":"x"}"#.to_string(),
+            index: 0,
+        };
+        let err = run_tool(&tools, &[], ToolPolicy::Auto, &hooks, &dir, &call).unwrap_err();
+        assert!(err.contains("hook_denied"), "{err}");
+        assert!(err.contains("blocked-by-hook"), "{err}");
+
+        // A non-matching call passes the same gate.
+        let call = ToolCall {
+            id: "h2".into(),
+            name: "list_files".into(),
+            arguments: "{}".to_string(),
+            index: 0,
+        };
+        let outcome = run_tool(&tools, &[], ToolPolicy::Auto, &hooks, &dir, &call);
+        assert!(outcome.is_ok(), "allowed call must pass the hook gate");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn disabled_tools_are_hidden_from_schemas_and_refused_at_dispatch() {
         let provider: Arc<dyn AgentProvider> = Arc::new(RecordingProvider::new());
         let runtime = runtime_with(provider, Some(memory_engine()))
@@ -1729,7 +1949,15 @@ mod tests {
             arguments: r#"{"path":"Cargo.toml"}"#.to_string(),
             index: 0,
         };
-        let err = run_tool(&tools, &runtime.disabled_tools, &call).unwrap_err();
+        let err = run_tool(
+            &tools,
+            &runtime.disabled_tools,
+            ToolPolicy::Auto,
+            &[],
+            std::path::Path::new("."),
+            &call,
+        )
+        .unwrap_err();
         assert!(err.contains("tool disabled by configuration"), "{err}");
 
         // A tool that is merely unknown is still reported as unknown, not
@@ -1740,7 +1968,15 @@ mod tests {
             arguments: "{}".into(),
             index: 0,
         };
-        let err = run_tool(&tools, &runtime.disabled_tools, &unknown).unwrap_err();
+        let err = run_tool(
+            &tools,
+            &runtime.disabled_tools,
+            ToolPolicy::Auto,
+            &[],
+            std::path::Path::new("."),
+            &unknown,
+        )
+        .unwrap_err();
         assert!(err.contains("unknown tool"), "{err}");
     }
 
@@ -1765,7 +2001,15 @@ mod tests {
             index: 0,
         };
         let disabled: Vec<String> = Vec::new();
-        let (payload, summary) = run_tool(&runtime.tools, &disabled, &call).expect("extract");
+        let (payload, summary) = run_tool(
+            &runtime.tools,
+            &disabled,
+            ToolPolicy::Auto,
+            &[],
+            std::path::Path::new("."),
+            &call,
+        )
+        .expect("extract");
         assert!(payload.contains("\"format\":\"markdown\""), "{payload}");
         assert!(payload.contains("Body text."), "{payload}");
         assert!(summary.contains("markdown"), "{summary}");
@@ -1848,6 +2092,9 @@ mod tests {
         let err = run_tool(
             &tools,
             &[],
+            ToolPolicy::Auto,
+            &[],
+            std::path::Path::new("."),
             &ToolCall {
                 id: "t1".into(),
                 name: "list_self_edits".into(),
@@ -1871,6 +2118,9 @@ mod tests {
         let (payload, summary) = run_tool(
             &tools,
             &[],
+            ToolPolicy::Auto,
+            &[],
+            std::path::Path::new("."),
             &ToolCall {
                 id: "t1".into(),
                 name: "propose_self_edit".into(),
@@ -1891,6 +2141,9 @@ mod tests {
         let (payload, summary) = run_tool(
             &tools,
             &[],
+            ToolPolicy::Auto,
+            &[],
+            std::path::Path::new("."),
             &ToolCall {
                 id: "t2".into(),
                 name: "list_self_edits".into(),

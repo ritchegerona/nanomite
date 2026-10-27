@@ -4,6 +4,54 @@ Every entry describes a verified change. Labels: implemented+tested,
 implemented unverified, planned, experimental, unsupported. Planned work is
 never listed as released.
 
+## [0.5.0] — 2026-10-27
+
+### Added
+
+- **Plan mode enforcement**: `ToolPolicy::Plan` allows the plan tools
+  (create/get/update/list) alongside Safe tools; every other mutation is
+  refused at dispatch with guidance to `create_plan`. The footer shows a
+  persistent plan-mode badge with the newest plan's name. Status: implemented
+  and tested (437-test suite).
+- **Session persistence v2**: settings (tool policy, disabled tools,
+  reasoning, theme) and plan snapshots travel with the conversation; restore
+  applies them back to the live config/runtime. The `/sessions` picker groups
+  per workspace. Save filenames are nanosecond-unique (fixed a concurrent-save
+  overwrite). Status: implemented and tested (v2 round-trip integration test).
+- **Hooks / event system** (`src/hooks.rs`): five lifecycle events
+  (pre/post tool call, turn start/end, policy change), JSON payloads on
+  stdin, per-hook timeouts with process-group kill, `hooks.json` manifest +
+  auto-discovery under `hooks/<event>/`, `NANOMITE_HOOKS=0` kill switch.
+  Deny hooks block pre-tool calls (`code: hook_denied`); all other hook
+  failures are advisory. Status: implemented and tested.
+- **External tool SDK** (`src/tools/external_tools.rs`): TOML manifests in
+  `~/.config/nanomite/tools/` (`NANOMITE_TOOLS_DIR` override) with
+  load-time schema validation; arguments as JSON on stdin (no shell
+  interpolation), bounded stdout back to the model, dispatch through the same
+  policy/hook gate as built-ins; listed in `/tools`. Status: implemented and
+  tested (incl. end-to-end run + timeout kill tests).
+- **Parallel worktrees** (`src/worktree.rs`): `nanomite --worktree <branch>`
+  creates/reuses a managed worktree under `.nanomite/worktrees/` and opens
+  the agent there; `/worktrees` lists all with `[nanomite]`/`[other]` tags.
+  Removal restricted to managed paths; branch names validated. Status:
+  implemented and tested (isolation verified).
+- **CI + packaging**: GitHub Actions (check/fmt/clippy/test/bench, tag builds
+  with binary upload), COPR spec (`pack/fedora/`), Flatpak manifest
+  (`pack/flatpak/`), crates.io checklist + full package metadata. Status:
+  implemented.
+- **Documentation overhaul**: all subsystem docs refreshed; new
+  `PLAN_MODE.md` and `EXTENDING.md`; `docs/README.md` rewritten as a real
+  index. Status: implemented.
+
+### Fixed
+
+- **Clippy fully clean** (`cargo clippy --all-targets -- -D warnings`: 0
+  errors) after accruing drift during rapid development; dead code removed,
+  idioms fixed. The new CI would have caught this - it now gates every push.
+- **ToolPolicy gate restored**: the dispatch-time policy check in
+  `run_tool` had been lost in a checkout revert; Plan/Readonly modes were
+  not enforced. Restored and pinned by dispatch-level tests.
+
 ## [0.4.0] — 2026-10-27
 
 ### Added

@@ -15,7 +15,56 @@ type Backend = CrosstermBackend<Stdout>;
 #[tokio::main]
 async fn main() -> io::Result<()> {
     install_panic_hook();
-    let cfg = nanomite::config::Config::load();
+
+    // `nanomite --worktree <branch>`: create/reuse a managed git worktree and
+    // open the agent inside it, so parallel agents never share a checkout.
+    let mut args = std::env::args().skip(1);
+    let mut worktree_branch: Option<String> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--worktree" => match args.next() {
+                Some(b) if !b.starts_with('-') => worktree_branch = Some(b),
+                Some(other) => {
+                    eprintln!("nanomite: --worktree needs a branch name (got {other})");
+                    return Ok(());
+                }
+                None => {
+                    eprintln!("nanomite: --worktree needs a branch name");
+                    return Ok(());
+                }
+            },
+            "--version" | "-V" => {
+                println!("nanomite {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "--help" | "-h" => {
+                println!(
+                    "nanomite {} - terminal coding agent",
+                    env!("CARGO_PKG_VERSION")
+                );
+                println!("usage: nanomite [--worktree <branch>]");
+                return Ok(());
+            }
+            other => {
+                eprintln!("nanomite: unknown argument `{other}` (try --help)");
+                return Ok(());
+            }
+        }
+    }
+    let mut cfg = nanomite::config::Config::load();
+    if let Some(branch) = &worktree_branch {
+        match nanomite::worktree::ensure(&cfg.workspace, branch) {
+            Ok(path) => {
+                eprintln!("nanomite: worktree ready at {}", path.display());
+                // Open the agent in the worktree: workspace = worktree path.
+                cfg.workspace = path;
+            }
+            Err(e) => {
+                eprintln!("nanomite: {e}");
+                return Ok(());
+            }
+        }
+    }
     let handle = tokio::runtime::Handle::current();
 
     let mut terminal = setup_terminal()?;

@@ -32,14 +32,14 @@ see `docs/ARCHITECTURE.md` for current module map).
 | 5 | Symbol index | ✅ Done | `index_symbols`/`find_symbol`/`find_references` |
 | 6 | Policy engine + `/policy` | ✅ Done | Auto/Plan/Readonly, persisted, immediate effect |
 | 7 | Plan/task list system | ✅ Done | 5 tools with deps/tags/status, JSON persistence |
-| 8 | **Plan mode enforcement** | 🔄 Next | Restrict to Safe + plan tools in Plan mode |
-| 9 | Session persistence | ⬜ Backlog | Serialize/restore conversation + plan state |
-| 10 | Hooks/event system | ⬜ Backlog | Pre/post tool call hooks, guardrails |
-| 11 | External Tool SDK | ⬜ Backlog | User-defined tools via `~/.config/nanomite/tools/*.toml` |
-| 12 | Parallel worktrees | ⬜ Backlog | Multiple agents on git worktrees |
-| 13 | File intelligence (extractors/indexing) | ⬜ Backlog | Per-format extractors, incremental indexing |
-| 14 | CI + Packaging | ⬜ Backlog | GitHub Actions, crates.io, COPR, Flatpak |
-| 15 | Docs overhaul | ⬜ In progress | 11 docs being updated |
+| 8 | Plan mode enforcement | ✅ Done | Plan tools allowed, mutations gated, footer badge |
+| 9 | Session persistence | ✅ Done | v2 schema: settings + plans travel with sessions |
+| 10 | Hooks/event system | ✅ Done | 5 events, deny gates, process-group kill |
+| 11 | External Tool SDK | ✅ Done | TOML manifests, stdin JSON contract, schema validation |
+| 12 | Parallel worktrees | ✅ Done | --worktree flag, /worktrees listing, managed-path removal |
+| 13 | File intelligence (extractors/indexing) | ✅ Done | extract/ pipeline + symbol index tools |
+| 14 | CI + Packaging | ✅ Done | GitHub Actions, COPR spec, Flatpak manifest, crates metadata |
+| 15 | Docs overhaul | ✅ Done | 13 docs, incl. new PLAN_MODE.md + EXTENDING.md |
 
 ## Rules (binding now)
 

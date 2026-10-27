@@ -3,15 +3,15 @@ use super::text;
 use super::theme::{glyph, Theme};
 use crate::app::{
     Action, App, BoardState, ImproveLevel, ImproveReview, ImproveState, Overlay, OverlayKind,
-    PickerItem, PickerValue, SudoPasswordState, CONNECT_FIELDS, IMPROVE_DETAIL_LINES,
+    PickerItem, PickerValue, CONNECT_FIELDS, IMPROVE_DETAIL_LINES,
 };
 use crate::commands::Command;
 use crate::config::model_context_limit;
 
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -234,6 +234,21 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
             toast_msg.clone(),
             Style::default().fg(theme.warn()),
         ));
+    }
+
+    // Plan mode badge: always visible while the mode is on, with the active
+    // plan's name when one exists. Warn color so it is never missed.
+    if app.cfg.tool_policy == crate::agent::policy::ToolPolicy::Plan {
+        left.push(Span::styled("  ", theme.faint_style()));
+        left.push(Span::styled(
+            "◐ plan mode",
+            Style::default()
+                .fg(theme.warn())
+                .add_modifier(Modifier::BOLD),
+        ));
+        if let Some(latest) = app.latest_plan_name() {
+            left.push(Span::styled(format!(" · {latest}"), theme.faint_style()));
+        }
     }
 
     // Visual selection indicator
@@ -1017,7 +1032,16 @@ pub fn tools_row_count() -> u16 {
             last = Some(spec.category);
         }
     }
-    (catalog.len() + groups + 1) as u16
+    // External tools render as one extra group (header + summary) when present.
+    let external = external_tool_names().len();
+    let external_rows = if external > 0 { external + 1 } else { 0 };
+    (catalog.len() + groups + 1 + external_rows) as u16
+}
+
+/// External tool names for the /tools overlay, from the manifest dir.
+fn external_tool_names() -> Vec<String> {
+    crate::tools::external_tools::ExternalTools::load(&crate::tools::external_tools::tools_dir())
+        .names()
 }
 
 /// `/tools` tool library: the catalog grouped by category, each row showing
@@ -1108,6 +1132,39 @@ pub fn tools(frame: &mut Frame, area: Rect, app: &App) {
                 },
             ),
         ]));
+    }
+
+    // External tools: one "external" group with manifest-loaded tools.
+    let external = external_tool_names();
+    if !external.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " external",
+            Style::default()
+                .fg(theme.accent())
+                .add_modifier(Modifier::BOLD),
+        )));
+        for name in &external {
+            let disabled = is_disabled(name);
+            let marker = if disabled { glyph::CROSS } else { glyph::CHECK };
+            let marker_style = if disabled {
+                Style::default().fg(theme.danger())
+            } else {
+                Style::default().fg(theme.success())
+            };
+            lines.push(Line::from(vec![
+                Span::raw("   "),
+                Span::styled(format!("{marker} "), marker_style),
+                Span::styled(
+                    name.clone(),
+                    if disabled {
+                        theme.dim()
+                    } else {
+                        Style::default().fg(theme.strong())
+                    },
+                ),
+                Span::styled("  from tools/*.toml", theme.faint_style()),
+            ]));
+        }
     }
 
     // Keep the highlighted row inside the viewport.

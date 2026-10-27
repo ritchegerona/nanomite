@@ -10,6 +10,7 @@ pub mod board;
 pub mod commands;
 pub mod config;
 pub mod extract;
+pub mod hooks;
 pub mod improve;
 // The memory engine exposes a deliberate API superset of what the TUI consumes
 // today (backup/restore, consolidation, listing helpers); unused members of a
@@ -19,6 +20,7 @@ pub mod memory;
 pub mod session;
 pub mod tools;
 pub mod ui;
+pub mod worktree;
 
 /// Test support utilities - re-exports internal test types for integration tests.
 #[cfg(test)]

@@ -1,15 +1,15 @@
 # Releases and updates
 
-Status: **L1 — manual releases, v0.4.0 (2026-10-27).** Infrastructure for
+Status: **L1 — manual releases, v0.5.0 (2026-10-27).** Infrastructure for
 authenticated updates is not implemented; this file specifies the required
 workflow so any future implementation can be checked against it.
 
 ## Current release
 
-- **Version:** `0.4.0` (see `Cargo.toml`)
-- **Git tag:** `v0.4.0`
-- **Build:** `cargo build --release` (static binary, ~8 MB)
-- **Tests:** 417 lib + 8 integration = 425 passed
+- **Version:** `0.5.0` (see `Cargo.toml`)
+- **Git tag:** `v0.5.0`
+- **Build:** `cargo build --release`
+- **Tests:** 437 lib + 8 integration = 445 passed, clippy clean
 - **Benchmarks:** stable, no regressions
 - **Install:** copy binary to `$PATH`; previous binary kept as rollback
 
@@ -31,8 +31,8 @@ supports them.
 
 - Releases are manual: `cargo build --release`, copy the binary, keep the
   previous binary as the rollback artifact.
-- Last known-good baseline: git `9a1d70a` (v0.4.0), 417/417 tests green,
-  sudo modal verified in live use.
+- Last known-good baseline: v0.5.0, 437/437 lib + 8 integration tests green,
+  clippy clean (CI gates it).
 - Versioning: semver + `v*` tags; generate notes from CHANGELOG entries,
   Git history, and test results — never from model invention.
 
@@ -40,6 +40,7 @@ supports them.
 
 | Version | Date | Highlights |
 |---|---|---|
+| 0.5.0 | 2026-10-27 | Stages F-L: plan-mode enforcement, session v2, hooks, external tool SDK, worktrees, CI+packaging, docs. Clippy clean. |
 | 0.4.0 | 2026-10-27 | Central policy engine + `/policy`, themed sudo password modal (live-verified), git/test/index/plan tools. 33 tools, 417 tests. |
 | 0.3.0 | 2026-10-26 | Stages A-E: Authorization engine, Git tools (5), Test runner, Symbol index (3), Policy engine (Auto/Plan/Readonly), Plan system (5). 33 tools total. |
 | 0.2.0 | 2026-10-15 | Memory (L3), extractors, board, self-improve, tool library, 18 tools. |

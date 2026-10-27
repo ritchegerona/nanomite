@@ -76,6 +76,7 @@ pub enum TestStatus {
     Skipped,
 }
 
+#[derive(Clone)]
 pub struct TestTools {
     root: PathBuf,
 }
@@ -349,7 +350,6 @@ fn parse_cargo_output(output: &str) -> TestSummary {
 }
 
 fn parse_npm_output(output: &str) -> TestSummary {
-    let mut total = 0;
     let mut passed = 0;
     let mut failed = 0;
     let mut skipped = 0;
@@ -367,7 +367,7 @@ fn parse_npm_output(output: &str) -> TestSummary {
             skipped += line.matches("pending").count() + line.matches("skipped").count();
         }
     }
-    total = passed + failed + skipped;
+    let total = passed + failed + skipped;
 
     TestSummary {
         total,
@@ -453,7 +453,6 @@ fn parse_pytest_output(output: &str) -> TestSummary {
 }
 
 fn parse_jest_output(output: &str) -> TestSummary {
-    let mut total = 0;
     let mut passed = 0;
     let mut failed = 0;
     let mut skipped = 0;
@@ -470,7 +469,7 @@ fn parse_jest_output(output: &str) -> TestSummary {
             skipped += 1;
         }
     }
-    total = passed + failed + skipped;
+    let total = passed + failed + skipped;
 
     TestSummary {
         total,
@@ -493,13 +492,12 @@ fn parse_go_output(output: &str) -> TestSummary {
     let mut failed = 0;
     let mut skipped = 0;
     let mut tests = Vec::new();
-    let mut current_pkg = String::new();
 
     for line in output.lines() {
         // === RUN   TestName
         if line.contains("=== RUN") {
             if let Some(name) = line.split_whitespace().nth(2) {
-                current_pkg = name.to_string();
+                let _ = name;
             }
         }
         // --- PASS: TestName (0.00s)
@@ -551,11 +549,8 @@ fn parse_go_output(output: &str) -> TestSummary {
                 });
             }
         }
-        // ok  pkg  0.001s
-        else if line.starts_with("ok  ") {
-        }
-        // FAIL pkg  0.001s
-        else if line.starts_with("FAIL ") {
+        // ok/FAIL package summary lines carry no per-test data we track.
+        else if line.starts_with("ok  ") || line.starts_with("FAIL ") {
         }
     }
 

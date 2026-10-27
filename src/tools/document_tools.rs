@@ -36,6 +36,7 @@ pub struct ReadDocumentResult {
     pub text: String,
 }
 
+#[derive(Clone)]
 pub struct DocumentTools {
     /// Workspace root, canonicalised once at construction (same as FileTools).
     root: PathBuf,

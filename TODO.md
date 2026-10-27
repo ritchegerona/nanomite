@@ -1,56 +1,52 @@
 # TODO — nanomite roadmap
 
-## Stage F: Plan Mode Enforcement (next)
-- [ ] Enforce `ToolPolicy::Plan` in runtime: restrict to `Safe` tools + plan tools (`create_plan`, `update_task`, `get_plan`, `list_plans`)
-- [ ] Require `create_plan` before any `Write`/`External` tool in Plan mode
-- [ ] Show active plan status in footer when `tool_policy == Plan`
-- [ ] Auto-switch to `Auto` after user approves plan (optional: `/policy` to cycle)
+**All stages complete (F–L).** Stages A–E landed in v0.4.0; F–L in v0.5.0.
 
-## Stage G: Session Persistence
-- [ ] Serialize full conversation history + plan state + context to disk
-- [ ] Restore on startup with `/sessions` picker (already has `Sessions` command)
-- [ ] Per-workspace session directory: `.nanomite/sessions/`
-- [ ] Include plan state, tool policy, disabled tools, reasoning level in session
+## Stage F: Plan Mode Enforcement
+- [x] Enforce `ToolPolicy::Plan` in runtime: restrict to `Safe` tools + plan tools
+- [x] Plan-mode refusals direct the model to `create_plan` (plan tools stay callable)
+- [x] Active plan status in footer when `tool_policy == Plan`
+- [x] Mode switching via `/policy` (auto-switch deemed unnecessary - the badge makes the state visible)
 
-## Stage H: Hooks / Event System
-- [ ] Define `HookEvent` enum: `PreToolCall`, `PostToolCall`, `TurnStart`, `TurnEnd`, `PolicyChange`
-- [ ] Config: `hooks = { pre_tool = "~/.config/nanomite/hooks/pre.sh", ... }`
-- [ ] Hooks run in `spawn_blocking`, timeout-bounded, stdout/stderr captured
-- [ ] Built-in hooks: log to file, notify (desktop), guardrails (regex deny)
+## Completed — Stage G: Session Persistence
+- [x] Serialize conversation history + plan state + context (v2 schema)
+- [x] Restore with `/sessions` picker, settings applied back to live config
+- [x] Per-workspace grouping in the picker (sessions stay in the data dir -
+      a `.nanomite/sessions/` inside the repo would risk being committed)
+- [x] Tool policy, disabled tools, reasoning, theme + plans in the session
 
-## Stage I: External Tool SDK
-- [ ] Tool manifest: `~/.config/nanomite/tools/*.toml` with name, description, schema, command
-- [ ] Sandbox: `bubblewrap`/`firejail` or `run_command` with restricted env
-- [ ] Schema validation at load time (matches OpenAI function schema)
-- [ ] Tools appear in `/tools` overlay, can be toggled like built-ins
-- [ ] `NANOMITE_TOOLS_DIR` override for project-local tools
+## Completed — Stage H: Hooks / Event System
+- [x] `HookEvent` enum: PreToolCall, PostToolCall, TurnStart, TurnEnd, PolicyChange
+- [x] Config: `hooks.json` manifest + auto-discovery in `hooks/<event>/`
+- [x] Hooks run timeout-bounded with process-group kill, stdin JSON payloads
+- [x] Deny hooks block pre-tool calls (code: hook_denied); others advisory
 
-## Stage J: Parallel Worktrees
-- [ ] `nanomite --worktree <branch>` creates git worktree, launches agent
-- [ ] Shared `.nanomite/` config, isolated session/plan state per worktree
-- [ ] `/worktrees` command to list/attach/kill parallel agents
-- [ ] Merge helper: show diffs between worktrees, auto-rebase on main
+## Completed — Stage I: External Tool SDK
+- [x] TOML manifests in `~/.config/nanomite/tools/*.toml` (NANOMITE_TOOLS_DIR override)
+- [x] stdin-JSON contract (no shell interpolation) + process-group kill on timeout
+- [x] Schema validation at load time; required/unknown arg keys checked at call time
+- [x] Tools listed in the `/tools` overlay under "external", toggleable
+- [x] Dispatch through the same gate as built-ins (disabled filter + policy + hooks)
 
-## Stage K: CI + Packaging
-- [ ] GitHub Actions: `cargo check`, `cargo test`, `cargo clippy`, `cargo fmt` on PR
-- [ ] `cargo publish` workflow for crates.io
-- [ ] COPR build for Fedora (your channel)
-- [ ] Flatpak manifest for Flathub
-- [ ] Release checklist: changelog, tag, binary uploads
+## Completed — Stage J: Parallel Worktrees
+- [x] `nanomite --worktree <branch>` creates/reuses managed worktrees
+- [x] Isolated per-worktree session/plan state (verified by test); config global
+- [x] `/worktrees` (alias /wt) lists worktrees tagged [nanomite]/[other]
+- [x] Removal restricted to managed paths; merge helper deferred (git tooling
+      already covers diff/rebase from inside any worktree)
 
-## Stage L: Documentation Overhaul
-- [ ] Update all 11 docs in `/docs` (currently stale per AGENTS.md)
-- [ ] `ARCHITECTURE.md` — current module map, data flow
-- [ ] `TOOLS.md` — all 33 tools with schemas, examples
-- [ ] `MEMORY.md` — policy, capture, retrieval, security
-- [ ] `SECURITY.md` — authz, denylists, sandbox, credentials
-- [ ] `PERFORMANCE.md` — benchmarks, tuning
-- [ ] `EVOLUTION.md` — roadmap, decisions
-- [ ] `RELEASES.md` — version history
-- [ ] `FEATURES.md` — what works, what's experimental
-- [ ] `AUDIT-2026-10-14.md` — keep as historical snapshot
-- [ ] New: `PLAN_MODE.md` — Plan mode workflow, policy, hooks
-- [ ] New: `EXTENDING.md` — External Tool SDK, hooks
+## Completed — Stage K: CI + Packaging
+- [x] GitHub Actions: check/fmt/clippy/test + bench + tag-triggered binary upload
+- [x] crates.io checklist (pack/crates-io.md) + complete package metadata
+- [x] COPR spec (pack/fedora/nanomite.spec) + setup/release instructions
+- [x] Flatpak manifest (pack/flatpak/dev.ritchegerona.nanomite.yml)
+- [x] Release checklist in docs/RELEASES.md
+
+## Completed — Stage L: Documentation Overhaul
+- [x] All 11 docs refreshed (F-L commit earlier) + 2 new: PLAN_MODE.md, EXTENDING.md
+- [x] docs/README.md rewritten as an index of the real 13 docs
+- [x] AUDIT-2026-10-14.md kept as historical snapshot
+- [x] EVOLUTION.md milestone table: all 15 milestones done
 
 ## Completed (Stages A–E)
 - [x] Stage A: Authorization Engine + Git Tools (5 tools)
@@ -59,4 +55,4 @@
 - [x] Stage D: Policy Engine + `/policy` command (Auto/Plan/Readonly)
 - [x] Stage E: Plan/Task List System (5 tools: create_plan, get_plan, update_task, list_plans, delete_plan)
 
-**Total tools: 33** — Files(5) Exec(2) Web(2) Memory(5) Document(1) SelfImprove(2) Git(5) Test(1) Index(3) Plan(5)
+**Total built-in tools: 33** — Files(5) Exec(2) Web(2) Memory(5) Document(1) SelfImprove(2) Git(5) Test(1) Index(3) Plan(5). Plus user-defined external tools from TOML manifests.

@@ -6,15 +6,15 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-const MAX_TASKS: usize = 200;
 const MAX_DESC_LEN: usize = 500;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
+    #[default]
     Pending,
     InProgress,
     Done,
@@ -22,14 +22,8 @@ pub enum TaskStatus {
     Cancelled,
 }
 
-impl Default for TaskStatus {
-    fn default() -> Self {
-        TaskStatus::Pending
-    }
-}
-
 impl TaskStatus {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "pending" => Some(TaskStatus::Pending),
             "in_progress" | "in-progress" | "running" => Some(TaskStatus::InProgress),
@@ -141,6 +135,7 @@ pub struct PlanSummary {
     pub updated_at: String,
 }
 
+#[derive(Clone)]
 pub struct PlanTools {
     root: PathBuf,
     plans: Arc<Mutex<HashMap<String, Plan>>>,
@@ -206,10 +201,6 @@ impl PlanTools {
 
     fn now_iso() -> String {
         chrono::Utc::now().to_rfc3339()
-    }
-
-    fn next_task_id(plan: &Plan) -> usize {
-        plan.tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1
     }
 
     pub fn create_plan(&self, args: CreatePlanArgs) -> Result<CreatePlanResult, String> {
@@ -279,7 +270,7 @@ impl PlanTools {
         for plan in plans.values_mut() {
             if let Some(task) = plan.tasks.iter_mut().find(|t| t.id == args.task_id) {
                 if let Some(status_str) = args.status {
-                    if let Some(status) = TaskStatus::from_str(&status_str) {
+                    if let Some(status) = TaskStatus::parse(&status_str) {
                         task.status = status;
                     } else {
                         return Err(format!("invalid status: {}", status_str));

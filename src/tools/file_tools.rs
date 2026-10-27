@@ -91,6 +91,7 @@ const MAX_ENTRIES: usize = 400;
 const MAX_HITS: usize = 60;
 const MAX_SCAN_FILES: usize = 1_500;
 
+#[derive(Clone)]
 pub struct FileTools {
     /// Resolved once at construction: canonicalising on every call was pure syscall waste.
     root: PathBuf,

@@ -158,6 +158,7 @@ fn strip_tags(s: &str) -> String {
     out.trim().to_string()
 }
 
+#[derive(Clone)]
 pub struct WebTools;
 
 impl WebTools {

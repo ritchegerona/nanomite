@@ -7,12 +7,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::process::Command;
 
 const MAX_SYMBOLS: usize = 5000;
-const MAX_RESULTS: usize = 100;
-const INDEX_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexSymbolsArgs {
@@ -109,16 +106,17 @@ struct SymbolIndex {
     workspace_root: PathBuf,
 }
 
+#[derive(Clone)]
 pub struct IndexTools {
     root: PathBuf,
-    index_cache: std::sync::Mutex<Option<SymbolIndex>>,
+    index_cache: std::sync::Arc<std::sync::Mutex<Option<SymbolIndex>>>,
 }
 
 impl IndexTools {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
-            index_cache: std::sync::Mutex::new(None),
+            index_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -272,7 +270,7 @@ impl IndexTools {
     }
 
     fn build_index(&self, force: bool) -> Result<SymbolIndex, String> {
-        let started = std::time::Instant::now();
+        let _started = std::time::Instant::now();
 
         // Check local cache first
         if !force {
@@ -382,7 +380,7 @@ impl IndexTools {
         };
 
         let mut matches = Vec::new();
-        for (idx, sym) in index.symbols.iter().enumerate() {
+        for sym in index.symbols.iter() {
             if matches.len() >= limit {
                 break;
             }
@@ -518,7 +516,6 @@ impl IndexTools {
 struct CtagEntry {
     name: String,
     path: String,
-    pattern: String,
     #[serde(rename = "kind")]
     kind: Option<String>,
     #[serde(rename = "language")]
@@ -914,7 +911,7 @@ mod internal {
     fn path_escape_is_refused() {
         let dir = std::env::temp_dir().join(format!("nanomite-index-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let tools = IndexTools::new(&dir);
+        let _tools = IndexTools::new(&dir);
         // This should work - no path escape in these tools
         let _ = fs::remove_dir_all(&dir);
     }

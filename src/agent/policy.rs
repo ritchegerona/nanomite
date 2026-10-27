@@ -37,6 +37,15 @@ impl Risk {
     }
 }
 
+/// The plan tools stay callable in Plan mode: building and refining the plan
+/// is the mode's whole purpose. Everything mutating still waits for the user.
+pub fn is_plan_tool(name: &str) -> bool {
+    matches!(
+        name.trim(),
+        "create_plan" | "get_plan" | "update_task" | "list_plans"
+    )
+}
+
 /// Which calls the current mode permits.
 ///
 /// The default is [`ToolPolicy::Auto`]: everything the user has enabled runs,
@@ -91,8 +100,10 @@ impl ToolPolicy {
     pub fn authorize(&self, name: &str) -> Result<(), String> {
         let allowed = match self {
             Self::Auto => true,
-            // Reads are always permitted in a restricted mode.
-            Self::Plan | Self::Readonly => Risk::of(name) == Risk::Safe,
+            // Plan mode: reads run, plan tools run (creating the plan IS the
+            // point of the mode), everything else waits for user approval.
+            Self::Plan => Risk::of(name) == Risk::Safe || is_plan_tool(name),
+            Self::Readonly => Risk::of(name) == Risk::Safe,
         };
         if allowed {
             return Ok(());
@@ -100,8 +111,9 @@ impl ToolPolicy {
         let (code, message) = match self {
             Self::Plan => (
                 "plan_mode",
-                "plan mode is active: mutating tools are disabled. Do not attempt them - \
-                 report the plan and what you would run, and wait for the user.",
+                "plan mode is active: mutating tools are disabled. Create a plan first with \
+                 create_plan (allowed in this mode), describe each step and what you would \
+                 run, then wait for the user to review it and switch back with /policy.",
             ),
             Self::Readonly => (
                 "read_only_policy",
@@ -163,8 +175,38 @@ mod tests {
     }
 
     #[test]
+    fn plan_mode_allows_plan_tools_but_not_other_writes() {
+        for name in ["create_plan", "get_plan", "update_task", "list_plans"] {
+            assert!(
+                ToolPolicy::Plan.authorize(name).is_ok(),
+                "{name} must run in plan mode"
+            );
+        }
+        // delete_plan is destructive even for plans: still gated.
+        assert!(ToolPolicy::Plan.authorize("delete_plan").is_err());
+        for name in ["write_file", "edit_file", "git_commit", "run_command"] {
+            assert!(
+                ToolPolicy::Plan.authorize(name).is_err(),
+                "{name} must be gated"
+            );
+        }
+        // Readonly stays strict: plan mutations are refused there too.
+        assert!(ToolPolicy::Readonly.authorize("create_plan").is_err());
+    }
+
+    #[test]
+    fn plan_mode_refusal_points_at_create_plan() {
+        let err = ToolPolicy::Plan.authorize("write_file").unwrap_err();
+        assert!(
+            err.contains("create_plan"),
+            "refusal must guide the model: {err}"
+        );
+        assert!(err.contains("plan_mode"));
+    }
+
+    #[test]
     fn restricted_modes_allow_reads_and_refuse_mutations() {
-        for policy in [ToolPolicy::Plan, ToolPolicy::Readonly] {
+        for policy in [ToolPolicy::Readonly] {
             for name in [
                 "read_file",
                 "list_files",

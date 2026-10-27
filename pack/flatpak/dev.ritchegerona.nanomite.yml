@@ -1,0 +1,26 @@
+# Flatpak manifest for Flathub (dev.ritchegerona.nanomite)
+id: dev.ritchegerona.nanomite
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: nanomite
+
+finish-args:
+  - --share=network            # model endpoints, web tools
+  - --filesystem=home          # workspace files
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+
+modules:
+  - name: nanomite
+    buildsystem: simple
+    build-commands:
+      - cargo build --release --offline
+      - install -Dm755 target/release/nanomite /app/bin/nanomite
+      - install -Dm644 README.md /app/share/doc/nanomite/README.md
+    sources:
+      - type: dir
+        path: ../..

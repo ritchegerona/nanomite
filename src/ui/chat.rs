@@ -27,27 +27,28 @@ pub mod tool_glyph {
 }
 
 pub fn render_prompt_queue(frame: &mut Frame, area: Rect, app: &crate::app::App) {
-    let theme = app.theme;
+    let _theme = app.theme;
     let queue_len = app.prompt_queue_len();
     if queue_len == 0 {
         return;
     }
 
-    let mut lines = Vec::new();
-    lines.push(Line::from(vec![
-        Span::styled(
-            "  ⏳ Queued prompts (",
-            Style::default().fg(app.theme.faint()),
-        ),
-        Span::styled(
-            queue_len.to_string(),
-            Style::default()
-                .fg(app.theme.accent())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(")", Style::default().fg(app.theme.faint())),
-    ]));
-    lines.push(Line::default());
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "  ⏳ Queued prompts (",
+                Style::default().fg(app.theme.faint()),
+            ),
+            Span::styled(
+                queue_len.to_string(),
+                Style::default()
+                    .fg(app.theme.accent())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(")", Style::default().fg(app.theme.faint())),
+        ]),
+        Line::default(),
+    ];
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -407,18 +408,6 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
     );
 }
 
-fn rail_style(entry: &Entry, theme: &Theme) -> Style {
-    match entry.role {
-        EntryRole::User => Style::default().fg(theme.accent()),
-        EntryRole::Assistant => match entry.phase {
-            Phase::Streaming => Style::default().fg(theme.accent_soft()),
-            Phase::Failed => Style::default().fg(theme.danger()),
-            _ => Style::default().fg(theme.success()),
-        },
-        EntryRole::System => Style::default().fg(theme.border()),
-    }
-}
-
 /// Format timestamp as HH:MM
 fn format_timestamp(ts: u64) -> String {
     let dt = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts);
@@ -628,11 +617,11 @@ impl Entry {
                 }
             }
             EntryRole::Assistant => {
-                let wrap_w = inner;
+                let _wrap_w = inner;
                 let ts = format_timestamp(self.started.elapsed().as_secs());
 
                 // Assistant badge with timestamp
-                let (badge_style, badge_text) = match self.phase {
+                let (badge_style, _badge_text) = match self.phase {
                     Phase::Streaming => (
                         Style::default()
                             .fg(theme.panel_bg())
@@ -697,7 +686,7 @@ impl Entry {
 
                     // Mini-diff chip for edit_file
                     if tool.name == "edit_file" {
-                        if let Some(r) = tool.edit_replacements {
+                        if let Some(_r) = tool.edit_replacements {
                             pill_spans.push(Span::raw(" "));
                             pill_spans.push(Span::styled(
                                 format!("{} {}", tool_glyph::DIFF_ADD, tool_glyph::DIFF_DEL),
