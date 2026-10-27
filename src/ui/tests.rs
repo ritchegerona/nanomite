@@ -599,6 +599,23 @@ async fn mouse_selection_lands_on_the_clicked_character() {
     let text = app.get_selected_text(sel);
     assert_eq!(text, "world", "selection text matches the drag: {text:?}");
 
+    // Ground truth: render with the selection active and find the cells that
+    // actually carry the highlight background on the anchored row.
+    let accent = app.theme.accent();
+    let mut terminal = Terminal::new(TestBackend::new(92, 24)).unwrap();
+    terminal.draw(|f| render(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let row = rect.y + 1;
+    let highlighted: Vec<usize> = (0..buffer.area.width)
+        .filter(|x| buffer[(*x, row)].bg == accent)
+        .map(|x| usize::from(x - rect.x))
+        .collect();
+    assert_eq!(
+        highlighted,
+        vec![8, 9, 10, 11, 12],
+        "highlight must paint exactly on the anchored cells: {highlighted:?}"
+    );
+
     app.on_mouse(mouse(
         MouseEventKind::Up(MouseButton::Left),
         rect.x + 13,
@@ -658,9 +675,10 @@ async fn mouse_selection_survives_blank_gap_rows() {
         modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
     };
 
-    // The user block is bar/text/bar (3 rows) + 1 separator row. A drag that
-    // starts on the separator (row 4) must anchor at the entry's final line
-    // instead of dying, and keep tracking into the next entry.
+    // The user block is bar/text/bar (3 rows) + 1 separator row. A press on
+    // the separator (row 4) starts unanchored — the highlight must never
+    // begin above the pointer — and the anchor is taken from the first text
+    // row the drag reaches.
     app.on_mouse(mouse(
         MouseEventKind::Down(MouseButton::Left),
         rect.x + 4,
@@ -669,19 +687,16 @@ async fn mouse_selection_survives_blank_gap_rows() {
     app.on_mouse(mouse(
         MouseEventKind::Drag(MouseButton::Left),
         rect.x + 4,
-        rect.y + 6, // the text row of entry 1
+        rect.y + 5, // the text row of entry 1
     ));
 
     let sel = app.selection.as_ref().expect("selection active");
-    // The gap click anchored at entry 0's final line and the drag kept
-    // tracking into entry 1 — no dead zone in between.
-    assert_eq!(
-        sel.start.0, 0,
-        "anchor on entry 0 (clamped to its last line)"
-    );
-    assert_eq!(sel.end.0, 1, "drag tracked into entry 1");
+    // Entry 1's body rows: bar(0), text(1), bar(2). The lazy anchor lands on
+    // its text row — exactly where the pointer met text.
+    assert_eq!(sel.start, (1, 1, 4), "anchor at the first text row reached");
+    assert_eq!(sel.end, (1, 1, 4));
     let text = app.get_selected_text(sel);
-    assert!(text.contains("second"), "kept tracking: {text:?}");
+    assert!(text.is_empty(), "single-point anchor copies nothing");
 }
 
 #[tokio::test]

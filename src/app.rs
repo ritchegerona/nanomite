@@ -5030,29 +5030,21 @@ impl App {
         let content_width = chat_rect.width.saturating_sub(1) as usize;
         let inner_width = content_width.saturating_sub(chat::GUTTER).max(8);
 
-        // Find which entry and position the mouse is over
-        let (entry_idx, entry_row, entry_col) =
-            match self.mouse_to_text_position(row, col, inner_width) {
-                Some(pos) => pos,
-                None => return,
-            };
+        // Find which entry and position the mouse is over. Blank separator
+        // rows have no text position: `None` means the selection anchors
+        // lazily, at the first text row the pointer actually reaches.
+        let mapped = self.mouse_to_text_position(row, col, inner_width);
+        const UNANCHORED: (usize, usize, usize) = (usize::MAX, 0, 0);
 
         match event.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                // Start left-click selection (like opencode)
+            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Down(MouseButton::Right) => {
+                // Start a selection (like opencode). The highlight must begin
+                // exactly where the pointer meets text — never above it — so
+                // a press on a blank row stays unanchored for now.
+                let anchor = mapped.unwrap_or(UNANCHORED);
                 self.selection = Some(Selection {
-                    start: (entry_idx, entry_row, entry_col),
-                    end: (entry_idx, entry_row, entry_col),
-                    dragging: true,
-                    mode: None,
-                });
-                self.mark_dirty();
-            }
-            MouseEventKind::Down(MouseButton::Right) => {
-                // Start right-click selection (also works)
-                self.selection = Some(Selection {
-                    start: (entry_idx, entry_row, entry_col),
-                    end: (entry_idx, entry_row, entry_col),
+                    start: anchor,
+                    end: anchor,
                     dragging: true,
                     mode: None,
                 });
@@ -5060,9 +5052,17 @@ impl App {
             }
             MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Right) => {
                 // Update selection end for both left and right drag
+                let Some(pos) = mapped else {
+                    return;
+                };
                 if let Some(sel) = &mut self.selection {
                     if sel.dragging {
-                        sel.end = (entry_idx, entry_row, entry_col);
+                        sel.end = pos;
+                        // Lazy anchor: a drag that began on a blank row
+                        // starts where it first met text.
+                        if sel.start.0 == usize::MAX {
+                            sel.start = pos;
+                        }
                         self.mark_dirty();
                     }
                 }
@@ -5071,6 +5071,12 @@ impl App {
                 // End selection and copy to clipboard
                 if let Some(sel) = self.selection.take() {
                     if sel.dragging {
+                        // A press-drag that never reached a text row selects
+                        // nothing: no copy, no error toggle.
+                        if sel.start.0 == usize::MAX || sel.end.0 == usize::MAX {
+                            self.mark_dirty();
+                            return;
+                        }
                         let text = self.get_selected_text(&sel);
                         if !text.trim().is_empty() {
                             self.control_send(crate::app::Control::Copy(text));
@@ -5130,11 +5136,11 @@ impl App {
 
                 let body_row = local_row - status_rows;
                 let cached = entry.cache.as_ref()?;
-                // A click on the trailing gap row (the separator, or past the
-                // entry's last line) anchors at the entry's final line, so a
-                // drag crossing blank rows stays continuous instead of dying
-                // on dead zones.
-                let body_row = body_row.min(cached.lines.len().saturating_sub(1));
+                if body_row >= cached.lines.len() {
+                    // A blank separator row owns no text: the selection stays
+                    // unanchored until the pointer reaches a real line.
+                    return None;
+                }
 
                 // Display column -> char index: wide glyphs occupy two cells,
                 // so a raw char count would drift the highlight out of place.
@@ -5152,6 +5158,10 @@ impl App {
     pub(crate) fn get_selected_text(&self, sel: &Selection) -> String {
         let (start_entry, start_row, start_col) = sel.start;
         let (end_entry, end_row, end_col) = sel.end;
+        // An unanchored selection (press on a blank row) owns no text.
+        if start_entry == usize::MAX || end_entry == usize::MAX {
+            return String::new();
+        }
 
         // Ensure start is before end
         let (start_entry, start_row, start_col, end_entry, end_row, end_col) =
