@@ -52,6 +52,15 @@ pub struct Palette {
     pub danger: Rgb,
     pub warn: Rgb,
 
+    /// Tool-mode identity colours. The hues stay semantically stable across
+    /// themes (plan = amber caution, coder = blue focus, build = green works,
+    /// hacker = red unrestricted) so a mode is recognisable by colour alone;
+    /// each theme tunes the exact values to its ground.
+    pub mode_plan: Rgb,
+    pub mode_coder: Rgb,
+    pub mode_build: Rgb,
+    pub mode_hacker: Rgb,
+
     /// Added lines in a diff view. Distinct from `success`: a diff is data,
     /// and reading it as "this worked" is the wrong signal.
     pub diff_add: Rgb,
@@ -82,6 +91,10 @@ const MONO: Palette = Palette {
     success: (170, 200, 170),
     danger: (230, 130, 130),
     warn: (220, 190, 120),
+    mode_plan: (220, 190, 120),
+    mode_coder: (150, 176, 208),
+    mode_build: (170, 200, 170),
+    mode_hacker: (230, 130, 130),
     diff_add: (170, 200, 170),
     diff_delete: (230, 130, 130),
     tool: (168, 168, 168),
@@ -106,6 +119,10 @@ const MIDNIGHT: Palette = Palette {
     success: (126, 200, 142),
     danger: (228, 124, 124),
     warn: (222, 180, 110),
+    mode_plan: (222, 180, 110),
+    mode_coder: (126, 160, 226),
+    mode_build: (126, 200, 142),
+    mode_hacker: (228, 124, 124),
     diff_add: (126, 200, 142),
     diff_delete: (228, 124, 124),
     tool: (150, 160, 184),
@@ -130,6 +147,10 @@ const GRAPHITE: Palette = Palette {
     success: (61, 214, 140),
     danger: (255, 77, 90),
     warn: (255, 190, 70),
+    mode_plan: (255, 190, 70),
+    mode_coder: (86, 164, 232),
+    mode_build: (61, 214, 140),
+    mode_hacker: (255, 77, 90),
     diff_add: (61, 214, 140),
     diff_delete: (255, 77, 90),
     tool: (176, 184, 200),
@@ -155,6 +176,10 @@ const UMBRELLA: Palette = Palette {
     success: (76, 192, 110),
     danger: (236, 70, 76),
     warn: (226, 152, 62),
+    mode_plan: (226, 152, 62),
+    mode_coder: (86, 164, 232),
+    mode_build: (76, 192, 110),
+    mode_hacker: (236, 70, 76),
     diff_add: (76, 192, 110),
     diff_delete: (236, 70, 76),
     tool: (192, 152, 160),
@@ -306,6 +331,18 @@ impl Theme {
     pub fn danger(&self) -> Color {
         self.pick(self.palette().danger, Color::Red)
     }
+    pub fn mode_plan(&self) -> Color {
+        self.pick(self.palette().mode_plan, Color::Yellow)
+    }
+    pub fn mode_coder(&self) -> Color {
+        self.pick(self.palette().mode_coder, Color::Cyan)
+    }
+    pub fn mode_build(&self) -> Color {
+        self.pick(self.palette().mode_build, Color::Green)
+    }
+    pub fn mode_hacker(&self) -> Color {
+        self.pick(self.palette().mode_hacker, Color::Red)
+    }
     pub fn warn(&self) -> Color {
         self.pick(self.palette().warn, Color::Yellow)
     }
@@ -413,6 +450,30 @@ mod tests {
             assert_ne!(p.muted, p.faint, "{id:?}: muted and faint collapsed");
             assert_ne!(p.success, p.danger, "{id:?}: success and danger collapsed");
             assert_ne!(p.accent, p.accent_soft, "{id:?}: accent pair collapsed");
+            // The four mode colours must all differ: a mode is recognisable
+            // by colour alone in every theme.
+            let modes = [p.mode_plan, p.mode_coder, p.mode_build, p.mode_hacker];
+            for (i, a) in modes.iter().enumerate() {
+                for (j, b) in modes.iter().enumerate() {
+                    if i < j {
+                        assert_ne!(a, b, "{id:?}: mode colours {i}/{j} collapsed");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mode_colors_have_universal_ansi_fallbacks() {
+        // In 16-colour terminals the mode colour CODES are universal across
+        // themes: yellow plan, cyan coder, green build, red hacker.
+        for id in ThemeId::ALL {
+            let mut t = Theme::with_id(id);
+            t.depth = ColorDepth::Ansi;
+            assert_eq!(t.mode_plan(), Color::Yellow, "{id:?}");
+            assert_eq!(t.mode_coder(), Color::Cyan, "{id:?}");
+            assert_eq!(t.mode_build(), Color::Green, "{id:?}");
+            assert_eq!(t.mode_hacker(), Color::Red, "{id:?}");
         }
     }
 

@@ -24,6 +24,22 @@ power than the last: **Plan ⊂ Coder ⊂ Build ⊂ Hacker**. Status: **L3**
 
 Legacy config labels migrate: `auto` → `hacker`, `readonly` → `plan`.
 
+## Colour codes
+
+Each mode has a dedicated colour, stable across themes so a mode is
+recognisable by colour alone - shown in the footer badge and tinting the
+composer border while typing:
+
+| Mode | Colour (universal 16-colour code) |
+|---|---|
+| plan | **amber / yellow** - caution: research only |
+| coder | **blue / cyan** - focused code editing |
+| build | **green** - everything works, full local power |
+| hacker | **red** - unrestricted, danger |
+
+Each theme tunes the exact RGB values to its ground (a palette test keeps the
+four from collapsing); 16-colour terminals get the universal codes above.
+
 ## Cycling
 
 **Shift+Tab** (in the composer/chat view; overlays keep their own navigation)

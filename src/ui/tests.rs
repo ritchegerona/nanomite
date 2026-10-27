@@ -1336,25 +1336,49 @@ async fn footer_shows_mode_badge_for_non_default_modes() {
     use crate::agent::policy::ToolPolicy;
     let mut app = test_app().await;
 
-    // Build (default): no mode badge (the word "mode" alone can appear in
-    // other UI text, so assert on the exact badge strings below instead).
-    let text = frame_text(&mut app, 100, 24);
-    assert!(!text.contains("plan mode"), "plan badge leaked: {text}");
-    assert!(!text.contains("coder mode"), "coder badge leaked: {text}");
-    assert!(!text.contains("hacker mode"), "hacker badge leaked: {text}");
-
-    for (mode, badge) in [
-        (ToolPolicy::Plan, "plan mode"),
-        (ToolPolicy::Coder, "coder mode"),
-        (ToolPolicy::Hacker, "hacker mode"),
+    // Every mode shows its badge with its dedicated palette colour:
+    // amber plan, blue coder, green build, red hacker.
+    for (mode, badge, color) in [
+        (ToolPolicy::Plan, "plan mode", app.theme.mode_plan()),
+        (ToolPolicy::Coder, "coder mode", app.theme.mode_coder()),
+        (ToolPolicy::Build, "build mode", app.theme.mode_build()),
+        (ToolPolicy::Hacker, "hacker mode", app.theme.mode_hacker()),
     ] {
         app.cfg.tool_policy = mode;
-        let text = frame_text(&mut app, 100, 24);
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(100, 24)).expect("terminal");
+        terminal.draw(|f| render(f, &mut app)).expect("draw");
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = (0..buffer.area.height)
+            .map(|y| {
+                let mut line = String::new();
+                for x in 0..buffer.area.width {
+                    line.push_str(buffer[(x, y)].symbol());
+                }
+                line
+            })
+            .collect();
         assert!(
             text.contains(badge),
-            "{badge} missing for {mode:?}:\n{text}"
+            "{badge} missing for {mode:?}:
+{text}"
+        );
+
+        // The badge must draw the mode's dedicated colour, not a borrowed
+        // role colour.
+        let mut saw_mode_color = false;
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                if buffer[(x, y)].style().fg == Some(color) {
+                    saw_mode_color = true;
+                }
+            }
+        }
+        assert!(
+            saw_mode_color,
+            "{mode:?}: dedicated mode colour {color:?} not drawn"
         );
     }
+    app.cfg.tool_policy = ToolPolicy::Build;
 }
 
 #[tokio::test]

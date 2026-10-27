@@ -161,16 +161,17 @@ pub fn rule(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 /// Status strip above the composer. Rebuilt only when its inputs change.
-/// The footer badge for the active tool mode: `(label, color)` for every
-/// non-default mode; `None` for build (the default stays quiet).
-fn mode_badge(app: &App) -> Option<(String, Color)> {
+/// The footer badge for the active tool mode: `(label, color)`. Every mode
+/// gets its dedicated palette colour - amber plan, blue coder, green build,
+/// red hacker - so the mode is recognisable by colour alone in any theme.
+fn mode_badge(app: &App) -> (String, Color) {
     use crate::agent::policy::ToolPolicy;
     let theme = &app.theme;
     match app.cfg.tool_policy {
-        ToolPolicy::Plan => Some(("◐ plan mode".to_string(), theme.warn())),
-        ToolPolicy::Coder => Some((format!("{} coder mode", glyph::CHECK), theme.accent())),
-        ToolPolicy::Build => None,
-        ToolPolicy::Hacker => Some((format!("{} hacker mode", glyph::BRAIN), theme.danger())),
+        ToolPolicy::Plan => (format!("{} plan mode", glyph::HOURGLASS), theme.mode_plan()),
+        ToolPolicy::Coder => (format!("{} coder mode", glyph::CHECK), theme.mode_coder()),
+        ToolPolicy::Build => (format!("{} build mode", glyph::GUTTER), theme.mode_build()),
+        ToolPolicy::Hacker => (format!("{} hacker mode", glyph::BRAIN), theme.mode_hacker()),
     }
 }
 
@@ -249,19 +250,19 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
         ));
     }
 
-    // Mode badge: visible for every non-default mode (build is the default
-    // and stays quiet). Distinct color + glyph per mode so the mode is
-    // unmistakable at a glance.
-    if let Some((badge, color)) = mode_badge(app) {
-        left.push(Span::styled("  ", theme.faint_style()));
-        left.push(Span::styled(
-            badge,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ));
-        if app.cfg.tool_policy == crate::agent::policy::ToolPolicy::Plan {
-            if let Some(latest) = app.latest_plan_name() {
-                left.push(Span::styled(format!(" · {latest}"), theme.faint_style()));
-            }
+    // Mode badge: every mode shows its dedicated colour - amber plan, blue
+    // coder, green build, red hacker - so the active mode is unmistakable.
+    let (badge, badge_color) = mode_badge(app);
+    left.push(Span::styled("  ", theme.faint_style()));
+    left.push(Span::styled(
+        badge,
+        Style::default()
+            .fg(badge_color)
+            .add_modifier(Modifier::BOLD),
+    ));
+    if app.cfg.tool_policy == crate::agent::policy::ToolPolicy::Plan {
+        if let Some(latest) = app.latest_plan_name() {
+            left.push(Span::styled(format!(" · {latest}"), theme.faint_style()));
         }
     }
 

@@ -2887,6 +2887,19 @@ impl App {
         self.mark_dirty();
     }
 
+    /// The dedicated border colour for the active tool mode, or `None` for
+    /// the default (build) mode whose border stays theme-standard. Amber for
+    /// plan, blue for coder, red for hacker - mirrored in the footer badge.
+    pub fn mode_border_color(&self) -> Option<ratatui::style::Color> {
+        use crate::agent::policy::ToolPolicy;
+        match self.cfg.tool_policy {
+            ToolPolicy::Plan => Some(self.theme.mode_plan()),
+            ToolPolicy::Coder => Some(self.theme.mode_coder()),
+            ToolPolicy::Build => None,
+            ToolPolicy::Hacker => Some(self.theme.mode_hacker()),
+        }
+    }
+
     /// The active plan's name for the plan-mode footer badge, or `None`. Reads
     /// the newest plan file directly (the plan store is a plain JSON file per
     /// plan) with a small budget, so this stays safe on the UI thread.

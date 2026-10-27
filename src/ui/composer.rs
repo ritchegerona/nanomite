@@ -511,6 +511,11 @@ pub fn render(
     };
     let path_w = (area.width as usize).saturating_sub(6).max(8);
     let hint_w = (area.width as usize).saturating_sub(4);
+    // The composer border carries the tool mode's dedicated colour whenever a
+    // non-default mode is active: plan amber, coder blue, hacker red. Build
+    // (the default) keeps the theme's own border colours, so the border only
+    // speaks up when a mode restricts or supercharges the agent.
+    let mode_border = app.mode_border_color();
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(if focused {
@@ -518,6 +523,8 @@ pub fn render(
                 // While the turn runs the composer reads as "still yours": the
                 // soft accent draws the eye without the alarm of border_focus.
                 theme.accent_soft()
+            } else if let Some(mode_color) = mode_border {
+                mode_color
             } else {
                 theme.border_focus()
             }
