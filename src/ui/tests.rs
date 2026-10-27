@@ -565,6 +565,84 @@ async fn clicking_a_code_block_copies_it() {
 }
 
 #[tokio::test]
+async fn mouse_selection_lands_on_the_clicked_character() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = test_app().await;
+    app.entries.push(Entry::new(EntryRole::User, "hello world"));
+    let _ = frame_text(&mut app, 92, 24);
+    let rect = app.view.cached_chat_rect().expect("chat rect cached");
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    };
+
+    // Body row 1 of the user block renders `▌ hello world`; the 'w' of
+    // "world" sits at display column 8. The old mapping subtracted a
+    // hard-coded gutter, dragging every anchor 4 chars out of place.
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 8,
+        rect.y + 1,
+    ));
+    app.on_mouse(mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        rect.x + 13,
+        rect.y + 1,
+    ));
+
+    let sel = app.selection.as_ref().expect("selection active");
+    assert_eq!(sel.start, (0, 1, 8), "anchor lands on the clicked char");
+    assert_eq!(sel.end, (0, 1, 13));
+    let text = app.get_selected_text(sel);
+    assert_eq!(text, "world", "selection text matches the drag: {text:?}");
+
+    app.on_mouse(mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        rect.x + 13,
+        rect.y + 1,
+    ));
+}
+
+#[tokio::test]
+async fn mouse_selection_snaps_inside_wide_glyphs() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = test_app().await;
+    app.entries
+        .push(Entry::new(EntryRole::User, "日本語テスト"));
+    let _ = frame_text(&mut app, 92, 24);
+    let rect = app.view.cached_chat_rect().expect("chat rect cached");
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    };
+
+    // Body row 1 renders `▌ 日本語テスト`: 日 occupies columns 2-3, 本 4-5,
+    // 語 6-7, テ 8-9. A click inside a wide glyph snaps to that glyph.
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 3,
+        rect.y + 1,
+    ));
+    app.on_mouse(mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        rect.x + 8,
+        rect.y + 1,
+    ));
+
+    let sel = app.selection.as_ref().expect("selection active");
+    assert_eq!(sel.start, (0, 1, 2), "click inside 日 snaps to 日");
+    assert_eq!(sel.end, (0, 1, 5), "click inside テ snaps to テ");
+    let text = app.get_selected_text(sel);
+    assert_eq!(text, "日本語", "wide-glyph selection: {text:?}");
+}
+
+#[tokio::test]
 async fn focus_mode_shows_only_the_latest_exchange() {
     let mut app = test_app().await;
     for i in 0..3 {

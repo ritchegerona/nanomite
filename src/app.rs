@@ -5097,7 +5097,10 @@ impl App {
         }
     }
 
-    /// Convert mouse row/col to entry index, row within entry, and column
+    /// Convert mouse row/col to entry index, row within entry, and column.
+    /// The column is a display column mapped onto the row's char indices:
+    /// painted rows start at the chat area's left edge (prefixes are baked
+    /// into the spans), so the pointer's cell walks the spans directly.
     fn mouse_to_text_position(
         &self,
         mouse_row: usize,
@@ -5131,22 +5134,11 @@ impl App {
                     return None;
                 }
 
-                // Calculate column from mouse position
-                // Account for gutter (2 chars) and prompt marker (2 chars for user)
-                let gutter = chat::GUTTER;
-                let col = mouse_col.saturating_sub(gutter);
+                // Display column -> char index: wide glyphs occupy two cells,
+                // so a raw char count would drift the highlight out of place.
+                let col = display_col_to_char(&cached.lines[body_row], mouse_col);
 
-                return Some((
-                    idx,
-                    body_row,
-                    col.min(
-                        cached.lines[body_row]
-                            .spans
-                            .iter()
-                            .map(|s| s.content.chars().count())
-                            .sum::<usize>(),
-                    ),
-                ));
+                return Some((idx, body_row, col));
             }
             current_row += entry_h;
         }
@@ -5155,7 +5147,7 @@ impl App {
     }
 
     /// Extract selected text from the transcript
-    fn get_selected_text(&self, sel: &Selection) -> String {
+    pub(crate) fn get_selected_text(&self, sel: &Selection) -> String {
         let (start_entry, start_row, start_col) = sel.start;
         let (end_entry, end_row, end_col) = sel.end;
 
@@ -5326,6 +5318,27 @@ fn theme_descriptor(id: ThemeId) -> &'static str {
 /// Parses `/revert 3`-style turn arguments; `None` means "latest".
 fn parse_turn_arg(args: &str) -> Option<usize> {
     args.trim().parse::<usize>().ok()
+}
+
+/// Maps a display column (terminal cells from the row's left edge) onto a
+/// char index inside the row, walking the spans by display width so a click
+/// lands on the exact glyph under the pointer — wide (CJK) glyphs occupy
+/// two cells and a click on either half snaps to them. A click past the end
+/// clamps to the row's char count. Mirrors the composer's `char_index_at`.
+fn display_col_to_char(line: &Line<'_>, mouse_col: usize) -> usize {
+    let mut cells = 0usize;
+    let mut chars = 0usize;
+    for span in &line.spans {
+        for ch in span.content.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if cells + cw > mouse_col {
+                return chars;
+            }
+            cells += cw;
+            chars += 1;
+        }
+    }
+    chars
 }
 
 fn on_off(value: bool) -> &'static str {
