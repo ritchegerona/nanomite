@@ -1382,6 +1382,81 @@ async fn footer_shows_mode_badge_for_non_default_modes() {
 }
 
 #[tokio::test]
+async fn queued_prompt_dispatches_when_the_turn_finishes() {
+    use crate::app::{EntryRole, Phase};
+    let mut app = test_app().await;
+    app.composer.insert_str("first");
+    app.submit();
+    assert!(app.is_busy());
+    app.composer.insert_str("second");
+    app.submit();
+    assert_eq!(app.prompt_queue_len(), 1);
+
+    // The turn finishes: the queued prompt must start as a fresh turn
+    // without the user touching anything. The scripted provider trickles,
+    // so pump until the first turn actually completes.
+    for _ in 0..300 {
+        app.pump_engine();
+        if app.prompt_queue_len() == 0 && !app.prompt_queue_front().is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        app.prompt_queue_len() == 0,
+        "queue must drain after the turn finishes"
+    );
+    assert!(app.is_busy(), "the queued prompt must start a new turn");
+    // The new turn's user entry is the queued prompt.
+    let user_texts: Vec<&str> = app
+        .entries
+        .iter()
+        .filter(|e| e.role == EntryRole::User)
+        .map(|e| e.text.as_str())
+        .collect();
+    assert_eq!(
+        user_texts,
+        vec!["first", "second"],
+        "queue order must be FIFO"
+    );
+    // The streaming entry for the second turn exists.
+    assert!(
+        app.entries
+            .iter()
+            .any(|e| e.role == EntryRole::Assistant && e.phase == Phase::Streaming),
+        "a streaming assistant entry must exist for the new turn"
+    );
+}
+
+#[tokio::test]
+async fn queue_strip_renders_queued_messages_quietly() {
+    let mut app = test_app().await;
+    app.composer.insert_str("first");
+    app.submit();
+    app.composer.insert_str("second message");
+    app.submit();
+    app.composer.insert_str("third");
+    app.submit();
+    assert_eq!(app.prompt_queue_len(), 2);
+
+    let text = frame_text(&mut app, 100, 24);
+    // The strip names the event and shows what is waiting.
+    assert!(
+        text.contains("queued for after this turn"),
+        "queue header missing:\n{text}"
+    );
+    assert!(
+        text.contains("second message"),
+        "queued message preview missing:\n{text}"
+    );
+    // Quiet styling: the strip must not render the old highlighted chrome.
+    assert!(
+        !text.contains("Queued prompts ("),
+        "old highlighted queue UI is back:\n{text}"
+    );
+}
+
+#[tokio::test]
 async fn tools_overlay_lists_all_tools_and_toggles() {
     let mut app = test_app().await;
     let path = std::env::temp_dir().join(format!("nanomite-ui-tools-{}.toml", std::process::id()));

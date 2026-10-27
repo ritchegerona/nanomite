@@ -6,6 +6,25 @@ never listed as released.
 
 ## [0.6.0] — 2026-10-27
 
+### Fixed
+
+- **The prompt queue never drained**: prompts typed while the agent was busy
+  were pushed onto the queue and stayed there forever - nothing ever
+  dispatched them. `finish_turn` now drains the queue: the next queued prompt
+  starts immediately as a fresh turn through the exact same path as a direct
+  submission (user entry, history, hooks, streaming entry), in FIFO order.
+  The queued toast wording now says what will happen ("queued N - will run
+  after the current turn").
+
+### Changed
+
+- **Queue UI rewritten as a quiet background strip**: the old solid-bordered
+  panel with an accent-highlighted count became a borderless margin note in
+  faint/muted colours - `◐ queued for after this turn`, then each waiting
+  message as a `› preview` line (first line, truncated; up to three shown,
+  `+N more waiting` beyond). It reads as a note listing what is held for
+  after the current turn, without competing with the transcript.
+
 ### Added
 
 - **Dedicated colour code per mode**: the palette now carries four mode

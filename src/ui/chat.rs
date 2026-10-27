@@ -27,40 +27,42 @@ pub mod tool_glyph {
 }
 
 pub fn render_prompt_queue(frame: &mut Frame, area: Rect, app: &crate::app::App) {
-    let _theme = app.theme;
     let queue_len = app.prompt_queue_len();
     if queue_len == 0 {
         return;
     }
+    let theme = app.theme;
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(
-                "  ⏳ Queued prompts (",
-                Style::default().fg(app.theme.faint()),
+    // Background-style strip, deliberately quiet: no borders, no panel, no
+    // bright colours. It reads like a margin note listing what is waiting,
+    // so the user knows the messages are held and will run after the current
+    // turn - without competing with the transcript for attention.
+    let mut lines = vec![Line::from(Span::styled(
+        format!("  {} queued for after this turn", glyph::HOURGLASS),
+        theme.faint_style(),
+    ))];
+
+    // The waiting messages themselves, one line each, collapsed to their
+    // first line and bounded so a tall queue can never flood the layout.
+    const MAX_SHOWN: usize = 3;
+    for preview in app.prompt_queue_items(MAX_SHOWN) {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "    {} {}",
+                glyph::CHEVRON,
+                text::truncate(&preview, area.width as usize - 10)
             ),
-            Span::styled(
-                queue_len.to_string(),
-                Style::default()
-                    .fg(app.theme.accent())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(")", Style::default().fg(app.theme.faint())),
-        ]),
-        Line::default(),
-    ];
+            Style::default().fg(theme.muted()),
+        )));
+    }
+    if queue_len > MAX_SHOWN {
+        lines.push(Line::from(Span::styled(
+            format!("    {} +{} more waiting", glyph::DOT, queue_len - MAX_SHOWN),
+            theme.faint_style(),
+        )));
+    }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(app.theme.border_focus()))
-        .style(Style::default().bg(app.theme.panel_bg()));
-
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(Text::from(lines)).style(Style::default().bg(app.theme.panel_bg())),
-        area,
-    );
+    frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
 pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {

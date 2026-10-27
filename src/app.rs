@@ -1029,6 +1029,16 @@ impl App {
         self.prompt_queue.front().map(|s| s.as_str())
     }
 
+    /// Bounded preview of the queued prompts, first-in first-out, each
+    /// collapsed to one line for the queue strip in the UI.
+    pub fn prompt_queue_items(&self, max: usize) -> Vec<String> {
+        self.prompt_queue
+            .iter()
+            .take(max)
+            .map(|p| p.lines().next().unwrap_or_default().trim().to_string())
+            .collect()
+    }
+
     /// Pending proposals as the `/improve` list shows them, read synchronously.
     /// Test-only: the app itself loads them on a blocking worker.
     #[cfg(test)]
@@ -1346,6 +1356,11 @@ impl App {
         self.turn_started = None;
         self.view.scroll_from_bottom = 0;
         self.mark_dirty();
+        // Drain the prompt queue: the next queued prompt starts immediately
+        // as a fresh turn, exactly as if the user had submitted it now.
+        if let Some(next) = self.prompt_queue.pop_front() {
+            self.start_turn(next);
+        }
     }
 
     /// Fires a fire-and-forget hook event on the blocking pool. Never blocks
@@ -1432,18 +1447,22 @@ impl App {
         // Clear ghost text when user submits a new prompt
         self.composer.clear_ghost();
         if self.is_busy() {
-            // Queue the prompt for processing after the current turn completes
+            // Queue the prompt; the queue drains automatically when the
+            // current turn finishes (finish_turn -> start_turn).
             self.prompt_queue.push_back(prompt.clone());
             let queued = self.prompt_queue.len();
-            if queued == 1 {
-                self.toast("queued (1 pending)".to_string());
-            } else {
-                self.toast(format!("queued ({queued} pending"));
-            }
+            self.toast(format!("queued {queued} - will run after the current turn"));
             self.mark_dirty();
             return;
         }
 
+        self.start_turn(prompt);
+    }
+
+    /// Begins one agent turn: records the user message, spawns the runtime.
+    /// Shared by direct submission and by the prompt queue draining after a
+    /// finished turn, so queued prompts take exactly the same path.
+    fn start_turn(&mut self, prompt: String) {
         self.entries
             .push(Entry::new(EntryRole::User, prompt.clone()));
         self.history.push(ChatMessage::user(prompt.clone()));
