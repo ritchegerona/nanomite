@@ -1,10 +1,13 @@
 use super::*;
-use crate::app::{App, Entry, EntryRole, Overlay, OverlayKind, Phase, PickerMode, ToolRow};
+use crate::app::{
+    App, Entry, EntryRole, Overlay, OverlayKind, Phase, PickerMode, SudoPasswordState, ToolRow,
+};
 use crate::commands;
 use crate::commands::Command;
 use crate::config::Config;
 use crate::improve::testing::{temp_dir, TempDir};
 use crate::improve::{FakeRunner, ImproveEngine, Roots};
+use crate::ui::theme::glyph;
 use ratatui::backend::TestBackend;
 use ratatui::style::{Color, Modifier};
 use ratatui::Terminal;
@@ -1178,6 +1181,101 @@ async fn edit_file_preview_uses_the_diff_renderer() {
 // ---------------------------------------------------------------------------
 // /tools — the tool library
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sudo_password_modal_renders_with_theme_chrome() {
+    let mut app = test_app().await;
+    app.overlay = Some(Overlay::SudoPassword(SudoPasswordState {
+        command: "sudo apt-get install -y nmap".into(),
+        cwd: None,
+        timeout_ms: None,
+        password: "hunter2".into(),
+        submitting: false,
+        error: None,
+    }));
+
+    let text = frame_text(&mut app, 90, 24);
+    assert!(
+        text.contains("sudo password required"),
+        "title missing:\n{text}"
+    );
+    assert!(text.contains("command"), "command label missing:\n{text}");
+    assert!(
+        text.contains("apt-get install"),
+        "command line missing:\n{text}"
+    );
+    assert!(text.contains("password"), "password label missing:\n{text}");
+    // The password is masked: no plaintext anywhere.
+    assert!(!text.contains("hunter2"), "password leaked:\n{text}");
+    // The masked bullets and cursor glyph are drawn.
+    assert!(text.contains(glyph::BULLET), "mask missing:\n{text}");
+    // Key hints render like the other overlays.
+    assert!(text.contains("esc cancel"), "hints missing:\n{text}");
+
+    // Theme chrome: the border is drawn with border_focus, the title with
+    // accent, and the panel background is applied - verify styled spans.
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+    terminal.draw(|f| render(f, &mut app)).expect("draw");
+    let buffer = terminal.backend().buffer().clone();
+    let theme = app.theme.clone();
+
+    // Some cell inside the frame must carry the focused-border color (the
+    // rounded border box) and the title cell must carry the accent color.
+    let mut saw_border = false;
+    let mut saw_accent_title = false;
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            if cell.style().fg == Some(theme.border_focus()) {
+                saw_border = true;
+            }
+            if cell.symbol() == "s" && cell.style().fg == Some(theme.accent()) {
+                saw_accent_title = true;
+            }
+        }
+    }
+    assert!(
+        saw_border,
+        "border_focus color not used - modal is not themed"
+    );
+    assert!(
+        saw_accent_title,
+        "accent title color not used - modal is not themed"
+    );
+}
+
+#[tokio::test]
+async fn sudo_password_modal_shows_error_and_empty_hint() {
+    let mut app = test_app().await;
+    app.overlay = Some(Overlay::SudoPassword(SudoPasswordState {
+        command: "sudo -v".into(),
+        cwd: None,
+        timeout_ms: None,
+        password: String::new(),
+        submitting: false,
+        error: None,
+    }));
+
+    let text = frame_text(&mut app, 90, 24);
+    assert!(
+        text.contains("type your sudo password"),
+        "empty hint missing:\n{text}"
+    );
+
+    app.overlay = Some(Overlay::SudoPassword(SudoPasswordState {
+        command: "sudo -v".into(),
+        cwd: None,
+        timeout_ms: None,
+        password: String::new(),
+        submitting: false,
+        error: Some("Password cannot be empty".into()),
+    }));
+    let text = frame_text(&mut app, 90, 24);
+    assert!(
+        text.contains("Password cannot be empty"),
+        "error missing:\n{text}"
+    );
+}
 
 #[tokio::test]
 async fn tools_overlay_lists_all_tools_and_toggles() {

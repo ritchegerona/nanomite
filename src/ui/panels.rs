@@ -1674,68 +1674,110 @@ pub fn sudo_password_row_count(_app: &App) -> u16 {
     10
 }
 
-/// Modal for entering sudo password when a command requires elevation.
+/// Modal for entering the sudo password when a command requires elevation.
+/// Styled exactly like the other overlays: Clear backdrop, rounded border in
+/// `border_focus`, centered accent title, key hints bottom-right, `panel_bg`.
 pub fn sudo_password(frame: &mut Frame, area: Rect, app: &App) {
     let theme = &app.theme;
     let Some(Overlay::SudoPassword(ref state)) = app.overlay else {
         return;
     };
 
-    let block = Block::default()
-        .title(" sudo password required ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border()));
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_focus()))
+        .title(
+            Line::from(Span::styled(
+                " sudo password required ",
+                Style::default()
+                    .fg(theme.accent())
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .centered(),
+        )
+        .title_bottom(
+            Line::from(Span::styled(
+                " enter submit \u{b7} esc cancel ",
+                theme.faint_style(),
+            ))
+            .right_aligned(),
+        )
+        .style(Style::default().bg(theme.panel_bg()));
 
     let inner = block.inner(area);
+    frame.render_widget(Clear, area);
     frame.render_widget(block, area);
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(
-                "Command: ",
-                Style::default()
-                    .fg(theme.text())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(&state.command, Style::default().fg(theme.text())),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "Password: ",
-                Style::default()
-                    .fg(theme.text())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "•".repeat(state.password.len()),
-                Style::default().fg(theme.accent()),
-            ),
-        ]),
-        Line::from(""),
-    ];
+    let label_w = 9; // "password " is the widest label
+    let mut lines: Vec<Line> = Vec::with_capacity(6);
 
-    let mut all_lines = lines;
+    // The command that needs elevation - bounded to the panel width.
+    let cmd_w = (inner.width as usize).saturating_sub(label_w + 3).max(8);
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("  {:<label_w$}", "command"),
+            Style::default().fg(theme.faint()),
+        ),
+        Span::styled(
+            text::truncate(&state.command, cmd_w),
+            Style::default().fg(theme.strong()),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    // Masked input with the theme's block cursor glyph at the typing position.
+    let mut pw_spans = vec![Span::styled(
+        format!("  {:<label_w$}", "password"),
+        Style::default().fg(theme.faint()),
+    )];
+    let shown = state.password.chars().count();
+    if state.submitting {
+        pw_spans.push(Span::styled(
+            glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()],
+            Style::default().fg(theme.accent()),
+        ));
+        pw_spans.push(Span::styled(
+            " authenticating...",
+            Style::default().fg(theme.faint()),
+        ));
+    } else {
+        pw_spans.push(Span::styled(
+            glyph::BULLET.repeat(shown),
+            Style::default().fg(theme.accent()),
+        ));
+        pw_spans.push(Span::styled(
+            glyph::CURSOR,
+            Style::default().fg(theme.accent()),
+        ));
+    }
+    lines.push(Line::from(pw_spans));
+    lines.push(Line::from(""));
+
+    // Status row: hint, error, or in-flight note.
     if let Some(err) = &state.error {
-        all_lines.push(Line::from(""));
-        all_lines.push(Line::from(Span::styled(
-            format!("Error: {err}"),
+        lines.push(Line::from(Span::styled(
+            format!("  \u{2717} {err}"),
             Style::default().fg(theme.danger()),
         )));
-    }
-    if state.submitting {
-        all_lines.push(Line::from(""));
-        all_lines.push(Line::from(Span::styled(
-            "Executing with sudo...".to_string(),
-            Style::default().fg(theme.accent()),
+    } else if state.submitting {
+        lines.push(Line::from(Span::styled(
+            "  validating password with sudo...",
+            Style::default().fg(theme.warn()),
+        )));
+    } else if shown == 0 {
+        lines.push(Line::from(Span::styled(
+            "  type your sudo password - it never leaves this machine",
+            Style::default().fg(theme.faint()),
         )));
     }
 
-    let paragraph = Paragraph::new(all_lines).alignment(Alignment::Left);
+    let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
 
-    // Show cursor at password position
-    let password_x = inner.x + 10 + state.password.len() as u16;
+    // Terminal cursor at the password typing position (after the bullets).
+    let password_x = inner.x + 2 + label_w as u16 + shown.min(60) as u16;
     let password_y = inner.y + 2;
-    frame.set_cursor_position((password_x, password_y));
+    if !state.submitting {
+        frame.set_cursor_position((password_x, password_y));
+    }
 }

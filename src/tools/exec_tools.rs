@@ -153,13 +153,29 @@ impl ExecTools {
             }
         }
 
+        // With a password, normalize the command so exactly ONE sudo reads it
+        // from stdin:
+        //   `sudo CMD...`        -> `sudo -S sh -c "CMD..."`
+        //   `sudo -v` / flags    -> `sudo -S -v` (validates + caches creds)
+        //   `su [-] [user] -c C` -> `sudo -S sh -c "C"` (su cannot read a
+        //                           piped password; sudo can)
+        let inner_command;
         let (program, args_vec, stdin_data) = if let Some(password) = args.sudo_password {
-            // With a password, strip a leading `sudo ` and re-run the rest under
-            // `sudo -S sh -c` so exactly ONE sudo reads the password from stdin.
-            // (A nested `sudo` inside the command would consume the cached
-            // credentials after the first authentication, so it does not prompt.)
-            let inner = strip_leading_sudo(&args.command);
-            ("sudo", vec!["-S", "sh", "-c", inner], Some(password))
+            let stripped = strip_leading_sudo(&args.command);
+            if stripped.starts_with('-') {
+                // Bare sudo flags (sudo -v, sudo --validate): pass through so
+                // sudo itself validates the password and caches the ticket.
+                let mut argv = vec!["-S"];
+                argv.extend(stripped.split_whitespace());
+                ("sudo", argv, Some(password))
+            } else {
+                inner_command = translate_su(stripped)?;
+                (
+                    "sudo",
+                    vec!["-S", "sh", "-c", inner_command.as_str()],
+                    Some(password),
+                )
+            }
         } else {
             ("sh", vec!["-c", &args.command], None)
         };
@@ -277,6 +293,63 @@ fn mentions_elevation(command: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// Rewrites `su [-] [user] -c CMD` into `CMD` so it can run under the single
+/// `sudo -S sh -c` wrapper. `su` reads its password from /dev/tty only - it
+/// can never accept the piped password - and as a non-root user it asks for
+/// the ROOT password, which is not what the modal collects. sudo is the right
+/// tool for piped elevation, so su-to-root is translated; su to another user
+/// or an interactive su is refused with a clear message.
+fn translate_su(command: &str) -> Result<String, String> {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    if tokens.first().copied() != Some("su") {
+        return Ok(command.to_string());
+    }
+    // Walk: su [-|-l] [username] -c CMD...
+    let mut idx = 1usize;
+    let mut target_root = true;
+    while idx < tokens.len() {
+        match tokens[idx] {
+            "-" | "-l" | "--login" => idx += 1,
+            "-c" | "--command" => {
+                // The rest is the command (one token, since the model passes
+                // it quoted through the shell - sh -c receives it as one arg
+                // only if it was quoted; join whatever remains).
+                let cmd = tokens[idx + 1..].join(" ");
+                let unquoted = cmd
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .or_else(|| cmd.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+                    .unwrap_or(&cmd);
+                if !target_root {
+                    return Err(
+                        "su: password required - nanomite can only elevate to root via sudo;                          run the command directly with sudo instead of su <user>"
+                            .into(),
+                    );
+                }
+                return Ok(unquoted.to_string());
+            }
+            "root" => {
+                target_root = true;
+                idx += 1;
+            }
+            other if other.starts_with('-') => idx += 1,
+            // A bare username: switching to a non-root user needs that user's
+            // password, which the modal does not collect.
+            _ => {
+                return Err(
+                    "su: password required - nanomite can only elevate to root via sudo;                      replace `su <user>` with sudo or run the command directly"
+                        .into(),
+                )
+            }
+        }
+    }
+    // `su` with no -c: interactive shell - pointless for an agent tool.
+    Err(
+        "su: password required - interactive su cannot run here;          prefix the command with sudo instead"
+            .into(),
+    )
 }
 
 /// Removes a leading `sudo ` (and any leading env assignments immediately
@@ -571,5 +644,103 @@ mod tests {
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn translate_su_rewrites_root_targets_and_refuses_others() {
+        assert_eq!(
+            translate_su("dnf install -y nmap").unwrap(),
+            "dnf install -y nmap"
+        );
+        assert_eq!(
+            translate_su("su -c 'dnf install -y nmap'").unwrap(),
+            "dnf install -y nmap"
+        );
+        assert_eq!(
+            translate_su("su -c \"dnf install -y nmap\"").unwrap(),
+            "dnf install -y nmap"
+        );
+        assert_eq!(translate_su("su root -c whoami").unwrap(), "whoami");
+        assert_eq!(translate_su("su - root -c whoami").unwrap(), "whoami");
+        // Non-root target and interactive su are refused with guidance.
+        assert!(translate_su("su alice -c id").unwrap_err().contains("sudo"));
+        assert!(translate_su("su").unwrap_err().contains("sudo"));
+    }
+
+    /// Full password-pipe mechanics through the real `run_command`, using a
+    /// fake `sudo` on PATH that authenticates a known password from stdin and
+    /// then executes the requested command - proving the modal's password
+    /// reaches the child via the pipe (never /dev/tty) and the output comes
+    /// back captured.
+    #[test]
+    fn sudo_pipe_delivers_password_and_runs_command() {
+        let dir = std::env::temp_dir().join(format!("nanomite-sudo-fake-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Fake sudo: reads one line (the password), compares, and on success
+        // execs the remaining args. Mirrors `sudo -S` stdin behavior.
+        let fake = dir.join("sudo");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nread -r line\n[ \"$line\" = \"test-password\" ] || { echo \"sorry try again\" >&2; exit 1; }\nshift 1 # drop -S; argv is now sh -c CMD\nexec \"$@\"\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // A marker script the command will run, proving the elevating shell
+        // executed with stdout captured.
+        let marker = dir.join("marker.sh");
+        std::fs::write(&marker, "#!/bin/sh\necho elevated-ran\n").unwrap();
+        std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Put the fake sudo first on PATH for this process (tests run single
+        // threaded for fs/env isolation anyway via the suite's threaded runs -
+        // restore immediately after).
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var(
+            "PATH",
+            format!("{}:{}", dir.display(), original_path.clone()),
+        );
+        let result = std::panic::catch_unwind(|| {
+            let exec = ExecTools::new(std::env::temp_dir());
+            exec.run_command(RunCommandArgs {
+                command: "sudo sh -c /place/marker.sh".replace("/place", &dir.to_string_lossy()),
+                cwd: None,
+                timeout_ms: Some(10_000),
+                sudo_password: Some("test-password".into()),
+            })
+        });
+        std::env::set_var("PATH", original_path.clone());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let result = result.expect("no panic");
+        let r = result.expect("fake sudo run");
+        assert_eq!(r.exit_code, 0, "stderr: {}", r.stderr);
+        assert!(r.stdout.contains("elevated-ran"), "stdout: {}", r.stdout);
+
+        // Wrong password must surface sudo's refusal, not a hang.
+        std::env::set_var(
+            "PATH",
+            format!("{}:{}", dir.display(), original_path.clone()),
+        );
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&fake, "#!/bin/sh\nread -r line\n[ \"$line\" = \"test-password\" ] || { echo \"sorry try again\" >&2; exit 1; }\nexit 1\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let wrong = std::panic::catch_unwind(|| {
+            let exec = ExecTools::new(std::env::temp_dir());
+            exec.run_command(RunCommandArgs {
+                command: "sudo -v".into(),
+                cwd: None,
+                timeout_ms: Some(10_000),
+                sudo_password: Some("wrong-password".into()),
+            })
+        });
+        std::env::set_var("PATH", original_path.clone());
+        let _ = std::fs::remove_dir_all(&dir);
+        let wrong = wrong.expect("no panic");
+        let r = wrong.expect("fake sudo run");
+        assert_ne!(r.exit_code, 0, "wrong password must not succeed");
+        assert!(r.stderr.contains("sorry"), "stderr: {}", r.stderr);
     }
 }
