@@ -643,6 +643,48 @@ async fn mouse_selection_snaps_inside_wide_glyphs() {
 }
 
 #[tokio::test]
+async fn mouse_selection_survives_blank_gap_rows() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = test_app().await;
+    app.entries.push(Entry::new(EntryRole::User, "first"));
+    app.entries.push(Entry::new(EntryRole::User, "second"));
+    let _ = frame_text(&mut app, 92, 24);
+    let rect = app.view.cached_chat_rect().expect("chat rect cached");
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    };
+
+    // The user block is bar/text/bar (3 rows) + 1 separator row. A drag that
+    // starts on the separator (row 4) must anchor at the entry's final line
+    // instead of dying, and keep tracking into the next entry.
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 4,
+        rect.y + 3, // the gap row of entry 0
+    ));
+    app.on_mouse(mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        rect.x + 4,
+        rect.y + 6, // the text row of entry 1
+    ));
+
+    let sel = app.selection.as_ref().expect("selection active");
+    // The gap click anchored at entry 0's final line and the drag kept
+    // tracking into entry 1 — no dead zone in between.
+    assert_eq!(
+        sel.start.0, 0,
+        "anchor on entry 0 (clamped to its last line)"
+    );
+    assert_eq!(sel.end.0, 1, "drag tracked into entry 1");
+    let text = app.get_selected_text(sel);
+    assert!(text.contains("second"), "kept tracking: {text:?}");
+}
+
+#[tokio::test]
 async fn focus_mode_shows_only_the_latest_exchange() {
     let mut app = test_app().await;
     for i in 0..3 {

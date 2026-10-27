@@ -5130,9 +5130,11 @@ impl App {
 
                 let body_row = local_row - status_rows;
                 let cached = entry.cache.as_ref()?;
-                if body_row >= cached.lines.len() {
-                    return None;
-                }
+                // A click on the trailing gap row (the separator, or past the
+                // entry's last line) anchors at the entry's final line, so a
+                // drag crossing blank rows stays continuous instead of dying
+                // on dead zones.
+                let body_row = body_row.min(cached.lines.len().saturating_sub(1));
 
                 // Display column -> char index: wide glyphs occupy two cells,
                 // so a raw char count would drift the highlight out of place.

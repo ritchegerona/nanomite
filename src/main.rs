@@ -120,22 +120,27 @@ async fn main() -> io::Result<()> {
     });
 
     // Adaptive streaming throttle: while a turn streams, deltas arrive
-    // faster than any terminal can paint, so redraws coalesce to ~30 fps and
-    // the loop spends its time ingesting tokens rather than diffing frames.
-    // Idle turns (and the final state) always draw at once.
+    // faster than any terminal can paint, so engine-driven redraws coalesce
+    // to ~30 fps and the loop spends its time ingesting tokens rather than
+    // diffing frames. Input is exempt: a key or pointer event always paints
+    // the very next frame, so selection and caret tracking never wait for
+    // the tick — and a burst of drag events drains into ONE frame instead
+    // of one frame per event.
     const STREAM_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
     let mut last_draw = std::time::Instant::now() - STREAM_FRAME;
+    let mut user_input = false;
 
     let result = loop {
         if app.needs_redraw() {
             let now = std::time::Instant::now();
-            if !app.is_busy() || now.duration_since(last_draw) >= STREAM_FRAME {
+            if user_input || !app.is_busy() || now.duration_since(last_draw) >= STREAM_FRAME {
                 let frame_start = std::time::Instant::now();
                 terminal.draw(|frame| ui::render(frame, &mut app))?;
                 app.record_frame(frame_start.elapsed().as_micros() as u64);
                 app.clear_dirty();
                 last_draw = now;
             }
+            user_input = false;
         }
 
         tokio::select! {
@@ -143,11 +148,38 @@ async fn main() -> io::Result<()> {
             // event already delivered when the poll is dropped by a tick, so
             // nothing from the tty is ever lost between loop passes.
             Some(event) = event_rx.recv() => {
+                let mut interactive = false;
                 match event {
-                    Event::Key(key) if key.kind != KeyEventKind::Release => app.on_key(key),
-                    Event::Mouse(m) => app.on_mouse(m),
-                    Event::Resize(_, _) => app.on_resize(),
+                    Event::Key(key) if key.kind != KeyEventKind::Release => {
+                        app.on_key(key);
+                        interactive = true;
+                    }
+                    Event::Mouse(m) => {
+                        app.on_mouse(m);
+                        interactive = true;
+                    }
+                    Event::Resize(_, _) => {
+                        app.on_resize();
+                        interactive = true;
+                    }
                     _ => {}
+                }
+                // Drain the rest of an input burst (a drag can queue dozens
+                // of motion events) so the frame paints once, at the final
+                // position, instead of once per event.
+                loop {
+                    match event_rx.try_recv() {
+                        Ok(Event::Key(key)) if key.kind != KeyEventKind::Release => {
+                            app.on_key(key)
+                        }
+                        Ok(Event::Mouse(m)) => app.on_mouse(m),
+                        Ok(Event::Resize(_, _)) => app.on_resize(),
+                        Ok(_) => {}
+                        Err(_) => break, // queue drained
+                    }
+                }
+                if interactive {
+                    user_input = true;
                 }
             }
             Some(control) = control_rx.recv() => {
