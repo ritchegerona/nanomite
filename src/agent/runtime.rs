@@ -1892,10 +1892,12 @@ mod tests {
             timeout_ms: 5_000,
             deny: true,
         }];
-        let tools = ToolSet::new(
-            std::env::temp_dir().join("nanomite-runtime-test-workspace"),
-            64 * 1024,
-        );
+        // The "allowed" control runs list_files against a real directory:
+        // create it so the test does not depend on other tests' side effects.
+        let workspace =
+            std::env::temp_dir().join(format!("nanomite-hook-gate-ws-{}", std::process::id()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let tools = ToolSet::new(workspace.clone(), 64 * 1024);
         let call = ToolCall {
             id: "h1".into(),
             name: "write_file".into(),
@@ -1914,8 +1916,13 @@ mod tests {
             index: 0,
         };
         let outcome = run_tool(&tools, &[], ToolPolicy::Auto, &hooks, &dir, &call);
-        assert!(outcome.is_ok(), "allowed call must pass the hook gate");
+        assert!(
+            outcome.is_ok(),
+            "allowed call must pass the hook gate: {:?}",
+            outcome.err()
+        );
         let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&workspace);
     }
 
     #[test]
