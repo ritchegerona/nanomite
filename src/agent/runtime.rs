@@ -1635,7 +1635,7 @@ mod tests {
         let (payload, _) = run_tool(
             &tools,
             &[],
-            ToolPolicy::Auto,
+            ToolPolicy::Hacker,
             &[],
             std::path::Path::new("."),
             &ToolCall {
@@ -1655,7 +1655,7 @@ mod tests {
         let (payload, _) = run_tool(
             &tools,
             &[],
-            ToolPolicy::Auto,
+            ToolPolicy::Hacker,
             &[],
             std::path::Path::new("."),
             &ToolCall {
@@ -1673,7 +1673,7 @@ mod tests {
         let refusal = run_tool(
             &tools,
             &[],
-            ToolPolicy::Auto,
+            ToolPolicy::Hacker,
             &[],
             std::path::Path::new("."),
             &ToolCall {
@@ -1693,7 +1693,7 @@ mod tests {
         let outcome = run_tool(
             &runtime.tools,
             &[],
-            ToolPolicy::Auto,
+            ToolPolicy::Hacker,
             &[],
             std::path::Path::new("."),
             &ToolCall {
@@ -1904,7 +1904,7 @@ mod tests {
             arguments: r#"{"path":"blocked.txt","content":"x"}"#.to_string(),
             index: 0,
         };
-        let err = run_tool(&tools, &[], ToolPolicy::Auto, &hooks, &dir, &call).unwrap_err();
+        let err = run_tool(&tools, &[], ToolPolicy::Hacker, &hooks, &dir, &call).unwrap_err();
         assert!(err.contains("hook_denied"), "{err}");
         assert!(err.contains("blocked-by-hook"), "{err}");
 
@@ -1915,7 +1915,7 @@ mod tests {
             arguments: "{}".to_string(),
             index: 0,
         };
-        let outcome = run_tool(&tools, &[], ToolPolicy::Auto, &hooks, &dir, &call);
+        let outcome = run_tool(&tools, &[], ToolPolicy::Hacker, &hooks, &dir, &call);
         assert!(
             outcome.is_ok(),
             "allowed call must pass the hook gate: {:?}",
@@ -1959,7 +1959,7 @@ mod tests {
         let err = run_tool(
             &tools,
             &runtime.disabled_tools,
-            ToolPolicy::Auto,
+            ToolPolicy::Hacker,
             &[],
             std::path::Path::new("."),
             &call,
@@ -1978,7 +1978,7 @@ mod tests {
         let err = run_tool(
             &tools,
             &runtime.disabled_tools,
-            ToolPolicy::Auto,
+            ToolPolicy::Hacker,
             &[],
             std::path::Path::new("."),
             &unknown,
@@ -2011,7 +2011,7 @@ mod tests {
         let (payload, summary) = run_tool(
             &runtime.tools,
             &disabled,
-            ToolPolicy::Auto,
+            ToolPolicy::Hacker,
             &[],
             std::path::Path::new("."),
             &call,
@@ -2099,7 +2099,7 @@ mod tests {
         let err = run_tool(
             &tools,
             &[],
-            ToolPolicy::Auto,
+            ToolPolicy::Hacker,
             &[],
             std::path::Path::new("."),
             &ToolCall {
@@ -2125,7 +2125,7 @@ mod tests {
         let (payload, summary) = run_tool(
             &tools,
             &[],
-            ToolPolicy::Auto,
+            ToolPolicy::Hacker,
             &[],
             std::path::Path::new("."),
             &ToolCall {
@@ -2148,7 +2148,7 @@ mod tests {
         let (payload, summary) = run_tool(
             &tools,
             &[],
-            ToolPolicy::Auto,
+            ToolPolicy::Hacker,
             &[],
             std::path::Path::new("."),
             &ToolCall {

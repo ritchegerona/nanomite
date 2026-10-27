@@ -6,11 +6,16 @@
 //! *subsystem-independent* - unlike the memory engine's own
 //! `MemoryPolicy::authorize`, which only guards memory.
 //!
-//! Risk classification is intentionally coarse and conservative: the goal is a
-//! mode switch that stops a model from mutating state or leaving the machine,
-//! not a per-argument permission model. Unknown names classify as `Safe` so a
-//! new read-only tool is never accidentally blocked; genuinely unknown names
-//! are still rejected by the dispatch layer.
+//! Four modes, cycling with Shift+Tab, each granting strictly more power than
+//! the last (Plan ⊂ Coder ⊂ Build ⊂ Hacker):
+//!
+//! - **Plan** - reads + plan tools only. The agent researches and builds a
+//!   plan; mutations are refused with guidance to `create_plan`.
+//! - **Coder** - + file edits (write/edit files, symbol index, self-edit
+//!   staging, memory writes). No command execution, no git history changes.
+//! - **Build** - + local command execution and git commits/branches. Full
+//!   local machine power for building and testing; still no remote access.
+//! - **Hacker** - everything, including SSH to remote hosts. No guardrails.
 
 /// Risk class of a tool call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,37 +42,36 @@ impl Risk {
     }
 }
 
-/// The plan tools stay callable in Plan mode: building and refining the plan
-/// is the mode's whole purpose. Everything mutating still waits for the user.
-pub fn is_plan_tool(name: &str) -> bool {
+/// Which tools each mode permits. Word-exact matches on the trimmed name.
+fn is_plan_tool(name: &str) -> bool {
     matches!(
         name.trim(),
         "create_plan" | "get_plan" | "update_task" | "list_plans"
     )
 }
 
-/// Which calls the current mode permits.
-///
-/// The default is [`ToolPolicy::Auto`]: everything the user has enabled runs,
-/// exactly as before the policy existed, so upgrading never silently changes
-/// behaviour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The mode ladder: Plan ⊂ Coder ⊂ Build ⊂ Hacker.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ToolPolicy {
-    #[default]
-    Auto,
-    /// Plan mode: reads run; mutations are refused with an instruction to
-    /// report a plan instead.
+    /// Research and plan; mutations refused.
     Plan,
-    /// Read-only: reads run; mutations are refused.
-    Readonly,
+    /// + file edits and self-edit staging; no command execution or git history.
+    Coder,
+    /// + local command execution and git commits/branches. Default: full
+    ///   local power for everyday building and testing.
+    #[default]
+    Build,
+    /// Everything, including SSH to remote hosts. No guardrails.
+    Hacker,
 }
 
 impl ToolPolicy {
     pub fn as_str(self) -> &'static str {
         match self {
-            ToolPolicy::Auto => "auto",
             ToolPolicy::Plan => "plan",
-            ToolPolicy::Readonly => "readonly",
+            ToolPolicy::Coder => "coder",
+            ToolPolicy::Build => "build",
+            ToolPolicy::Hacker => "hacker",
         }
     }
 
@@ -75,59 +79,99 @@ impl ToolPolicy {
         self.as_str()
     }
 
-    /// Parses a configured value. Unknown values return `None` so the caller can
-    /// fall back to the default instead of silently mis-applying a mode.
+    /// Parses a configured value. Unknown values return `None` so the caller
+    /// can fall back to the default instead of silently mis-applying a mode.
+    /// Legacy labels from earlier releases migrate: `auto` -> Hacker (it was
+    /// the everything-allowed mode), `readonly` -> Plan (the read-only mode).
     pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
-            "auto" => Some(Self::Auto),
             "plan" => Some(Self::Plan),
-            "readonly" | "read-only" | "read_only" => Some(Self::Readonly),
+            "coder" => Some(Self::Coder),
+            "build" => Some(Self::Build),
+            "hacker" | "auto" => Some(Self::Hacker),
+            "readonly" | "read-only" | "read_only" => Some(Self::Plan),
             _ => None,
         }
     }
 
-    /// Cycles auto → plan → readonly → auto.
+    /// Cycles Plan -> Coder -> Build -> Hacker -> Plan: every press of
+    /// Shift+Tab grants strictly more power, wrapping back to Plan.
     pub fn next(self) -> Self {
         match self {
-            Self::Auto => Self::Plan,
-            Self::Plan => Self::Readonly,
-            Self::Readonly => Self::Auto,
+            Self::Plan => Self::Coder,
+            Self::Coder => Self::Build,
+            Self::Build => Self::Hacker,
+            Self::Hacker => Self::Plan,
         }
     }
 
-    /// Authorize one call. `Ok(())` permits it; `Err(payload)` is the JSON error
-    /// returned to the model.
+    /// Authorize one call. `Ok(())` permits it; `Err(payload)` is the JSON
+    /// error returned to the model.
     pub fn authorize(&self, name: &str) -> Result<(), String> {
         let allowed = match self {
-            Self::Auto => true,
-            // Plan mode: reads run, plan tools run (creating the plan IS the
-            // point of the mode), everything else waits for user approval.
-            Self::Plan => Risk::of(name) == Risk::Safe || is_plan_tool(name),
-            Self::Readonly => Risk::of(name) == Risk::Safe,
+            Self::Hacker => true,
+            Self::Build => Self::build_allowed(name),
+            Self::Coder => Self::coder_allowed(name),
+            Self::Plan => Self::plan_allowed(name),
         };
         if allowed {
             return Ok(());
         }
         let (code, message) = match self {
+            Self::Hacker => unreachable!("hacker never refuses"),
+            Self::Build => (
+                "build_mode",
+                "build mode: remote (SSH) access is disabled. Everything local works - \\
+                 ask the user to press Shift+Tab for hacker mode to run remote commands.",
+            ),
+            Self::Coder => (
+                "coder_mode",
+                "coder mode: command execution and git history changes are disabled. \\
+                 Edit files freely; ask the user to press Shift+Tab for build mode \\
+                 to run commands or commit.",
+            ),
             Self::Plan => (
                 "plan_mode",
-                "plan mode is active: mutating tools are disabled. Create a plan first with \
-                 create_plan (allowed in this mode), describe each step and what you would \
-                 run, then wait for the user to review it and switch back with /policy.",
+                "plan mode is active: mutating tools are disabled. Create a plan first with \\
+                 create_plan (allowed in this mode), describe each step and what you would \\
+                 run, then wait for the user to review it and switch back with Shift+Tab.",
             ),
-            Self::Readonly => (
-                "read_only_policy",
-                "read-only policy: this tool changes state and is disabled. Read-only tools \
-                 still work.",
-            ),
-            Self::Auto => unreachable!("auto never refuses"),
         };
-        // Ensure error first for backward compatibility.
         Err(format!(
             "{{\"error\":\"{}\",\"code\":\"{}\"}}",
             message.replace('"', "\\\""),
             code
         ))
+    }
+
+    /// Plan: reads + the plan tools. Building the plan IS the mode's purpose.
+    fn plan_allowed(name: &str) -> bool {
+        Risk::of(name) == Risk::Safe || is_plan_tool(name)
+    }
+
+    /// Coder: plan set + workspace file edits and memory/self-edit writes.
+    /// Deliberately excludes run_command (execution), git_commit/git_branch
+    /// (history), ssh_run (remote), memory_delete (destructive).
+    fn coder_allowed(name: &str) -> bool {
+        Self::plan_allowed(name)
+            || matches!(
+                name.trim(),
+                "write_file"
+                    | "edit_file"
+                    | "index_symbols"
+                    | "propose_self_edit"
+                    | "memory_save"
+                    | "memory_update"
+            )
+    }
+
+    /// Build: coder set + local execution and git history. Still no SSH.
+    fn build_allowed(name: &str) -> bool {
+        Self::coder_allowed(name)
+            || matches!(
+                name.trim(),
+                "run_command" | "git_commit" | "git_branch" | "delete_plan"
+            )
     }
 }
 
@@ -168,9 +212,51 @@ mod tests {
     }
 
     #[test]
-    fn auto_allows_everything() {
-        for name in ["read_file", "write_file", "run_command", "memory_delete"] {
-            assert!(ToolPolicy::Auto.authorize(name).is_ok(), "{name}");
+    fn hacker_allows_everything() {
+        for name in [
+            "read_file",
+            "write_file",
+            "run_command",
+            "ssh_run",
+            "memory_delete",
+            "git_commit",
+        ] {
+            assert!(ToolPolicy::Hacker.authorize(name).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
+    fn build_allows_local_power_but_refuses_ssh() {
+        for name in [
+            "write_file",
+            "edit_file",
+            "run_command",
+            "git_commit",
+            "git_branch",
+        ] {
+            assert!(ToolPolicy::Build.authorize(name).is_ok(), "{name}");
+        }
+        let err = ToolPolicy::Build.authorize("ssh_run").unwrap_err();
+        assert!(err.contains("build_mode"), "{err}");
+        assert!(
+            err.contains("hacker"),
+            "{err} must point at the escape hatch"
+        );
+    }
+
+    #[test]
+    fn coder_allows_file_edits_but_refuses_execution_and_history() {
+        for name in [
+            "write_file",
+            "edit_file",
+            "index_symbols",
+            "propose_self_edit",
+        ] {
+            assert!(ToolPolicy::Coder.authorize(name).is_ok(), "{name}");
+        }
+        for name in ["run_command", "git_commit", "ssh_run", "delete_plan"] {
+            let err = ToolPolicy::Coder.authorize(name).unwrap_err();
+            assert!(err.contains("coder_mode"), "{name}: {err}");
         }
     }
 
@@ -190,8 +276,8 @@ mod tests {
                 "{name} must be gated"
             );
         }
-        // Readonly stays strict: plan mutations are refused there too.
-        assert!(ToolPolicy::Readonly.authorize("create_plan").is_err());
+        // Readonly-style strictness is preserved by Plan refusing plan writes
+        // to nobody: plan tools are the only writes allowed here.
     }
 
     #[test]
@@ -205,61 +291,76 @@ mod tests {
     }
 
     #[test]
-    fn restricted_modes_allow_reads_and_refuse_mutations() {
-        for policy in [ToolPolicy::Readonly] {
-            for name in [
-                "read_file",
-                "list_files",
-                "search",
-                "web_fetch",
-                "memory_get",
-            ] {
-                assert!(
-                    policy.authorize(name).is_ok(),
-                    "{policy:?} should allow {name}"
-                );
+    fn modes_form_a_strict_ladder() {
+        // Everything Plan allows, Coder allows; everything Coder allows,
+        // Build allows; everything Build allows, Hacker allows.
+        let tools = [
+            "list_files",
+            "read_file",
+            "search",
+            "write_file",
+            "edit_file",
+            "run_command",
+            "ssh_run",
+            "git_commit",
+            "git_branch",
+            "git_status",
+            "run_tests",
+            "index_symbols",
+            "find_symbol",
+            "create_plan",
+            "update_task",
+            "delete_plan",
+            "memory_save",
+            "memory_delete",
+            "propose_self_edit",
+        ];
+        for name in tools {
+            let plan = ToolPolicy::Plan.authorize(name).is_ok();
+            let coder = ToolPolicy::Coder.authorize(name).is_ok();
+            let build = ToolPolicy::Build.authorize(name).is_ok();
+            let hacker = ToolPolicy::Hacker.authorize(name).is_ok();
+            if plan {
+                assert!(coder, "{name}: plan-allowed must be coder-allowed");
             }
-            for name in ["write_file", "edit_file", "memory_save", "run_command"] {
-                let err = match policy.authorize(name) {
-                    Ok(_) => panic!("{policy:?} should refuse {name}"),
-                    Err(e) => e,
-                };
-                assert!(err.starts_with("{\"error\""), "model-readable JSON: {err}");
-                assert!(err.contains("\"code\""), "{err}");
+            if coder {
+                assert!(build, "{name}: coder-allowed must be build-allowed");
+            }
+            if build {
+                assert!(hacker, "{name}: build-allowed must be hacker-allowed");
             }
         }
     }
 
     #[test]
-    fn plan_and_readonly_carry_distinct_codes() {
-        assert!(ToolPolicy::Plan
-            .authorize("write_file")
-            .unwrap_err()
-            .contains("plan_mode"));
-        assert!(ToolPolicy::Readonly
-            .authorize("write_file")
-            .unwrap_err()
-            .contains("read_only_policy"));
-    }
-
-    #[test]
-    fn parse_accepts_known_labels_and_rejects_unknown() {
-        assert_eq!(ToolPolicy::parse("auto"), Some(ToolPolicy::Auto));
+    fn parse_accepts_known_labels_and_migrates_legacy() {
+        assert_eq!(ToolPolicy::parse("plan"), Some(ToolPolicy::Plan));
         assert_eq!(ToolPolicy::parse(" Plan "), Some(ToolPolicy::Plan));
-        assert_eq!(ToolPolicy::parse("readonly"), Some(ToolPolicy::Readonly));
-        assert_eq!(ToolPolicy::parse("read-only"), Some(ToolPolicy::Readonly));
+        assert_eq!(ToolPolicy::parse("coder"), Some(ToolPolicy::Coder));
+        assert_eq!(ToolPolicy::parse("build"), Some(ToolPolicy::Build));
+        assert_eq!(ToolPolicy::parse("hacker"), Some(ToolPolicy::Hacker));
+        // Legacy labels from pre-0.6 configs.
+        assert_eq!(ToolPolicy::parse("auto"), Some(ToolPolicy::Hacker));
+        assert_eq!(ToolPolicy::parse("readonly"), Some(ToolPolicy::Plan));
+        assert_eq!(ToolPolicy::parse("read-only"), Some(ToolPolicy::Plan));
         assert_eq!(ToolPolicy::parse("nope"), None);
     }
 
     #[test]
+    fn default_is_build() {
+        assert_eq!(ToolPolicy::default(), ToolPolicy::Build);
+    }
+
+    #[test]
     fn cycle_visits_every_mode_once() {
-        let mut seen = vec![ToolPolicy::Auto];
-        let mut next = ToolPolicy::Auto.next();
-        while next != ToolPolicy::Auto {
+        let mut seen = vec![ToolPolicy::Plan];
+        let mut next = ToolPolicy::Plan.next();
+        while next != ToolPolicy::Plan {
             assert!(!seen.contains(&next), "cycle repeated {next:?}");
             seen.push(next);
             next = next.next();
         }
-        assert_eq!(seen.len(), 3);
+        assert_eq!(seen.len(), 4, "cycle must visit all four modes: {seen:?}");
+        assert_eq!(next, ToolPolicy::Plan, "cycle must wrap back to Plan");
     }
 }

@@ -213,7 +213,7 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/policy",
         aliases: &["/mode"],
-        hint: "cycle tool policy: auto · plan · readonly",
+        hint: "cycle tool mode: plan · coder · build · hacker",
         kind: Command::Policy,
     },
     Entry {

@@ -161,6 +161,19 @@ pub fn rule(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 /// Status strip above the composer. Rebuilt only when its inputs change.
+/// The footer badge for the active tool mode: `(label, color)` for every
+/// non-default mode; `None` for build (the default stays quiet).
+fn mode_badge(app: &App) -> Option<(String, Color)> {
+    use crate::agent::policy::ToolPolicy;
+    let theme = &app.theme;
+    match app.cfg.tool_policy {
+        ToolPolicy::Plan => Some(("◐ plan mode".to_string(), theme.warn())),
+        ToolPolicy::Coder => Some((format!("{} coder mode", glyph::CHECK), theme.accent())),
+        ToolPolicy::Build => None,
+        ToolPolicy::Hacker => Some((format!("{} hacker mode", glyph::BRAIN), theme.danger())),
+    }
+}
+
 pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
     let theme = app.theme;
     let key = footer_key(app);
@@ -236,18 +249,19 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
         ));
     }
 
-    // Plan mode badge: always visible while the mode is on, with the active
-    // plan's name when one exists. Warn color so it is never missed.
-    if app.cfg.tool_policy == crate::agent::policy::ToolPolicy::Plan {
+    // Mode badge: visible for every non-default mode (build is the default
+    // and stays quiet). Distinct color + glyph per mode so the mode is
+    // unmistakable at a glance.
+    if let Some((badge, color)) = mode_badge(app) {
         left.push(Span::styled("  ", theme.faint_style()));
         left.push(Span::styled(
-            "◐ plan mode",
-            Style::default()
-                .fg(theme.warn())
-                .add_modifier(Modifier::BOLD),
+            badge,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
-        if let Some(latest) = app.latest_plan_name() {
-            left.push(Span::styled(format!(" · {latest}"), theme.faint_style()));
+        if app.cfg.tool_policy == crate::agent::policy::ToolPolicy::Plan {
+            if let Some(latest) = app.latest_plan_name() {
+                left.push(Span::styled(format!(" · {latest}"), theme.faint_style()));
+            }
         }
     }
 
@@ -752,7 +766,7 @@ pub fn connect(frame: &mut Frame, area: Rect, app: &App) {
 /// Cache key for the status strip.
 fn footer_key(app: &App) -> String {
     format!(
-        "{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         app.usage.prompt_tokens,
         app.usage.completion_tokens,
         app.usage.total_tokens,
@@ -760,6 +774,9 @@ fn footer_key(app: &App) -> String {
         app.turn_started
             .map(|t| t.elapsed().as_millis() / 100)
             .unwrap_or(0),
+        // The mode badge changes the footer content; without this in the key
+        // a cached build-mode footer would render after a mode switch.
+        app.cfg.tool_policy.as_str(),
     )
 }
 

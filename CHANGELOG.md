@@ -4,6 +4,37 @@ Every entry describes a verified change. Labels: implemented+tested,
 implemented unverified, planned, experimental, unsupported. Planned work is
 never listed as released.
 
+## [0.6.0] — 2026-10-27
+
+### Added
+
+- **Four tool modes on Shift+Tab**: plan → coder → build → hacker → plan,
+  each granting strictly more power (Plan ⊂ Coder ⊂ Build ⊂ Hacker).
+  - **plan**: reads + plan tools only (mutations refused with `create_plan`
+    guidance)
+  - **coder**: + file edits, symbol index, self-edit staging, memory writes
+    (no command execution, no git history)
+  - **build** (default): + local command execution and git commits/branches
+  - **hacker**: everything, including SSH to remote hosts
+  The footer shows a colored badge per non-default mode (warn/accent/danger);
+  the choice persists in `config.toml` and `NANOMITE_TOOL_POLICY` overrides.
+  Legacy labels migrate (`auto` → `hacker`, `readonly` → `plan`). Status:
+  implemented and tested (per-mode allow-set tests, ladder-strictness test,
+  Shift+Tab cycle UI test, footer badge test). Replaces the previous
+  auto/plan/readonly policy set.
+
+### Changed
+
+- `/policy` (alias `/mode`) hint and toast now name the four modes; the help
+  sheet documents Shift+Tab.
+- `docs/PLAN_MODE.md` → `docs/MODES.md`, rewritten for the four modes.
+
+### Fixed
+
+- Footer render cache did not include the tool mode in its key, so a mode
+  switch could keep rendering the previous mode's footer until something
+  else invalidated it. The key now carries the active mode.
+
 ## [0.5.0] — 2026-10-27
 
 ### Added

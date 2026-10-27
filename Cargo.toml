@@ -1,6 +1,6 @@
 [package]
 name = "nanomite"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "A microscopic terminal coding agent: streaming chat with any OpenAI-compatible model, 33 tools, persistent memory, multi-agent board, polished TUI"
 license = "MIT"

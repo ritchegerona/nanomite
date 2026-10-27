@@ -2958,7 +2958,7 @@ impl App {
         if let Err(err) = self.rebuild_runtime() {
             self.toast(format!("policy cycle failed: {err}"));
         } else {
-            self.toast(format!("tool policy: {}", next.label()));
+            self.toast(format!("mode: {} - Shift+Tab to cycle", next.label()));
         }
         self.fire_hook(crate::hooks::HookEvent::PolicyChange {
             policy: next.label().to_string(),
@@ -3352,6 +3352,7 @@ impl App {
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
             KeyCode::Char('c') if ctrl => self.quit = true,
@@ -3570,6 +3571,14 @@ impl App {
             // Transcript actions: y = yank/copy (only in visual mode), > = quote into composer
             // In visual mode, 'y' copies selection. In composer, 'y' types normally.
             KeyCode::Char('>') => self.quote_last_assistant(),
+
+            // Shift+Tab cycles the tool mode: plan -> coder -> build -> hacker.
+            // Plain Tab stays reserved for ghost-text acceptance; overlays keep
+            // their own Shift+Tab navigation.
+            KeyCode::Tab if shift => {
+                self.cycle_tool_policy();
+                return;
+            }
 
             // Tab accepts inline completion (ghost text from last assistant code block)
             KeyCode::Tab => {

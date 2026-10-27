@@ -366,7 +366,20 @@ mod tests {
     use std::fs;
 
     fn init_plan_tools() -> (PathBuf, PlanTools) {
-        let dir = std::env::temp_dir().join(format!("nanomite-plan-test-{}", std::process::id()));
+        // Per-test unique dir: the tests write real plan files, and a shared
+        // dir races under parallel test execution (list/get see other tests'
+        // plans, update_task finds another plan's task id first).
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "nanomite-plan-test-{}-{}-{}",
+            std::process::id(),
+            id,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
         fs::create_dir_all(&dir).unwrap();
         let tools = PlanTools::new(&dir);
         (dir, tools)

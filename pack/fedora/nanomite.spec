@@ -1,7 +1,7 @@
 # COPR spec: builds nanomite from the git tag.
 # COPR: ritchegerona/nanomite
 Name:           nanomite
-Version:        0.5.0
+Version:        0.6.0
 Release:        1%{?dist}
 Summary:        A microscopic terminal coding agent
 License:        MIT

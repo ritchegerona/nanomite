@@ -1278,6 +1278,79 @@ async fn sudo_password_modal_shows_error_and_empty_hint() {
 }
 
 #[tokio::test]
+async fn shift_tab_cycles_all_four_modes() {
+    use crate::agent::policy::ToolPolicy;
+    let mut app = test_app().await;
+    // Default is build.
+    assert_eq!(app.cfg.tool_policy, ToolPolicy::Build);
+
+    // Shift+Tab: build -> hacker -> plan -> coder -> build.
+    press(
+        &mut app,
+        ratatui::crossterm::event::KeyCode::Tab,
+        ratatui::crossterm::event::KeyModifiers::SHIFT,
+    );
+    assert_eq!(app.cfg.tool_policy, ToolPolicy::Hacker);
+    press(
+        &mut app,
+        ratatui::crossterm::event::KeyCode::Tab,
+        ratatui::crossterm::event::KeyModifiers::SHIFT,
+    );
+    assert_eq!(app.cfg.tool_policy, ToolPolicy::Plan);
+    press(
+        &mut app,
+        ratatui::crossterm::event::KeyCode::Tab,
+        ratatui::crossterm::event::KeyModifiers::SHIFT,
+    );
+    assert_eq!(app.cfg.tool_policy, ToolPolicy::Coder);
+    press(
+        &mut app,
+        ratatui::crossterm::event::KeyCode::Tab,
+        ratatui::crossterm::event::KeyModifiers::SHIFT,
+    );
+    assert_eq!(app.cfg.tool_policy, ToolPolicy::Build);
+
+    // The setting persists with the config.
+    let path =
+        std::env::temp_dir().join(format!("nanomite-mode-cycle-{}.toml", std::process::id()));
+    app.cfg.store_path = Some(path.clone());
+    app.cfg.tool_policy = ToolPolicy::Hacker;
+    app.cfg.save();
+    let stored = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        stored.contains("tool_policy = \"hacker\""),
+        "mode not persisted: {stored}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn footer_shows_mode_badge_for_non_default_modes() {
+    use crate::agent::policy::ToolPolicy;
+    let mut app = test_app().await;
+
+    // Build (default): no mode badge (the word "mode" alone can appear in
+    // other UI text, so assert on the exact badge strings below instead).
+    let text = frame_text(&mut app, 100, 24);
+    assert!(!text.contains("plan mode"), "plan badge leaked: {text}");
+    assert!(!text.contains("coder mode"), "coder badge leaked: {text}");
+    assert!(!text.contains("hacker mode"), "hacker badge leaked: {text}");
+
+    for (mode, badge) in [
+        (ToolPolicy::Plan, "plan mode"),
+        (ToolPolicy::Coder, "coder mode"),
+        (ToolPolicy::Hacker, "hacker mode"),
+    ] {
+        app.cfg.tool_policy = mode;
+        let text = frame_text(&mut app, 100, 24);
+        assert!(
+            text.contains(badge),
+            "{badge} missing for {mode:?}:\n{text}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn tools_overlay_lists_all_tools_and_toggles() {
     let mut app = test_app().await;
     let path = std::env::temp_dir().join(format!("nanomite-ui-tools-{}.toml", std::process::id()));
@@ -1623,7 +1696,7 @@ fn dispatch(app: &App, name: &str, args: serde_json::Value) -> Result<(String, S
     crate::agent::runtime::run_tool(
         &tools,
         &[],
-        crate::agent::policy::ToolPolicy::Auto,
+        crate::agent::policy::ToolPolicy::Hacker,
         &[],
         std::path::Path::new("."),
         &crate::agent::provider::ToolCall {
