@@ -3,7 +3,7 @@
 use crate::app::{Entry, EntryRole, Phase};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredSession {
@@ -64,6 +64,10 @@ pub struct StoredEntry {
     pub text: String,
     pub tools: Vec<String>,
     pub elapsed_ms: Option<u64>,
+    /// Wall-clock creation time (unix seconds); `None` in files written
+    /// before the field existed, so old sessions still restore.
+    #[serde(default)]
+    pub at: Option<u64>,
 }
 
 impl StoredSession {
@@ -107,6 +111,7 @@ impl StoredSession {
                         })
                         .collect(),
                     elapsed_ms: e.elapsed.map(|d| d.as_millis() as u64),
+                    at: Some(unix_secs(e.at)),
                 })
                 .collect(),
         }
@@ -127,6 +132,15 @@ impl StoredSession {
                     _ => Phase::Done,
                 };
                 entry.elapsed = e.elapsed_ms.map(std::time::Duration::from_millis);
+                // Sub-second precision is not stored; unix seconds round-trip
+                // exactly, and files without the field fall back to "now".
+                entry.at =
+                    e.at.and_then(|secs| {
+                        SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(secs))
+                    })
+                    .unwrap_or_else(SystemTime::now);
+                // The session-level model applies to every restored entry.
+                entry.model = Some(self.model.clone());
                 for tool in &e.tools {
                     let (name, detail) = tool.split_once(' ').unwrap_or((tool.as_str(), ""));
                     entry.tools.push(crate::app::ToolRow {
@@ -137,6 +151,8 @@ impl StoredSession {
                         edit_path: None,
                         edit_replacements: None,
                         preview: None,
+                        started: Instant::now(),
+                        elapsed: None,
                     });
                 }
                 entry
@@ -147,6 +163,98 @@ impl StoredSession {
     pub fn turns(&self) -> usize {
         self.entries.iter().filter(|e| e.role == "user").count()
     }
+}
+
+/// One `/history` match: which saved session, and the line that matched.
+#[derive(Debug, Clone)]
+pub struct HistoryHit {
+    pub path: PathBuf,
+    /// `model · turns · workspace` for the picker's hint column.
+    pub label: String,
+    /// The matched line, trimmed for display.
+    pub snippet: String,
+}
+
+/// Scans saved sessions (newest first) for `query`, case-insensitively, one
+/// hit per session so the results span many conversations. Bounded by
+/// `limit` and by file size (sessions are small JSON files).
+pub fn search_saved(query: &str, limit: usize) -> Vec<HistoryHit> {
+    search_saved_in(sessions_dir(), query, limit)
+}
+
+/// The directory-injectable core of [`search_saved`], so tests can point it
+/// at a scratch directory instead of the real session store.
+pub fn search_saved_in(dir: PathBuf, query: &str, limit: usize) -> Vec<HistoryHit> {
+    let needle = query.to_lowercase();
+    let mut out: Vec<HistoryHit> = Vec::new();
+    if needle.is_empty() {
+        return out;
+    }
+    let metas = {
+        let mut metas: Vec<SessionMeta> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .filter_map(|entry| {
+                let path = entry.path();
+                let raw = std::fs::read(&path).ok()?;
+                let stored: StoredSession = serde_json::from_slice(&raw).ok()?;
+                let preview = stored
+                    .entries
+                    .iter()
+                    .find(|e| e.role == "user")
+                    .map(|e| e.text.trim().replace('\n', " "))
+                    .unwrap_or_default();
+                let turns = stored.turns();
+                Some(SessionMeta {
+                    updated: stored.updated,
+                    path,
+                    label: stored.model.clone(),
+                    turns,
+                    preview,
+                    workspace: stored.workspace.clone(),
+                })
+            })
+            .collect();
+        metas.sort_by_key(|meta| std::cmp::Reverse(meta.updated));
+        metas
+    };
+    for meta in metas {
+        if out.len() >= limit {
+            break;
+        }
+        let Ok(raw) = std::fs::read(&meta.path) else {
+            continue;
+        };
+        if raw.len() > 4_194_304 {
+            continue;
+        }
+        let Ok(stored) = serde_json::from_slice::<StoredSession>(&raw) else {
+            continue;
+        };
+        let label = format!(
+            "{} · {} turns · {}",
+            meta.label,
+            meta.turns,
+            meta.workspace.unwrap_or_else(|| "other".into())
+        );
+        for entry in &stored.entries {
+            if let Some(line) = entry
+                .text
+                .lines()
+                .find(|l| l.to_lowercase().contains(&needle))
+            {
+                out.push(HistoryHit {
+                    path: meta.path.clone(),
+                    label: label.clone(),
+                    snippet: line.trim().chars().take(80).collect(),
+                });
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Slugified workspace path: the per-project grouping key for the sessions
@@ -338,6 +446,8 @@ mod tests {
                 edit_path: None,
                 edit_replacements: None,
                 preview: None,
+                started: Instant::now(),
+                elapsed: None,
             });
             a
         }];
@@ -367,6 +477,78 @@ mod tests {
         assert_eq!(restored[1].role, EntryRole::Assistant);
         assert_eq!(restored[1].tools[0].name, "list_files");
         assert!(restored[1].tools[0].ok);
+    }
+
+    #[test]
+    fn history_search_finds_matches_across_sessions() {
+        let dir = crate::improve::testing::temp_dir("history-search");
+        let mut stored = StoredSession {
+            version: 2,
+            started: 1_700_000_000,
+            updated: 1_700_000_100,
+            provider: "scripted".into(),
+            model: "scripted-model".into(),
+            cwd: "/tmp".into(),
+            workspace: Some("demo".into()),
+            settings: None,
+            plans: Vec::new(),
+            entries: vec![StoredEntry {
+                role: "user".into(),
+                text: "deploy on fridays please".into(),
+                tools: vec![],
+                elapsed_ms: None,
+                at: Some(1_700_000_050),
+            }],
+        };
+        std::fs::write(
+            dir.path.clone().join("a.json"),
+            serde_json::to_vec(&stored).unwrap(),
+        )
+        .unwrap();
+        stored.entries[0].text = "unrelated note".into();
+        std::fs::write(
+            dir.path.clone().join("b.json"),
+            serde_json::to_vec(&stored).unwrap(),
+        )
+        .unwrap();
+
+        let hits = search_saved_in(dir.path.clone(), "fridays", 10);
+        assert_eq!(hits.len(), 1, "only the matching session: {hits:?}");
+        assert!(hits[0].snippet.contains("deploy on fridays"));
+        assert_eq!(hits[0].label, "scripted-model · 1 turns · demo");
+    }
+
+    #[test]
+    fn capture_round_trips_entry_wall_clock() {
+        let at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let mut entry = Entry::new(EntryRole::User, "timestamped");
+        entry.at = at;
+        let session = StoredSession::capture(
+            &[entry],
+            "scripted",
+            "scripted-model",
+            Path::new("/tmp"),
+            SystemTime::now(),
+        );
+        assert_eq!(session.entries[0].at, Some(1_700_000_000));
+        let restored = session.restore();
+        assert_eq!(restored[0].at, at, "wall-clock time must survive restore");
+    }
+
+    #[test]
+    fn old_sessions_without_timestamps_restore() {
+        let raw = r#"{
+            "version": 2, "started": 0, "updated": 0,
+            "provider": "p", "model": "m", "cwd": "/tmp",
+            "entries": [
+                {"role": "user", "text": "legacy", "tools": [], "elapsed_ms": null}
+            ]
+        }"#;
+        let session: StoredSession = serde_json::from_str(raw).expect("legacy session loads");
+        let restored = session.restore();
+        assert_eq!(restored[0].text, "legacy");
+        // No stored time: the badge falls back to the restore moment.
+        assert!(restored[0].at.elapsed().is_ok());
     }
 
     #[test]

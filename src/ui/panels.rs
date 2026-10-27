@@ -10,7 +10,7 @@ use crate::config::model_context_limit;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
@@ -71,7 +71,25 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
         glyph::BLOCK_LIGHT.repeat(meter_cells - filled)
     );
 
-    let ctx_display = format!(" {} {meter} {ctx_str}/{limit_str} · {pct}% ", glyph::BRAIN);
+    let mut ctx_display = format!(" {} {meter} {ctx_str}/{limit_str} · {pct}% ", glyph::BRAIN);
+    // Burn-rate projection: at the session's average tokens per turn, how
+    // many more turns fit before the window fills? Shown once the meter is
+    // three quarters full so `/compact` lands before the truncation point.
+    let turns = app
+        .entries
+        .iter()
+        .filter(|e| e.role == crate::app::EntryRole::User)
+        .count();
+    if turns > 0 && pct >= 75 {
+        let per_turn = usage / turns;
+        if let Some(left) = ctx_limit
+            .saturating_sub(usage)
+            .checked_div(per_turn)
+            .filter(|left| *left <= 6)
+        {
+            ctx_display = format!("{ctx_display}· ~{left} turns ");
+        }
+    }
     let ctx_chars = ctx_display.chars().count();
     let fixed = glyph::DOT.width() + 2 * glyph::CHEVRON.width() + 2;
     let model_budget = width
@@ -175,6 +193,52 @@ fn mode_badge(app: &App) -> (String, Color) {
     }
 }
 
+/// Follow-up suggestions strip (opencode-style): mounts between the prompt
+/// queue and the footer when the model answered a finished turn's suggestion
+/// side-call. Same quiet background-strip language as the prompt queue: no
+/// borders, one faint header row, one row per suggestion, the highlighted
+/// one in the accent colour. `Tab` cycles, `Enter` sends, `Esc` dismisses.
+pub fn suggestions(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(strip) = &app.suggestions else {
+        return;
+    };
+    if area.height == 0 || area.width < 12 {
+        return;
+    }
+    let theme = &app.theme;
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled("next steps", Style::default().fg(theme.accent_soft())),
+        Span::styled(
+            format!(
+                " {} tab cycle {} enter send {} esc dismiss",
+                glyph::DOT,
+                glyph::DOT,
+                glyph::DOT
+            ),
+            theme.faint_style(),
+        ),
+    ])];
+
+    for (i, item) in strip.items.iter().enumerate() {
+        let (marker, style) = if i == strip.selected {
+            (glyph::CHEVRON, Style::default().fg(theme.accent()))
+        } else {
+            (glyph::DOT, Style::default().fg(theme.muted()))
+        };
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {} {}",
+                marker,
+                text::truncate(item, area.width as usize - 8)
+            ),
+            style,
+        )));
+    }
+
+    frame.render_widget(Paragraph::new(Text::from(lines)), area);
+}
+
 pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
     let theme = app.theme;
     let key = footer_key(app);
@@ -186,7 +250,32 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 
     let mut left: Vec<Span<'static>> = Vec::new();
-    if app.is_busy() {
+    if let Some(search) = &app.search {
+        // The search bar replaces the status strip while it is open.
+        left.push(Span::styled(
+            format!("/{}", search.query),
+            Style::default()
+                .fg(theme.accent())
+                .add_modifier(Modifier::BOLD),
+        ));
+        let status = if search.query.trim().is_empty() {
+            " type to search".to_string()
+        } else if search.matches.is_empty() {
+            " no matches".to_string()
+        } else {
+            format!(" {}/{} matches", search.current + 1, search.matches.len())
+        };
+        left.push(Span::styled(status, Style::default().fg(theme.muted())));
+        left.push(Span::styled(
+            format!(
+                "  {} enter/↓ next {} ↑ prev {} esc close",
+                glyph::DOT,
+                glyph::DOT,
+                glyph::DOT
+            ),
+            theme.faint_style(),
+        ));
+    } else if app.is_busy() {
         let elapsed = app
             .turn_started
             .map(|t| text::format_duration(t.elapsed()))
@@ -279,8 +368,9 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     }
 
-    // Right side: prompt / completion token counts only (context meter moved to header)
-    let right = Line::from(vec![
+    // Right side: prompt / completion token counts (context meter moved to
+    // the header); the perf hud appends frame timing and transcript stats.
+    let mut right_spans = vec![
         Span::styled(format!("{} ", glyph::ARROW_UP), theme.faint_style()),
         Span::styled(
             text::format_tokens(app.usage.prompt_tokens as u64),
@@ -292,8 +382,22 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
             text::format_tokens(app.usage.completion_tokens as u64),
             theme.dim(),
         ),
-    ])
-    .right_aligned();
+    ];
+    if app.hud {
+        right_spans.push(Span::raw("  "));
+        right_spans.push(Span::styled(
+            format!(
+                "{:.1}ms · {:.1}ms peak · {} draws · {} entries · {} rows",
+                app.frame_us as f64 / 1000.0,
+                app.frame_peak_us as f64 / 1000.0,
+                app.frame_draws,
+                app.entries.len(),
+                app.view.content_height
+            ),
+            theme.faint_style(),
+        ));
+    }
+    let right = Line::from(right_spans).right_aligned();
 
     frame.render_widget(Paragraph::new(Line::from(left.clone())), area);
     frame.render_widget(Paragraph::new(right), area);
@@ -321,6 +425,11 @@ pub fn help_keys() -> &'static [(&'static str, &'static str)] {
         ("esc", "interrupt · close an overlay · clear the prompt"),
         ("ctrl+t / ctrl+l", "new session · clear transcript"),
         ("ctrl+r", "cycle reasoning effort"),
+        (
+            "ctrl+f",
+            "search the transcript (enter/↓ next · ↑ prev · esc close)",
+        ),
+        ("ctrl+o", "toggle tool output details"),
         ("ctrl+p / ctrl+n", "previous · next prompt from history"),
         ("ctrl+a / ctrl+e", "prompt home · prompt end"),
         (
@@ -333,10 +442,14 @@ pub fn help_keys() -> &'static [(&'static str, &'static str)] {
         ),
         ("left / right", "move the caret · by word with ctrl or alt"),
         ("up / down", "cursor within a multi-row prompt, else scroll"),
+        ("alt+↑ / alt+↓", "jump to the previous · next message"),
         ("pgup / pgdn", "scroll the transcript"),
         ("home / end", "prompt start · prompt end"),
         ("ctrl+home / ctrl+end", "transcript top · bottom"),
         ("mouse wheel", "scroll the transcript"),
+        ("scrollbar click/drag", "jump · click the bottom to follow"),
+        ("click a code block", "copy the block's source"),
+        ("click a failed message", "expand the full error"),
         (
             "tab",
             "next picker row · next /connect field (shift+tab back)",
@@ -346,6 +459,7 @@ pub fn help_keys() -> &'static [(&'static str, &'static str)] {
             "approve · reject the self-edit under review in /improve",
         ),
         ("f1", "this sheet"),
+        ("f2", "focus mode - only the latest exchange"),
     ]
 }
 
@@ -504,7 +618,6 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
     }
     for (i, item) in picker.items.iter().enumerate().skip(start).take(visible) {
         let selected = i == picker.cursor;
-        let marker = if selected { glyph::GUTTER } else { " " };
         // Reserve the check column so hints stay aligned whether or not a row is current.
         let check = if item.current { glyph::CHECK } else { " " };
         let label = format!("{check} {}", item.label);
@@ -514,6 +627,21 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
             &item.hint,
             inner_w.saturating_sub(3 + text::width(&label) + 2),
         );
+        if selected {
+            // Full-row highlight, opencode-style: the cursor is the bar, the
+            // row paints edge to edge, match highlighting stands down.
+            let text = format!(" {label}  {hint}");
+            let padded = format!(
+                "{:<width$}",
+                text::truncate(&text, inner_w),
+                width = inner_w
+            );
+            lines.push(Line::from(Span::styled(
+                padded,
+                Style::default().fg(theme.panel_bg()).bg(theme.accent()),
+            )));
+            continue;
+        }
         let label_w = inner_w.saturating_sub(3 + text::width(&hint));
         let label_style = if selected {
             Style::default().fg(theme.strong())
@@ -584,14 +712,11 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
         }
 
         lines.push(Line::from(
-            vec![Span::styled(
-                format!(" {marker} "),
-                Style::default().fg(theme.accent()),
-            )]
-            .into_iter()
-            .chain(label_line_spans)
-            .chain(hint_line_spans)
-            .collect::<Vec<_>>(),
+            vec![Span::styled("   ", Style::default().fg(theme.accent()))]
+                .into_iter()
+                .chain(label_line_spans)
+                .chain(hint_line_spans)
+                .collect::<Vec<_>>(),
         ));
     }
 
@@ -761,8 +886,14 @@ pub fn connect(frame: &mut Frame, area: Rect, app: &App) {
 
 /// Cache key for the status strip.
 fn footer_key(app: &App) -> String {
+    // The search bar rewrites the left side on every keystroke and match
+    // jump, so its query and cursor must be part of the key.
+    let search = match &app.search {
+        Some(s) => format!("search|{}|{}|{}", s.query, s.matches.len(), s.current),
+        None => String::from("none"),
+    };
     format!(
-        "{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}",
         app.usage.prompt_tokens,
         app.usage.completion_tokens,
         app.usage.total_tokens,
@@ -773,6 +904,7 @@ fn footer_key(app: &App) -> String {
         // The mode badge changes the footer content; without this in the key
         // a cached build-mode footer would render after a mode switch.
         app.cfg.tool_policy.as_str(),
+        search,
     )
 }
 
@@ -955,7 +1087,11 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
             .border_style(Style::default().fg(theme.border_focus()))
             .title(
                 Line::from(Span::styled(
-                    " connect a provider ",
+                    format!(
+                        " connect a provider · {}/{} ",
+                        rows.len(),
+                        app.provider_menu_rows("").len()
+                    ),
                     Style::default().fg(theme.accent()),
                 ))
                 .centered(),
@@ -1004,7 +1140,11 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
         .border_style(Style::default().fg(theme.border_focus()))
         .title(
             Line::from(Span::styled(
-                " connect a provider ",
+                format!(
+                    " connect a provider · {}/{} ",
+                    rows.len(),
+                    app.provider_menu_rows("").len()
+                ),
                 Style::default().fg(theme.accent()),
             ))
             .centered(),

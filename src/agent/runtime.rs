@@ -75,6 +75,12 @@ pub enum AgentEvent {
         detail: String,
         ok: bool,
     },
+    /// Time machine: a mutating tool touched `path`; `previous` is its
+    /// pre-change content (`None` when the file was created by the call).
+    Snapshot {
+        path: String,
+        previous: Option<Vec<u8>>,
+    },
     Finished {
         text: String,
         usage: Usage,
@@ -550,6 +556,13 @@ impl AgentRuntime {
                 let call_for_task = call.clone();
                 let tool_name = call.name.clone();
                 let outcome = tokio::task::spawn_blocking(move || {
+                    // Time machine: capture the target file's pre-change
+                    // content before a mutating call, on this blocking thread.
+                    let snapshot = if matches!(tool_name.as_str(), "write_file" | "edit_file") {
+                        snapshot_file(&workspace, &call_for_task.arguments)
+                    } else {
+                        None
+                    };
                     let result = run_tool(
                         &tools,
                         &disabled,
@@ -575,11 +588,12 @@ impl AgentRuntime {
                             let _ = crate::hooks::run_hooks(&hooks, &event, &workspace2);
                         });
                     }
-                    result
+                    (result, snapshot)
                 })
                 .await
-                .unwrap_or_else(|e| Err(format!("tool panicked: {e}")));
+                .unwrap_or_else(|e| (Err(format!("tool panicked: {e}")), None));
 
+                let (outcome, snapshot) = outcome;
                 match outcome {
                     Ok((payload, summary)) => {
                         let ok = !payload.starts_with("{\"error\"");
@@ -598,6 +612,9 @@ impl AgentRuntime {
                         });
                         messages.push(ChatMessage::tool_result(call.id.clone(), e));
                     }
+                }
+                if let Some((path, previous)) = snapshot {
+                    let _ = tx.send(AgentEvent::Snapshot { path, previous });
                 }
             }
 
@@ -660,6 +677,28 @@ fn filter_disabled_schemas(
 /// inline before dispatch (non-zero exit = refused with the hook's stderr),
 /// post-tool-call hooks fire after the result is known (detached, never
 /// blocking the turn).
+/// Reads the pre-change content of a mutating tool's target file so
+/// `/revert` can restore it: the workspace-relative path plus the bytes
+/// (`None` when the file does not exist yet). Bounded to 1 MiB; the path is
+/// re-sanitized here even though the tools already confine it.
+fn snapshot_file(
+    workspace: &std::path::Path,
+    args_json: &str,
+) -> Option<(String, Option<Vec<u8>>)> {
+    let args: serde_json::Value = serde_json::from_str(args_json).ok()?;
+    let raw = args.get("path")?.as_str()?.trim().to_string();
+    if raw.is_empty() || raw.contains("..") || raw.starts_with('/') {
+        return None;
+    }
+    let full = workspace.join(&raw);
+    let canon = full.canonicalize().unwrap_or_else(|_| full.clone());
+    if !canon.starts_with(workspace) {
+        return None;
+    }
+    let previous = std::fs::read(&canon).ok().filter(|b| b.len() <= 1_048_576);
+    Some((raw, previous))
+}
+
 pub(crate) fn run_tool(
     tools: &ToolSet,
     disabled: &[String],

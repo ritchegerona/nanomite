@@ -7,31 +7,27 @@ shell, SSH and the web.
 Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
 
 ```
- ╔══════════════════════════════════════════════════════════════════════════════╗
- ║ █ NANOMITE    🧠 [██████░░] 42.3k/128.0k · 33%                               ║
- ║ ──────────────────────────────────────────────────────────────────────────── ║
- ╚══════════════════════════════════════════════════════════════════════════════╝
- › list the files in src and read Cargo.toml
+ ⬡ NANOMITE [umbrella] › ~/dev/nanomite        medium ›  🧠 [██░░░░░░] 42.3k/200.0k · 21%
+ ▌ list the files in src and read Cargo.toml
 
-   ✓ list_files  src · 6 files + 3 dirs
-   ✓ read_file   Cargo.toml · 23 lines
+    → list_files src · 6 files + 3 dirs · 12ms
+    → read_file Cargo.toml · 23 lines · 3ms
 
- What I found
- The crate is a ratatui app with 3 layers:
+    The crate is a ratatui app with 3 layers:
 
- • ui/ — theme, transcript, composer
- • agent/ — providers and the tool loop
- • tools/ — workspace-scoped file access
+    • ui/ — theme, transcript, composer
+    • agent/ — providers and the tool loop
+    • tools/ — workspace-scoped file access
 
- Key entry point is src/main.rs.
+    Key entry point is src/main.rs.
 
- ▏ let mut app = App::new(cfg, handle)?;
- ▏
-═══════════════════════════════════════════════════════════════════════════════
+    ▏ let mut app = App::new(cfg, handle)?;
+
+    Build · 8.4s · 45.2 tok/s
+ ────────────────────────────────────────────────────────────────────────────
  ↑ 2.1k  ↓ 800  ·  ready
-───────────────────────────────────────────────────────────────────────────────
- ❯ ask anything - / opens the command menu
-   enter send · ctrl+j newline · / commands
+ ❯ Send a message or type / for commands
+   enter send · ctrl+j newline · ctrl+o details
 ```
 
 **Umbrella theme** (default) — blood-red accent on near-black
@@ -62,16 +58,36 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
 - **Agent board** — `/panel <topic>` convenes four personas in parallel
   (Architect, Engineer, Scientist, Critic) plus a chair that synthesizes their
   answers, streamed live into an overlay
+- **Follow-up suggestions** — when a turn finishes, a tiny side-call asks the
+  model for three short next-step prompts and pops them up above the prompt:
+  `Tab` cycles, `enter` sends the highlighted one, `esc` or typing dismisses
+  (disable with `suggestions = false` in the config or `NANOMITE_SUGGESTIONS=0`)
 - **Professional TUI** — virtualized transcript that stays fast with thousands
-  of messages, markdown rendering, live tool-call rows, unified diffs in edit
-  previews, context meter, CJK/wide-character-safe composer
+  of messages, markdown rendering with syntax-highlighted code blocks and
+  grid tables, live tool-call rows, unified diffs in edit previews, context
+  meter with a burn-rate projection, CJK/wide-character-safe composer
+- **Perf hud** — `/hud` overlays frame time, peak, draw count and transcript
+  stats into the footer, so "snappy" is a measurement, not a vibe
+- **File-state time machine** — every `write_file`/`edit_file` snapshots the
+  target's pre-change content per turn; `/revert [n]` restores the workspace
+  to exactly before a turn (new files are removed again)
+- **Session branching** — `/fork <n>` saves the full session, then continues
+  on a branch trimmed to the first `n` turns
+- **Cross-session search** — `/history <query>` full-text search across every
+  saved session, results open as a resume picker
+- **Effort A/B** — `/ab <prompt>` runs the same prompt at minimal and high
+  reasoning effort side by side in the board overlay
+- **Focus mode** — `f2` shows only the latest exchange, for long sessions on
+  small terminals
+- **`/doctor`** — pre-flight diagnostics: provider, key, memory store,
+  sessions, workspace writability, tool toggles
 - **4 themes** — Umbrella Corp (default, Resident Evil–inspired red), midnight,
   graphite and mono; the choice is persisted across sessions
 - **Your own prompt** — drop extra instructions in `~/.config/nanomite/prompt.md`
   and they are appended to the system prompt on every turn
 - **Persistent setup** — provider, key, model, theme and tool toggles are saved
   to `~/.config/nanomite/config.toml` and survive restarts
-- **Offline-capable test suite** — 370 tests, zero network required
+- **Offline-capable test suite** — 454 tests, zero network required
 
 ## Installation
 
@@ -133,6 +149,7 @@ reasoning = "medium"
 theme = "umbrella"                 # persists your /themes choice
 disabled_tools = "ssh_run,web_search"   # /tools toggles land here
 prompt_file = "~/.config/nanomite/prompt.md"
+suggestions = true                 # follow-up suggestion strip after each turn
 ```
 
 Precedence: **built-in defaults < config file < environment variables**.
@@ -152,6 +169,7 @@ Precedence: **built-in defaults < config file < environment variables**.
 | `NANOMITE_THEME` | `umbrella` | Startup palette (`umbrella`, `midnight`, `graphite`, `mono`) |
 | `NANOMITE_DISABLED_TOOLS` | – | Comma-separated tool names to hide and refuse (overrides the config file) |
 | `NANOMITE_PROMPT_FILE` | `~/.config/nanomite/prompt.md` | Extra instructions appended to the system prompt |
+| `NANOMITE_SUGGESTIONS` | `true` | Follow-up suggestions after a finished turn (`0`/`false` disables) |
 | `NANOMITE_BOARD_DIR` | `~/.local/share/nanomite/board` | Where the multi-agent board keeps its SQLite store |
 | `NANOMITE_CONFIG` | `~/.config/nanomite/config.toml` | Alternate config path |
 
@@ -318,42 +336,66 @@ to `LIKE` search, reporting the index in use honestly.
 | `esc` | Interrupt the agent · close an overlay · clear the prompt |
 | `ctrl+t` / `ctrl+l` | New session · clear transcript |
 | `ctrl+r` | Cycle reasoning effort |
+| `ctrl+f` | Search the transcript (enter/↓ next · ↑ prev · esc closes) |
+| `ctrl+o` | Toggle tool output details |
 | `ctrl+p` / `ctrl+n` | Previous · next prompt from history |
+| `tab` | Cycle follow-up suggestions (when shown) · accept ghost text |
 | `ctrl+w` / `ctrl+u` / `ctrl+k` | Delete word · clear line · delete to end |
 | `pgup` / `pgdn` / `ctrl+home` / `ctrl+end` | Scroll the transcript |
+| `alt+↑` / `alt+↓` | Jump to the previous · next message |
 | `home` / `end` | Jump to the start / end of the prompt |
 | `ctrl+c` / `ctrl+d` | Quit (ctrl+d only when the prompt is empty) |
+| `mouse wheel` · scrollbar | Scroll · click/drag the track to jump (bottom edge re-follows) |
+| click a code block | Copy the block's source |
+| click a failed message | Expand the full error |
 | `f1` | This keysheet |
+| `f2` | Focus mode — only the latest exchange |
 
 While the agent works you can keep typing — the next prompt is queued and
 sends automatically when the turn finishes.
 
 ### Commands
 
-Type `/` to open the command menu (aliases included):
+Type `/` to open the command menu — aliases included, listed grouped by
+purpose: connect & model · agent scope · session · transcript · agent
+features · appearance · output.
 
 | Command | Aliases | Purpose |
 |---|---|---|
 | `/connect` | `/login`, `/auth` | Edit the endpoint URL and API key |
-| `/provider` | `/providers` | Switch provider — pick from the list |
-| `/models` | `/model` | Switch model — filter or type an id |
-| `/compact` | `/summarize` | Summarise the session to free context |
+| `/provider` | `/providers` | Switch the provider — pick from the list |
+| `/models` | `/model` | Switch the model — filter or type an id |
+| `/reasoning` | `/effort` | Cycle reasoning effort: minimal · low · medium · high |
+| `/policy` | `/mode` | Cycle tool mode: plan · coder · build · hacker |
+| `/tools` | | Tool library — enable or disable the agent's tools |
+| `/worktrees` | `/wt` | List git worktrees for parallel agents |
 | `/new` | `/clear` | Start a new session |
 | `/sessions` | `/resume`, `/continue` | List and switch sessions |
-| `/reasoning` | `/effort` | Cycle minimal · low · medium · high |
-| `/themes` | `/theme` | Switch colour theme (persisted) |
-| `/tools` | | Tool library — list, enable and disable the agent's tools |
-| `/panel` | | Convene the agent board on a topic (`/panel <topic>`) |
-| `/improve` | | Review self-edit proposals — `a` approve (with regression gate), `r` reject |
-| `/memory` | `/mem` | Browse persistent memory |
-| `/copy` | | Copy the last assistant message to the clipboard |
-| `/details` | | Toggle tool output details |
-| `/thinking` | | Toggle the thinking indicator |
+| `/history` | | Search all saved sessions — `/history <query>` |
+| `/fork` | | Branch the session at turn N — `/fork <n>` |
+| `/compact` | `/summarize` | Summarise the session to free up context |
+| `/undo` | | Drop the last exchange |
+| `/redo` | | Restore the last undone exchange |
+| `/revert` | | Time machine — restore files to their state before a turn |
+| `/prev` | | Browse to the previous turn |
+| `/next` | | Browse to the next turn |
+| `/copy` | | Copy the last assistant message |
 | `/editor` | | Compose the prompt in `$EDITOR` |
+| `/memory` | `/mem` | Browse persistent memory |
+| `/panel` | | Convene the agent board on a topic (`/panel <topic>`) |
+| `/ab` | | Compare minimal vs high reasoning side by side — `/ab <prompt>` |
+| `/improve` | | Review self-edit proposals — `a` approve (with regression gate), `r` reject |
+| `/improve-from-board` | | Stage the board's synthesis as a proposal |
+| `/details` | | Toggle tool output details (`ctrl+o`) |
+| `/thinking` | | Toggle the thinking indicator |
+| `/focus` | | Show only the latest exchange (`f2`) |
+| `/themes` | `/theme` | Switch colour theme (persisted) |
+| `/hud` | | Toggle the performance hud (frame time, transcript stats) |
 | `/export` | | Write the session to markdown |
 | `/share` | | Export a shareable copy |
-| `/undo` / `/redo` | | Drop / restore the last exchange |
+| `/unshare` | | Remove any shared copy |
 | `/init` | | Create or update AGENTS.md |
+| `/doctor` | | Run pre-flight diagnostics on the setup |
 | `/help` | | Keysheet and command list |
 | `/exit` | `/quit`, `/q` | Quit nanomite |
 

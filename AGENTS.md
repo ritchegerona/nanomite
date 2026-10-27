@@ -16,16 +16,14 @@ siblings are not part of the project:
   `memory.json`, `test.*`, `smoke.txt` — scratch, ignore.
 - `nanomite/target/` is ~5.5 GB; build scratch copies before full rebuilds.
 
-## Build state — READ FIRST (verified 2026-10-16, at `ed60936`)
+## Build state — READ FIRST (verified 2026-10-27, follow-up suggestions landed)
 
 `cargo check` (lib + bins) **passes clean**. `cargo test --lib` is
-**370 passed / 0 failed** (~3.2 s, fully offline). `cargo clippy --all-targets
--- -D warnings` is clean. `cargo fmt --check` is clean. The previously reported
-broken state (46 errors in `src/extract/`, dead `DiffView` stub, never-compiling
-bench target) is fully resolved — do not re-fix it.
+**454 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
+-- -D warnings` is clean. `cargo fmt --check` is clean.
 
 `tests/production_attach.rs` is a separate **integration** target (1 test, green)
-that exercises the real startup attach path. It is *not* part of the 370; quote
+that exercises the real startup attach path. It is *not* part of the 454; quote
 the two numbers separately.
 
 `benches/perf.rs` is a stable, zero-dep harness (median of 7 batches) and
@@ -36,15 +34,15 @@ compiles on the stable toolchain: `cargo bench` works, and `cargo test`
 
 ```bash
 cargo check            # clean
-cargo test --lib       # 370 passed, 0 failed, ~3.2 s, fully offline (verified)
-cargo test --test production_attach   # 1 passed (integration; not in the 370)
+cargo test --lib       # 454 passed, 0 failed, ~5 s, fully offline (verified)
+cargo test --test production_attach   # 1 passed (integration; not in the 454)
 cargo bench            # benches/perf.rs harness; bench profile inherits release
 cargo clippy --all-targets -- -D warnings   # clean (no clippy.toml / CI in the repo)
 cargo fmt
 ```
 
 Do not "fix" the suite by deleting tests or by claiming a count from
-README/docs without running it. Test counts in README (370) are correct for
+README/docs without running it. Test counts in README (454) are correct for
 `--lib`; the integration target is counted separately.
 
 Release profile sets `panic = "abort"`, so the panic hook in `src/main.rs:141`
@@ -66,7 +64,9 @@ broken.
   bounded by `max_steps`/`max_tool_calls`, both `usize::MAX` by default and
   overridable by `NANOMITE_MAX_STEPS`/`NANOMITE_MAX_TOOL_CALLS`), `openai.rs`
   (any `/v1`), `swarm.rs` (parallel chat across several providers — used by the
-  board), `testdouble.rs` (`#[cfg(test)]` only). `trivial.rs` is **deleted**; do
+  board), `suggest.rs` (opencode-style follow-up suggestions: prompt shape +
+  reply parsing for the side-call the app fires on a finished turn; pure logic,
+  no channel), `testdouble.rs` (`#[cfg(test)]` only). `trivial.rs` is **deleted**; do
   not restore it.
 - `src/tools/` — `catalog.rs` (the single 18-tool inventory as
   `ToolSpec{name, description, category}`; drives schemas, the `/tools`
@@ -85,8 +85,9 @@ broken.
   `audit.rs` (append-only JSONL decision log). UI: `/improve` list + review
   view; `a` approves, `r` rejects.
 - `src/ui/` — `theme.rs` (4 palettes, persisted, and the shared
-  `theme::glyph` constants), `chat.rs`, `composer.rs`, `panels.rs`,
-  `diff.rs` (`DiffView`, used by edit previews and the `/improve` review),
+  `theme::glyph` constants), `chat.rs`, `composer.rs`, `panels.rs`
+  (incl. `panels::suggestions`, the follow-up suggestion strip above the
+  composer), `diff.rs` (`DiffView`, used by edit previews and the `/improve` review),
   `text.rs`, `tests.rs` (golden frame tests incl. 30×12).
 - `src/config.rs` — 21 presets; `~/.config/nanomite/config.toml` (atomic,
   `0600`); precedence defaults < file < `NANOMITE_*` env. Persisted keys:
@@ -103,7 +104,7 @@ broken.
   `read_document` is the agent-facing door to it.
 - `tests/production_attach.rs` — integration target proving the real production
   attach path (memory + config) works from the outside. 1 test, separate from
-  the 370.
+  the 454.
 
 ## Invariants (do not break)
 

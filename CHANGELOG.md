@@ -6,6 +6,27 @@ never listed as released.
 
 ## [0.6.0] — 2026-10-27
 
+### Added
+
+- **Follow-up suggestions (opencode-style)**: when a turn finishes
+  successfully, a tiny no-tools side-call asks the model for three short
+  next-step prompts (last exchange only, clipped to 2k chars per side, so
+  the extra request stays cheap). The replies mount as a quiet strip above
+  the composer - `next steps · tab cycle · enter send · esc dismiss` header,
+  one row per suggestion with the highlighted one in the accent colour.
+  Plain `Tab` cycles the highlight (wrapping), `Enter` submits the
+  highlighted prompt through the normal submit path (slash parsing, busy
+  queue and hooks all behave as for hand-typed text), `Esc` dismisses, and
+  typing anything dismisses the strip and types normally. Shift+Tab keeps
+  cycling tool modes; plain Tab still accepts ghost text once the strip is
+  gone. Straggler replies from older turns are dropped via a generation
+  counter, and a reply landing mid-turn never mounts. No strip on
+  interrupted or failed turns. Persistence: `suggestions = false` in
+  `config.toml`, or `NANOMITE_SUGGESTIONS=0` (also accepts true/false/yes/no).
+  Status: implemented and tested (454 lib tests, +6: reply parsing,
+  mount-after-turn, stale/busy drop, key handling, strip rendering at
+  80×24 and hidden-when-absent).
+
 ### Fixed
 
 - **The prompt queue never drained**: prompts typed while the agent was busy

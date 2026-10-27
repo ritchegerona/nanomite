@@ -119,10 +119,23 @@ async fn main() -> io::Result<()> {
         }
     });
 
+    // Adaptive streaming throttle: while a turn streams, deltas arrive
+    // faster than any terminal can paint, so redraws coalesce to ~30 fps and
+    // the loop spends its time ingesting tokens rather than diffing frames.
+    // Idle turns (and the final state) always draw at once.
+    const STREAM_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+    let mut last_draw = std::time::Instant::now() - STREAM_FRAME;
+
     let result = loop {
         if app.needs_redraw() {
-            terminal.draw(|frame| ui::render(frame, &mut app))?;
-            app.clear_dirty();
+            let now = std::time::Instant::now();
+            if !app.is_busy() || now.duration_since(last_draw) >= STREAM_FRAME {
+                let frame_start = std::time::Instant::now();
+                terminal.draw(|frame| ui::render(frame, &mut app))?;
+                app.record_frame(frame_start.elapsed().as_micros() as u64);
+                app.clear_dirty();
+                last_draw = now;
+            }
         }
 
         tokio::select! {
@@ -179,12 +192,42 @@ fn run_control(
         app.on_sudo_result(text.clone());
         return Ok(());
     }
+    if let Control::RevertDone {
+        turn,
+        restored,
+        failed,
+    } = &control
+    {
+        app.on_revert_done(*turn, *restored, *failed);
+        return Ok(());
+    }
+    if let Control::DoctorReport(lines) = &control {
+        app.on_doctor_report(lines.clone());
+        return Ok(());
+    }
+    if let Control::HistoryResults { query, hits } = &control {
+        app.on_history_results(query.clone(), hits.clone());
+        return Ok(());
+    }
+    if let Control::ResumeHint(hint) = &control {
+        app.on_resume_hint(hint.clone());
+        return Ok(());
+    }
+    if let Control::ForkSaved { path } = &control {
+        app.on_fork_saved(path.clone());
+        return Ok(());
+    }
 
     let (target, seed) = match &control {
         // Handled above; kept explicit so a new control variant cannot fall
         // through to the editor path by accident.
         Control::Copy(_) => return Ok(()),
         Control::SudoResult(_) => return Ok(()),
+        Control::RevertDone { .. } => return Ok(()),
+        Control::DoctorReport(_) => return Ok(()),
+        Control::HistoryResults { .. } => return Ok(()),
+        Control::ResumeHint(_) => return Ok(()),
+        Control::ForkSaved { .. } => return Ok(()),
         Control::EditComposer(text) => {
             let path =
                 std::env::temp_dir().join(format!("nanomite-prompt-{}.md", std::process::id()));
@@ -208,6 +251,11 @@ fn run_control(
     match control {
         Control::Copy(_) => {}
         Control::SudoResult(_) => {}
+        Control::RevertDone { .. } => {}
+        Control::DoctorReport(_) => {}
+        Control::HistoryResults { .. } => {}
+        Control::ResumeHint(_) => {}
+        Control::ForkSaved { .. } => {}
         Control::EditComposer(_) => {
             let text = std::fs::read_to_string(&target).unwrap_or_default();
             let _ = std::fs::remove_file(&target);

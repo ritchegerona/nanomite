@@ -5,6 +5,7 @@ pub mod openai;
 pub mod policy;
 pub mod provider;
 pub mod runtime;
+pub mod suggest;
 pub mod swarm;
 #[cfg(test)]
 pub mod testdouble;

@@ -23,6 +23,7 @@ pub struct Rects {
     pub header: Rect,
     pub chat: Rect,
     pub queue: Option<Rect>,
+    pub suggestions: Option<Rect>,
     pub footer: Rect,
     pub composer: Rect,
 }
@@ -33,12 +34,17 @@ pub struct View {
     pub scroll_from_bottom: u16,
     pub follow: bool,
     pub content_height: u16,
+    /// Content rows that arrived while the user was scrolled away from the
+    /// tail; drives the floating "new lines" pill.
+    pub new_since_scroll: u16,
+    /// Content height at the moment the user scrolled away.
+    pub(crate) new_baseline: u16,
 
     pub(crate) offsets: Vec<u16>,
     offsets_dirty: bool,
     offset_width: u16,
     offset_view: u16,
-    pub layout: Option<(Rect, u16, u16, Rects)>,
+    pub layout: Option<(Rect, u16, u16, u16, Rects)>,
     footer: Option<(String, Line<'static>)>,
 }
 
@@ -50,6 +56,8 @@ impl View {
             scroll_from_bottom: 0,
             follow: false,
             content_height: 0,
+            new_since_scroll: 0,
+            new_baseline: 0,
             offsets: Vec::new(),
             offsets_dirty: true,
             offset_width: 0,
@@ -64,12 +72,12 @@ impl View {
     }
 
     pub fn cached_chat_height(&self) -> Option<u16> {
-        self.layout.map(|(_, _, _, r)| r.chat.height)
+        self.layout.map(|(_, _, _, _, r)| r.chat.height)
     }
 
     /// Get the cached chat area rect for mouse hit testing
     pub fn cached_chat_rect(&self) -> Option<Rect> {
-        self.layout.map(|(_, _, _, r)| r.chat)
+        self.layout.map(|(_, _, _, _, r)| r.chat)
     }
 
     /// Get the viewport row count (chat area height)
@@ -84,18 +92,25 @@ impl View {
 
     /// Scroll helpers. All offsets are measured from the bottom so new content stays pinned.
     pub fn scroll_by(&mut self, delta: i32) {
+        let was = self.follow;
         let next = self.scroll_from_bottom as i32 + delta;
         self.scroll_from_bottom = next.clamp(0, self.max_scroll() as i32) as u16;
         self.follow = self.scroll_from_bottom == 0;
+        self.track_tail_state(was);
     }
 
     pub fn scroll_to_bottom(&mut self) {
+        let was = self.follow;
         self.scroll_from_bottom = 0;
         self.follow = true;
+        self.track_tail_state(was);
     }
 
     pub fn scroll_to_top(&mut self) {
-        self.scroll_from_bottom = self.max_scroll();
+        // Saturate instead of measuring `max_scroll()` here: the cached
+        // viewport height can be stale (right after a resize, say), and the
+        // next `rebuild_offsets` clamps the sentinel to the true maximum.
+        self.scroll_from_bottom = u16::MAX;
         self.follow = false;
     }
 
@@ -107,6 +122,19 @@ impl View {
             let max_scroll = self.max_scroll();
             self.scroll_from_bottom = max_scroll.saturating_sub(entry_top);
             self.follow = self.scroll_from_bottom == 0;
+        }
+    }
+
+    /// Records the baseline when the user scrolls away from the tail and
+    /// clears the counter when they return — the input for the floating
+    /// "N new lines" pill.
+    fn track_tail_state(&mut self, was_following: bool) {
+        if self.follow {
+            self.new_since_scroll = 0;
+            self.new_baseline = self.content_height;
+        } else if was_following {
+            self.new_baseline = self.content_height;
+            self.new_since_scroll = 0;
         }
     }
 
@@ -148,6 +176,13 @@ impl View {
         if self.scroll_from_bottom > max {
             self.scroll_from_bottom = max;
         }
+        // New rows streamed in while scrolled away show up in the pill.
+        if self.follow {
+            self.new_since_scroll = 0;
+            self.new_baseline = acc;
+        } else {
+            self.new_since_scroll = acc.saturating_sub(self.new_baseline);
+        }
     }
 }
 
@@ -179,12 +214,23 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else {
         0
     };
-    let rects = app.view.layout(area, composer_rows, queue_rows);
+    // The follow-up strip mounts only while suggestions are on screen:
+    // one header row plus one row per suggestion.
+    let suggest_rows = match &app.suggestions {
+        Some(strip) => strip.items.len() as u16 + 1,
+        None => 0,
+    };
+    let rects = app
+        .view
+        .layout(area, composer_rows, queue_rows, suggest_rows);
 
     panels::header(frame, rects.header, app);
     chat::render(frame, rects.chat, app);
     if let Some(queue_rect) = rects.queue {
         render_prompt_queue(frame, queue_rect, app);
+    }
+    if let Some(suggest_rect) = rects.suggestions {
+        panels::suggestions(frame, suggest_rect, app);
     }
     panels::footer(frame, rects.footer, app);
 
@@ -249,11 +295,22 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 impl View {
-    fn layout(&mut self, area: Rect, composer_rows: u16, queue_rows: u16) -> Rects {
+    fn layout(
+        &mut self,
+        area: Rect,
+        composer_rows: u16,
+        queue_rows: u16,
+        suggest_rows: u16,
+    ) -> Rects {
         let has_queued = queue_rows > 0;
+        let has_suggestions = suggest_rows > 0;
 
-        if let Some((cached_area, cached_rows, cached_queue, rects)) = self.layout {
-            if cached_area == area && cached_rows == composer_rows && cached_queue == queue_rows {
+        if let Some((cached_area, cached_rows, cached_queue, cached_suggest, rects)) = self.layout {
+            if cached_area == area
+                && cached_rows == composer_rows
+                && cached_queue == queue_rows
+                && cached_suggest == suggest_rows
+            {
                 return rects;
             }
         }
@@ -261,6 +318,7 @@ impl View {
             ratatui::layout::Constraint::Length(1),
             ratatui::layout::Constraint::Min(3),
             ratatui::layout::Constraint::Length(queue_rows),
+            ratatui::layout::Constraint::Length(suggest_rows),
             ratatui::layout::Constraint::Length(1),
             ratatui::layout::Constraint::Length(composer_rows),
         ])
@@ -271,10 +329,15 @@ impl View {
             header: areas[0],
             chat: areas[1],
             queue: if has_queued { Some(areas[2]) } else { None },
-            footer: areas[3],
-            composer: areas[4],
+            suggestions: if has_suggestions {
+                Some(areas[3])
+            } else {
+                None
+            },
+            footer: areas[4],
+            composer: areas[5],
         };
-        self.layout = Some((area, composer_rows, queue_rows, rects));
+        self.layout = Some((area, composer_rows, queue_rows, suggest_rows, rects));
         rects
     }
 }

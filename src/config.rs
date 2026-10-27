@@ -505,6 +505,10 @@ pub struct Config {
     pub step_timeout_ms: u64,
     /// Disable animations (spinners, fades) for reduced-motion preference.
     pub reduced_motion: bool,
+    /// opencode-style follow-up suggestions: after each finished turn a tiny
+    /// side-call asks the model for 3 short next-step prompts, shown as a
+    /// strip above the composer. Persisted; `NANOMITE_SUGGESTIONS` overrides.
+    pub followup_suggestions: bool,
     pub workspace: PathBuf,
     /// Shown once in the transcript when something needs the user's attention.
     pub notice: Option<String>,
@@ -531,6 +535,7 @@ struct Stored {
     tool_policy: Option<String>,
     prompt_file: Option<String>,
     reduced_motion: Option<bool>,
+    suggestions: Option<bool>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
@@ -559,6 +564,7 @@ fn parse_stored(text: &str) -> Stored {
             "tool_policy" => stored.tool_policy = Some(value),
             "prompt_file" => stored.prompt_file = Some(value),
             "reduced_motion" => stored.reduced_motion = value.parse().ok(),
+            "suggestions" => stored.suggestions = value.parse().ok(),
             _ => {}
         }
     }
@@ -646,6 +652,7 @@ fn stored_text(cfg: &Config) -> String {
         ));
     }
     lines.push(format!("reduced_motion = {}", cfg.reduced_motion));
+    lines.push(format!("suggestions = {}", cfg.followup_suggestions));
     lines.push(String::new());
     lines.join("\n")
 }
@@ -897,6 +904,18 @@ impl Config {
                     .unwrap_or(false)
             } else {
                 stored.reduced_motion.unwrap_or(false)
+            },
+            followup_suggestions: if use_env {
+                // `0`/`false` opt out; absent means on. (bool::from_str rejects
+                // "0", so the match table keeps `NANOMITE_SUGGESTIONS=0` working.)
+                match first_env_one("NANOMITE_SUGGESTIONS") {
+                    Some(v) => {
+                        matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+                    }
+                    None => true,
+                }
+            } else {
+                stored.suggestions.unwrap_or(true)
             },
         }
     }

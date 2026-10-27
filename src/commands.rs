@@ -1,7 +1,9 @@
 //! The slash-command registry.
 //!
-//! Mirrors opencode's built-in command set so muscle memory carries over: every command
-//! opencode ships has an entry here, and `hint` is what the inline `/` list shows.
+//! Mirrors opencode's built-in command set so muscle memory carries over.
+//! Entries are grouped by purpose — connect & model, agent scope, session,
+//! transcript, agent features, appearance, output — and the palette shows
+//! them in that order; `hint` is the one-line description the `/` list shows.
 
 /// A command that can be typed in the composer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +37,13 @@ pub enum Command {
     Next,
     Policy,
     Worktrees,
+    Hud,
+    Revert,
+    Fork,
+    History,
+    Doctor,
+    Ab,
+    Focus,
 }
 
 pub struct Entry {
@@ -46,8 +55,9 @@ pub struct Entry {
     pub kind: Command,
 }
 
-/// Ordered like opencode's documentation.
+/// Grouped by purpose, in the order the palette lists them.
 pub const COMMANDS: &[Entry] = &[
+    // -- connect & model ---------------------------------------------------
     Entry {
         command: "/connect",
         aliases: &["/login", "/auth"],
@@ -57,134 +67,27 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/provider",
         aliases: &["/providers"],
-        hint: "switch provider - pick from the list",
+        hint: "switch the provider - pick from the list",
         kind: Command::ProviderMenu,
-    },
-    Entry {
-        command: "/compact",
-        aliases: &["/summarize"],
-        hint: "summarise the session to free up context",
-        kind: Command::Compact,
-    },
-    Entry {
-        command: "/details",
-        aliases: &[],
-        hint: "toggle tool output details",
-        kind: Command::Details,
-    },
-    Entry {
-        command: "/editor",
-        aliases: &[],
-        hint: "compose the prompt in $EDITOR",
-        kind: Command::Editor,
-    },
-    Entry {
-        command: "/exit",
-        aliases: &["/quit", "/q"],
-        hint: "quit nanomite",
-        kind: Command::Exit,
-    },
-    Entry {
-        command: "/export",
-        aliases: &[],
-        hint: "write the session to markdown",
-        kind: Command::Export,
-    },
-    Entry {
-        command: "/help",
-        aliases: &[],
-        hint: "keyboard shortcuts and commands",
-        kind: Command::Help,
-    },
-    Entry {
-        command: "/init",
-        aliases: &[],
-        hint: "create or update AGENTS.md",
-        kind: Command::Init,
     },
     Entry {
         command: "/models",
         aliases: &["/model"],
-        hint: "switch model - filter or type an id",
+        hint: "switch the model - filter or type an id",
         kind: Command::Models,
-    },
-    Entry {
-        command: "/new",
-        aliases: &["/clear"],
-        hint: "start a new session",
-        kind: Command::New,
     },
     Entry {
         command: "/reasoning",
         aliases: &["/effort"],
-        hint: "cycle minimal · low · medium · high",
+        hint: "cycle reasoning effort: minimal · low · medium · high",
         kind: Command::Reasoning,
     },
+    // -- agent scope ---------------------------------------------------------
     Entry {
-        command: "/redo",
-        aliases: &[],
-        hint: "restore the last undone exchange",
-        kind: Command::Redo,
-    },
-    Entry {
-        command: "/sessions",
-        aliases: &["/resume", "/continue"],
-        hint: "list and switch sessions",
-        kind: Command::Sessions,
-    },
-    Entry {
-        command: "/share",
-        aliases: &[],
-        hint: "export a shareable copy of the session",
-        kind: Command::Share,
-    },
-    Entry {
-        command: "/memory",
-        aliases: &["/mem"],
-        hint: "browse stored memories",
-        kind: Command::Memory,
-    },
-    Entry {
-        command: "/themes",
-        aliases: &["/theme"],
-        hint: "switch colour theme",
-        kind: Command::Themes,
-    },
-    Entry {
-        command: "/thinking",
-        aliases: &[],
-        hint: "show or hide the thinking indicator",
-        kind: Command::Thinking,
-    },
-    Entry {
-        command: "/undo",
-        aliases: &[],
-        hint: "drop the last exchange",
-        kind: Command::Undo,
-    },
-    Entry {
-        command: "/unshare",
-        aliases: &[],
-        hint: "remove any shared copy",
-        kind: Command::Unshare,
-    },
-    Entry {
-        command: "/prev",
-        aliases: &[],
-        hint: "browse to previous conversation turn",
-        kind: Command::Prev,
-    },
-    Entry {
-        command: "/next",
-        aliases: &[],
-        hint: "browse to next conversation turn",
-        kind: Command::Next,
-    },
-    Entry {
-        command: "/copy",
-        aliases: &[],
-        hint: "copy selection to clipboard",
-        kind: Command::Copy,
+        command: "/policy",
+        aliases: &["/mode"],
+        hint: "cycle tool mode: plan · coder · build · hacker",
+        kind: Command::Policy,
     },
     Entry {
         command: "/tools",
@@ -193,10 +96,103 @@ pub const COMMANDS: &[Entry] = &[
         kind: Command::Tools,
     },
     Entry {
+        command: "/worktrees",
+        aliases: &["/wt"],
+        hint: "list git worktrees for parallel agents",
+        kind: Command::Worktrees,
+    },
+    // -- session -------------------------------------------------------------
+    Entry {
+        command: "/new",
+        aliases: &["/clear"],
+        hint: "start a new session",
+        kind: Command::New,
+    },
+    Entry {
+        command: "/sessions",
+        aliases: &["/resume", "/continue"],
+        hint: "list and switch sessions",
+        kind: Command::Sessions,
+    },
+    Entry {
+        command: "/history",
+        aliases: &[],
+        hint: "search all saved sessions - /history <query>",
+        kind: Command::History,
+    },
+    Entry {
+        command: "/fork",
+        aliases: &[],
+        hint: "branch the session at turn N - /fork <n>",
+        kind: Command::Fork,
+    },
+    Entry {
+        command: "/compact",
+        aliases: &["/summarize"],
+        hint: "summarise the session to free up context",
+        kind: Command::Compact,
+    },
+    Entry {
+        command: "/undo",
+        aliases: &[],
+        hint: "drop the last exchange",
+        kind: Command::Undo,
+    },
+    Entry {
+        command: "/redo",
+        aliases: &[],
+        hint: "restore the last undone exchange",
+        kind: Command::Redo,
+    },
+    Entry {
+        command: "/revert",
+        aliases: &[],
+        hint: "time machine - restore files to their state before a turn",
+        kind: Command::Revert,
+    },
+    // -- transcript ----------------------------------------------------------
+    Entry {
+        command: "/prev",
+        aliases: &[],
+        hint: "browse to the previous turn",
+        kind: Command::Prev,
+    },
+    Entry {
+        command: "/next",
+        aliases: &[],
+        hint: "browse to the next turn",
+        kind: Command::Next,
+    },
+    Entry {
+        command: "/copy",
+        aliases: &[],
+        hint: "copy the last assistant message",
+        kind: Command::Copy,
+    },
+    Entry {
+        command: "/editor",
+        aliases: &[],
+        hint: "compose the prompt in $EDITOR",
+        kind: Command::Editor,
+    },
+    // -- agent features --------------------------------------------------------
+    Entry {
+        command: "/memory",
+        aliases: &["/mem"],
+        hint: "browse stored memories",
+        kind: Command::Memory,
+    },
+    Entry {
         command: "/panel",
         aliases: &[],
         hint: "convene the agent board - /panel <topic>",
         kind: Command::Panel,
+    },
+    Entry {
+        command: "/ab",
+        aliases: &[],
+        hint: "compare minimal vs high reasoning side by side - /ab <prompt>",
+        kind: Command::Ab,
     },
     Entry {
         command: "/improve",
@@ -207,20 +203,82 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/improve-from-board",
         aliases: &[],
-        hint: "stage the board's chair synthesis as an improve proposal",
+        hint: "stage the board's synthesis as a proposal",
         kind: Command::ImproveFromBoard,
     },
+    // -- appearance ------------------------------------------------------------
     Entry {
-        command: "/policy",
-        aliases: &["/mode"],
-        hint: "cycle tool mode: plan · coder · build · hacker",
-        kind: Command::Policy,
+        command: "/details",
+        aliases: &[],
+        hint: "toggle tool output details (ctrl+o)",
+        kind: Command::Details,
     },
     Entry {
-        command: "/worktrees",
-        aliases: &["/wt"],
-        hint: "list git worktrees for parallel agents",
-        kind: Command::Worktrees,
+        command: "/thinking",
+        aliases: &[],
+        hint: "show or hide the thinking indicator",
+        kind: Command::Thinking,
+    },
+    Entry {
+        command: "/focus",
+        aliases: &[],
+        hint: "show only the latest exchange (f2)",
+        kind: Command::Focus,
+    },
+    Entry {
+        command: "/themes",
+        aliases: &["/theme"],
+        hint: "switch colour theme",
+        kind: Command::Themes,
+    },
+    Entry {
+        command: "/hud",
+        aliases: &[],
+        hint: "toggle the performance hud (frame time, transcript stats)",
+        kind: Command::Hud,
+    },
+    // -- output & general --------------------------------------------------------
+    Entry {
+        command: "/export",
+        aliases: &[],
+        hint: "write the session to markdown",
+        kind: Command::Export,
+    },
+    Entry {
+        command: "/share",
+        aliases: &[],
+        hint: "export a shareable copy",
+        kind: Command::Share,
+    },
+    Entry {
+        command: "/unshare",
+        aliases: &[],
+        hint: "remove any shared copy",
+        kind: Command::Unshare,
+    },
+    Entry {
+        command: "/init",
+        aliases: &[],
+        hint: "create or update AGENTS.md",
+        kind: Command::Init,
+    },
+    Entry {
+        command: "/doctor",
+        aliases: &[],
+        hint: "run pre-flight diagnostics on the setup",
+        kind: Command::Doctor,
+    },
+    Entry {
+        command: "/help",
+        aliases: &[],
+        hint: "keyboard shortcuts and commands",
+        kind: Command::Help,
+    },
+    Entry {
+        command: "/exit",
+        aliases: &["/quit", "/q"],
+        hint: "quit nanomite",
+        kind: Command::Exit,
     },
 ];
 

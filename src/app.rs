@@ -1,6 +1,7 @@
 use crate::agent::openai::OpenAiProvider;
 use crate::agent::provider::{AgentProvider, ChatMessage, Usage};
 use crate::agent::runtime::{AgentEvent, AgentRuntime, Cancel};
+use crate::agent::suggest::{self, SuggestResult};
 use crate::agent::swarm::Swarm;
 #[cfg(test)]
 use crate::agent::testdouble::ScriptedProvider;
@@ -27,6 +28,8 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 const MAX_HISTORY_MESSAGES: usize = 40;
+/// Follow-up suggestions one finished turn shows above the composer.
+const SUGGESTION_COUNT: usize = 3;
 const TOAST_TTL: Duration = Duration::from_secs(2);
 /// Discussion rounds a `/panel` convene runs (engine caps at `MAX_ROUNDS`).
 const BOARD_ROUNDS: usize = 2;
@@ -73,6 +76,10 @@ pub struct ToolRow {
     /// Bounded code/command preview built from the call arguments (shown live
     /// under the row while the tool runs; collapsed by `/details` off).
     pub preview: Option<String>,
+    /// When this tool call started; the source for its per-pill duration.
+    pub started: Instant,
+    /// Set once the tool finishes; pills show this, not the turn total.
+    pub elapsed: Option<Duration>,
 }
 
 /// Cached, width-dependent rendering of one transcript entry.
@@ -82,6 +89,14 @@ pub struct Rendered {
     pub width: u16,
     /// `/details` state this cache was built for.
     pub details: bool,
+    /// Tool-mode colour the cache was built for: the user-message bar and the
+    /// assistant footer follow the active mode, like opencode's per-agent
+    /// colouring.
+    pub mode_color: ratatui::style::Color,
+    pub mode_label: String,
+    /// Fenced code blocks as `(first body row, last border row, raw source)`,
+    /// rows indexing `lines` — the click-to-copy target list.
+    pub code_blocks: Vec<(u16, u16, String)>,
     pub lines: Vec<Line<'static>>,
     pub height: u16,
 }
@@ -94,11 +109,21 @@ pub struct Entry {
     pub tools: Vec<ToolRow>,
     pub error: Option<String>,
     pub started: Instant,
+    /// Wall-clock creation time; the YOU/AI badges render this as HH:MM.
+    /// `started` is a monotonic `Instant` and must never be formatted as a
+    /// clock time.
+    pub at: SystemTime,
     pub elapsed: Option<Duration>,
     pub usage: Option<Usage>,
     /// Agent steps taken this turn (one per tool round-trip). Shown live in
     /// the status strip so long runs are visibly making progress.
     pub steps: usize,
+    /// Model that produced this entry; the message footer shows it
+    /// (`Build · model · 8.4s · 45.2 tok/s`), like opencode's footer.
+    pub model: Option<String>,
+    /// Full error text starts collapsed to a couple of lines; a plain click
+    /// on the entry expands it (opencode's error expansion).
+    pub error_expanded: bool,
     pub(crate) rev: u64,
     pub(crate) cache: Option<Rendered>,
 }
@@ -112,9 +137,12 @@ impl Entry {
             tools: Vec::new(),
             error: None,
             started: Instant::now(),
+            at: SystemTime::now(),
             elapsed: None,
             usage: None,
             steps: 0,
+            model: None,
+            error_expanded: false,
             rev: 1,
             cache: None,
         }
@@ -146,6 +174,7 @@ pub enum PickerMode {
     Commands,
     Model,
     Sessions,
+    SessionsSearch,
     Themes,
     Memory,
     History,
@@ -279,6 +308,7 @@ impl Picker {
             PickerMode::Commands => "commands",
             PickerMode::Model => "model",
             PickerMode::Sessions => "sessions",
+            PickerMode::SessionsSearch => "history search",
             PickerMode::Themes => "themes",
             PickerMode::Memory => "memory entries",
             PickerMode::History => "history",
@@ -290,6 +320,7 @@ impl Picker {
             PickerMode::Commands => "type to filter",
             PickerMode::Model => "filter, or type a custom model id",
             PickerMode::Sessions => "pick a session to resume",
+            PickerMode::SessionsSearch => "matches across saved sessions",
             PickerMode::Themes => "pick a colour theme",
             PickerMode::Memory => "filter stored memories",
             PickerMode::History => "search prompt history",
@@ -581,6 +612,15 @@ struct UndoStep {
     delta: usize,
 }
 
+/// One turn's pre-change file contents for `/revert` (the time machine).
+#[derive(Debug)]
+pub(crate) struct TurnSnapshot {
+    /// Monotonic turn serial, incremented per prompt.
+    turn: usize,
+    /// Workspace-relative path -> pre-change bytes (`None` = file was new).
+    files: Vec<(String, Option<Vec<u8>>)>,
+}
+
 /// `/tools` overlay: the tool library. Rows are derived from the catalog at
 /// render time; the highlighted index is the only state.
 #[derive(Debug, Clone, Copy, Default)]
@@ -627,6 +667,20 @@ pub struct HelpState {
     pub offset: usize,
 }
 
+/// Transcript search (`ctrl+f`): a footer-hosted query over the rendered
+/// entries. `matches` holds entry indices in transcript order; `current`
+/// points at the one jumped to and scrolls via `View::scroll_to_entry_index`.
+/// The list is refreshed when the query changes — text streamed in while the
+/// bar is open is picked up on the next edit or jump.
+#[derive(Debug, Clone, Default)]
+pub struct SearchState {
+    pub query: String,
+    /// Entries whose text or tool details contain the query, in order.
+    pub matches: Vec<usize>,
+    /// Index into `matches` of the match currently jumped to.
+    pub current: usize,
+}
+
 /// Work the main loop must do on the UI thread (it owns the terminal).
 #[derive(Debug, Clone)]
 pub enum Control {
@@ -638,6 +692,23 @@ pub enum Control {
     Copy(String),
     /// A sudo-elevated command finished; append its output to the transcript.
     SudoResult(String),
+    /// `/revert` finished restoring files on the blocking pool.
+    RevertDone {
+        turn: usize,
+        restored: usize,
+        failed: usize,
+    },
+    /// `/doctor` finished its pre-flight checks; one line per check.
+    DoctorReport(Vec<String>),
+    /// `/history` finished scanning saved sessions.
+    HistoryResults {
+        query: String,
+        hits: Vec<crate::session::HistoryHit>,
+    },
+    /// The welcome screen's resume hint, queried off the UI thread.
+    ResumeHint(String),
+    /// `/fork` finished writing the original session to disk.
+    ForkSaved { path: Option<std::path::PathBuf> },
 }
 
 enum ModelsResult {
@@ -677,6 +748,18 @@ enum ImproveEvent {
     Err(String),
     /// One proposal's diff, loaded when the user opened the review view.
     Review(ImproveReview),
+}
+
+/// opencode-style follow-up suggestions: after a turn finishes, a tiny
+/// side-call asks the model for a few short prompts the user would most
+/// plausibly send next. The strip above the composer shows them; `Tab`
+/// cycles, `Enter` sends, `Esc` dismisses, typing anything dismisses.
+#[derive(Debug, Clone)]
+pub struct SuggestionStrip {
+    /// Cleaned-up prompts (see `agent::suggest::parse_reply`).
+    pub items: Vec<String>,
+    /// Highlighted row; `Tab` moves it, `Enter` submits it.
+    pub selected: usize,
 }
 
 pub struct App {
@@ -740,11 +823,11 @@ pub struct App {
     /// Shared with the in-flight convene task so `esc` can stop the engine.
     pub(crate) board_cancel: Option<Arc<CancelFlag>>,
     handle: tokio::runtime::Handle,
-    history: Vec<ChatMessage>,
+    pub(crate) history: Vec<ChatMessage>,
     /// Per user turn, how many `ChatMessage`s that turn appended (a user
     /// message plus its assistant/tool-bearing reply). `/undo` and `/redo`
     /// cut on these exact counts instead of guessing from user-message counts.
-    turn_history: Vec<usize>,
+    pub(crate) turn_history: Vec<usize>,
     /// Index of the in-flight transcript entry while a turn runs.
     pub(crate) active: Option<usize>,
     /// Index of the current turn for browsing (0 = latest, increments toward older).
@@ -755,6 +838,38 @@ pub struct App {
     pub composer_layout_width: usize,
     /// Text selection state for chat area
     pub selection: Option<Selection>,
+    /// A scrollbar drag is in progress (press started on the scrollbar track);
+    /// drags then jump instead of extending a text selection.
+    scrollbar_drag: bool,
+    /// Performance hud (`/hud`): draws the last frame time, peak and
+    /// transcript stats into the footer.
+    pub hud: bool,
+    /// Time machine: pre-change file contents per turn, newest last.
+    pub(crate) snapshots: Vec<TurnSnapshot>,
+    /// Monotonic turn serial, incremented per prompt.
+    turn_serial: usize,
+    /// Focus mode (f2, `/focus`): render only the latest exchange.
+    pub focus: bool,
+    /// First entry index of the focus window; set during render so
+    /// global->slice index conversions stay in sync.
+    pub focus_base: usize,
+    /// The welcome card's resume hint, queried from memory off-thread.
+    pub resume_hint: Option<String>,
+    /// The resume query fires at most once per session.
+    resume_checked: bool,
+    /// Frame timing recorded by the main loop: (last us, peak us, draws).
+    pub frame_us: u64,
+    pub frame_peak_us: u64,
+    pub frame_draws: u64,
+    /// Transcript search state (`ctrl+f`); `None` while the bar is closed.
+    pub search: Option<SearchState>,
+    /// Follow-up suggestions currently on screen, if any.
+    pub suggestions: Option<SuggestionStrip>,
+    /// Generation of the last fired suggestion side-call; a straggler reply
+    /// from an older turn carries a stale gen and is dropped.
+    suggest_gen: u64,
+    suggest_rx: UnboundedReceiver<SuggestResult>,
+    suggest_tx: UnboundedSender<SuggestResult>,
 }
 
 impl App {
@@ -778,6 +893,7 @@ impl App {
         let (board_tx, board_rx) = unbounded_channel();
         let (memory_tx, memory_rx) = unbounded_channel();
         let (improve_tx, improve_rx) = unbounded_channel();
+        let (suggest_tx, suggest_rx) = unbounded_channel();
 
         // Persistent memory is opened before the runtime so the six memory tools
         // are live schemas and turn retrieval/capture run from the first prompt.
@@ -851,6 +967,22 @@ impl App {
             // Pre-first-frame fallback; `ui::render` syncs it to the painted width.
             composer_layout_width: 80,
             selection: None,
+            scrollbar_drag: false,
+            hud: false,
+            snapshots: Vec::new(),
+            turn_serial: 0,
+            focus: false,
+            focus_base: 0,
+            resume_hint: None,
+            resume_checked: false,
+            frame_us: 0,
+            frame_peak_us: 0,
+            frame_draws: 0,
+            search: None,
+            suggestions: None,
+            suggest_gen: 0,
+            suggest_rx,
+            suggest_tx,
             cfg,
         };
 
@@ -1072,7 +1204,9 @@ impl App {
     }
 
     pub fn composer_focused(&self) -> bool {
-        self.overlay.is_none()
+        // The footer search bar owns the keyboard while it is open, so the
+        // composer (and the terminal caret inside it) reads as unfocused.
+        self.overlay.is_none() && self.search.is_none()
     }
 
     pub fn should_quit(&self) -> bool {
@@ -1137,6 +1271,10 @@ impl App {
             if gen == self.improve_gen {
                 self.apply_improve_event(event);
             }
+        }
+        while let Ok(result) = self.suggest_rx.try_recv() {
+            changed = true;
+            self.apply_suggest_result(result);
         }
         if changed {
             self.mark_dirty();
@@ -1239,9 +1377,14 @@ impl App {
                         edit_path: edit_path.map(|s| s.to_string()),
                         edit_replacements: None,
                         preview,
+                        started: Instant::now(),
+                        elapsed: None,
                     });
                     entry.touch();
                 }
+            }
+            AgentEvent::Snapshot { path, previous } => {
+                self.record_snapshot(path, previous);
             }
             AgentEvent::ToolEnd { name, detail, ok } => {
                 // Capture the sudo-failure check before `name`/`detail` move into ToolRow.
@@ -1263,6 +1406,7 @@ impl App {
                     {
                         row.running = false;
                         row.ok = ok;
+                        row.elapsed = Some(row.started.elapsed());
                         // For edit_file, parse replacements count from detail "X replacements made"
                         if name == "edit_file" {
                             if let Some(count) = detail
@@ -1285,6 +1429,8 @@ impl App {
                             edit_path: None,
                             edit_replacements: None,
                             preview: None,
+                            started: Instant::now(),
+                            elapsed: None,
                         });
                     }
                     entry.touch();
@@ -1315,6 +1461,8 @@ impl App {
                 self.finish_turn();
                 // Update ghost text for inline completion from the completed assistant message
                 self.update_ghost_text();
+                // opencode-style: a finished turn pops the follow-up suggestions.
+                self.request_followups();
             }
             AgentEvent::Interrupted => {
                 if let Some(entry) = self.entries.get_mut(index) {
@@ -1363,6 +1511,102 @@ impl App {
         }
     }
 
+    // -- follow-up suggestions (opencode-style) ------------------------------
+
+    /// Fires the suggestion side-call after a successfully finished turn: a
+    /// tiny no-tools chat asking the model for a few short next-step prompts.
+    /// Fire-and-forget on the runtime handle: failures are silent (no strip),
+    /// never an error toast, and the UI thread never blocks on it.
+    fn request_followups(&mut self) {
+        if !self.cfg.followup_suggestions || self.is_busy() {
+            return;
+        }
+        // Needs a completed exchange to suggest from.
+        let user_text = self
+            .history
+            .iter()
+            .rev()
+            .find(|m| m.role == crate::agent::provider::Role::User)
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        let assistant_text = self
+            .history
+            .iter()
+            .rev()
+            .find(|m| m.role == crate::agent::provider::Role::Assistant)
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        if user_text.trim().is_empty() || assistant_text.trim().is_empty() {
+            return;
+        }
+
+        self.suggest_gen += 1;
+        let gen = self.suggest_gen;
+        let provider = Arc::clone(self.runtime.provider());
+        let tx = self.suggest_tx.clone();
+        let messages = vec![
+            ChatMessage::system(suggest::SYSTEM_PROMPT.to_string()),
+            ChatMessage::user(suggest::build_request(&user_text, &assistant_text)),
+        ];
+        self.handle.spawn(async move {
+            let items = match provider.chat_completion(messages, None).await {
+                Ok((raw, _, _)) => suggest::parse_reply(&raw, SUGGESTION_COUNT),
+                Err(_) => Vec::new(),
+            };
+            let _ = tx.send(SuggestResult { gen, items });
+        });
+    }
+
+    /// Mounts a side-call's reply, dropping stragglers from older turns and
+    /// anything that lands while a new turn already runs.
+    fn apply_suggest_result(&mut self, result: SuggestResult) {
+        if result.gen != self.suggest_gen || self.is_busy() || result.items.is_empty() {
+            return;
+        }
+        self.suggestions = Some(SuggestionStrip {
+            items: result.items,
+            selected: 0,
+        });
+        self.mark_dirty();
+    }
+
+    /// Moves the highlight (wraps at both ends); `delta` is ±1.
+    fn cycle_suggestion(&mut self, delta: i32) {
+        let Some(strip) = &mut self.suggestions else {
+            return;
+        };
+        let len = strip.items.len();
+        if len < 2 {
+            return;
+        }
+        let next = (strip.selected as i32 + delta).rem_euclid(len as i32) as usize;
+        strip.selected = next;
+        self.mark_dirty();
+    }
+
+    /// Submits the highlighted suggestion as if the user had typed it: it
+    /// goes through the normal submit path, so slash-command parsing, the
+    /// busy queue and hooks all behave exactly as for hand-typed prompts.
+    fn accept_suggestion(&mut self) {
+        let Some(strip) = self.suggestions.take() else {
+            return;
+        };
+        let Some(text) = strip.items.get(strip.selected).cloned() else {
+            return;
+        };
+        self.composer.clear_ghost();
+        self.composer.clear();
+        self.composer.insert_str(&text);
+        self.submit();
+    }
+
+    /// Drops the strip (typing anything, `Esc`, a new turn, a new session).
+    pub fn dismiss_suggestions(&mut self) {
+        if self.suggestions.take().is_some() {
+            self.mark_dirty();
+        }
+    }
+
     /// Fires a fire-and-forget hook event on the blocking pool. Never blocks
     /// the UI thread, never errors: hook failures are advisory.
     fn fire_hook(&self, event: crate::hooks::HookEvent) {
@@ -1395,10 +1639,47 @@ impl App {
         self.turn_history.last().copied().unwrap_or(1).max(1)
     }
 
+    /// Resume card: while the transcript is still empty, ask memory (off
+    /// the UI thread) what the last work session was about. Skipped under
+    /// test builds, whose scripted provider and real-memory environment
+    /// would make the welcome frame nondeterministic.
+    #[cfg(not(test))]
+    fn maybe_query_resume(&mut self) {
+        if self.resume_checked || !self.entries.is_empty() || self.memory.is_none() {
+            return;
+        }
+        self.resume_checked = true;
+        let memory = self.memory.clone().expect("checked above");
+        let control = self.control_tx.clone();
+        self.handle.spawn_blocking(move || {
+            let hint = memory.recent(8).ok().and_then(|list| {
+                list.items
+                    .iter()
+                    .map(|hit| memory_row(hit.clone()))
+                    .find(|row| {
+                        matches!(
+                            row.category.as_str(),
+                            "task" | "session" | "episodic" | "decision"
+                        )
+                    })
+                    .map(|row| format!("last time: {} · {}", row.title, row.age_label()))
+            });
+            if let (Some(control), Some(hint)) = (control, hint) {
+                let _ = control.send(Control::ResumeHint(hint));
+            }
+        });
+    }
+
+    #[cfg(test)]
+    fn maybe_query_resume(&mut self) {
+        self.resume_checked = true;
+    }
+
     pub fn on_tick(&mut self) {
         if self.is_busy() {
             self.mark_dirty();
         }
+        self.maybe_query_resume();
         if let Some((_, at)) = &self.toast {
             if at.elapsed() > TOAST_TTL {
                 self.toast = None;
@@ -1463,19 +1744,24 @@ impl App {
     /// Shared by direct submission and by the prompt queue draining after a
     /// finished turn, so queued prompts take exactly the same path.
     fn start_turn(&mut self, prompt: String) {
+        // A new turn invalidates whatever the previous turn suggested.
+        self.dismiss_suggestions();
         self.entries
             .push(Entry::new(EntryRole::User, prompt.clone()));
         self.history.push(ChatMessage::user(prompt.clone()));
         // This turn starts here; every message the engine appends for it is
         // counted onto this turn, so `/undo` cuts at the exact boundary.
         self.turn_history.push(1);
+        self.turn_serial += 1;
         self.trim_history();
         self.fire_hook(crate::hooks::HookEvent::TurnStart {
             input: prompt.clone(),
         });
 
         let index = self.entries.len();
-        self.entries.push(Entry::streaming());
+        let mut entry = Entry::streaming();
+        entry.model = Some(self.model_label());
+        self.entries.push(entry);
         self.active = Some(index);
         self.turn_started = Some(Instant::now());
         self.cancel = Some(Cancel::new());
@@ -1499,11 +1785,14 @@ impl App {
             Command::Connect => self.open_connect(),
             Command::ProviderMenu => self.open_provider_menu(),
             Command::Compact => self.run_compact(),
-            Command::Details => {
-                self.show_tool_details = !self.show_tool_details;
-                self.toast(format!("tool details: {}", on_off(self.show_tool_details)));
-                self.invalidate_transcript();
-            }
+            Command::Details => self.toggle_tool_details(),
+            Command::Hud => self.toggle_hud(),
+            Command::Revert => self.revert_turn(parse_turn_arg(args)),
+            Command::Fork => self.fork_session_at(parse_turn_arg(args).unwrap_or(0)),
+            Command::History => self.search_history(args),
+            Command::Doctor => self.run_doctor(),
+            Command::Ab => self.run_ab_test(args),
+            Command::Focus => self.toggle_focus(),
             Command::Editor => self.edit_composer(),
             Command::Exit => self.quit = true,
             Command::Export => self.export_session(),
@@ -1695,10 +1984,14 @@ impl App {
         ];
         self.history.clear();
         self.turn_history.clear();
-        self.entries.push(Entry::streaming());
+        let mut summary_entry = Entry::streaming();
+        summary_entry.model = Some(self.model_label());
+        self.entries.push(summary_entry);
         let last = self.entries.len() - 1;
         self.entries[last].text = summary;
-        self.entries.push(Entry::streaming());
+        let mut turn_entry = Entry::streaming();
+        turn_entry.model = Some(self.model_label());
+        self.entries.push(turn_entry);
         let index = self.entries.len() - 1;
         self.active = Some(index);
         self.cancel = Some(Cancel::new());
@@ -2864,6 +3157,7 @@ impl App {
     pub fn new_session(&mut self) {
         self.persist_session();
         self.interrupt_quietly();
+        self.dismiss_suggestions();
         self.entries.clear();
         self.history.clear();
         self.turn_history.clear();
@@ -2888,6 +3182,7 @@ impl App {
     }
 
     pub fn clear_transcript(&mut self) {
+        self.dismiss_suggestions();
         self.entries.clear();
         self.turn_history.clear();
         self.composer.clear_ghost();
@@ -3121,7 +3416,7 @@ impl App {
             return;
         }
         self.control_send(Control::Copy(text));
-        self.toast("selection copied to clipboard");
+        self.toast("assistant message copied to clipboard");
         self.mark_dirty();
     }
 
@@ -3361,6 +3656,558 @@ impl App {
         self.mark_dirty();
     }
 
+    // -- transcript search (ctrl+f) -----------------------------------------
+
+    // -- time machine (/revert) ----------------------------------------------
+
+    /// Files a snapshot row under the running turn's serial, keeping the
+    /// FIRST pre-change content per file (the state /revert restores).
+    pub(crate) fn record_snapshot(&mut self, path: String, previous: Option<Vec<u8>>) {
+        if self
+            .snapshots
+            .last()
+            .is_some_and(|s| s.turn == self.turn_serial)
+        {
+            let snap = self.snapshots.last_mut().expect("just checked");
+            if !snap.files.iter().any(|(p, _)| *p == path) {
+                snap.files.push((path, previous));
+            }
+        } else {
+            self.snapshots.push(TurnSnapshot {
+                turn: self.turn_serial,
+                files: vec![(path, previous)],
+            });
+        }
+        // Bound the store: the twenty most recent turns of snapshots.
+        while self.snapshots.len() > 20 {
+            self.snapshots.remove(0);
+        }
+    }
+
+    /// Restores every file a turn touched to its pre-turn state
+    /// (`/revert [N]`; no argument reverts the latest snapshotted turn).
+    /// The writes run on the blocking pool; the transcript reports back.
+    pub(crate) fn revert_turn(&mut self, turn: Option<usize>) {
+        if self.is_busy() {
+            self.toast("wait for the turn to finish before reverting");
+            self.mark_dirty();
+            return;
+        }
+        let Some(target) = turn.or_else(|| self.snapshots.last().map(|s| s.turn)) else {
+            self.toast("no snapshots yet - revert works after file edits");
+            self.mark_dirty();
+            return;
+        };
+        let Some(pos) = self.snapshots.iter().position(|s| s.turn == target) else {
+            self.toast(format!("no snapshot for turn {target}"));
+            self.mark_dirty();
+            return;
+        };
+        let snap = self.snapshots.remove(pos);
+        let workspace = self.cwd.clone();
+        let control = self.control_tx.clone();
+        self.handle.spawn_blocking(move || {
+            let mut restored = 0usize;
+            let mut failed = 0usize;
+            for (rel, previous) in &snap.files {
+                let full = workspace.join(rel);
+                let result = match previous {
+                    Some(bytes) => std::fs::write(&full, bytes),
+                    // The file did not exist before the turn: remove it.
+                    None => std::fs::remove_file(&full).or_else(|e| {
+                        if e.kind() == std::io::ErrorKind::NotFound {
+                            Ok(())
+                        } else {
+                            Err(e)
+                        }
+                    }),
+                };
+                match result {
+                    Ok(()) => restored += 1,
+                    Err(_) => failed += 1,
+                }
+            }
+            if let Some(control) = control {
+                let _ = control.send(Control::RevertDone {
+                    turn: snap.turn,
+                    restored,
+                    failed,
+                });
+            }
+        });
+        self.toast(format!("restoring turn {target}…"));
+    }
+
+    /// The `/fork` save confirmation.
+    pub fn on_fork_saved(&mut self, path: Option<std::path::PathBuf>) {
+        match path {
+            Some(path) => self.toast(format!("original session saved: {}", path.display())),
+            None => self.toast("fork active - saving the original failed"),
+        }
+        self.mark_dirty();
+    }
+
+    /// The transcript notice after `/revert` finishes.
+    pub fn on_revert_done(&mut self, turn: usize, restored: usize, failed: usize) {
+        let mut text = format!(
+            "time machine: turn {turn} restored {}",
+            crate::ui::text::plural(restored, "file")
+        );
+        if failed > 0 {
+            text.push_str(&format!(" · {} failed", failed));
+        }
+        self.entries.push(Entry::new(EntryRole::System, text));
+        self.toast("workspace restored");
+        self.mark_dirty();
+    }
+
+    // -- session branching (/fork) ---------------------------------------------
+
+    /// Branches the session at turn `turn` (1-based): the full session is
+    /// saved to disk first, then the live transcript is trimmed to the first
+    /// `turn` exchanges so work continues on the branch.
+    pub(crate) fn fork_session_at(&mut self, turn: usize) {
+        if self.is_busy() {
+            self.toast("wait for the turn to finish before forking");
+            self.mark_dirty();
+            return;
+        }
+        let turns = self.turn_count();
+        if turn == 0 || turn > turns {
+            self.toast(format!("turns run 1..{turns} - /fork <n>"));
+            self.mark_dirty();
+            return;
+        }
+        // Nothing is ever lost: the full session is written out first.
+        let full = self.stored_session();
+        let control = self.control_tx.clone();
+        self.handle.spawn_blocking(move || {
+            if let Some(control) = control {
+                let _ = control.send(Control::ForkSaved {
+                    path: session::save(&full).ok(),
+                });
+            }
+        });
+
+        // Trim the live session to the first `turn` exchanges.
+        let user_idxs: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.role == EntryRole::User)
+            .map(|(i, _)| i)
+            .collect();
+        if turn < turns {
+            let boundary = user_idxs[turn];
+            self.entries.truncate(boundary);
+        }
+        let keep: usize = self.turn_history.iter().take(turn).sum();
+        self.history.truncate(keep.min(self.history.len()));
+        self.turn_history.truncate(turn);
+        self.trim_history();
+        self.active = None;
+        self.turn_started = None;
+        self.view.scroll_to_bottom();
+        self.mark_dirty();
+        self.toast(format!("forked at turn {turn} - original session saved"));
+    }
+
+    // -- cross-session search (/history) -----------------------------------------
+
+    /// Scans every saved session for `query` on the blocking pool and opens
+    /// the results as a session picker (`/history <query>`).
+    pub(crate) fn search_history(&mut self, query: &str) {
+        let query = query.trim().to_string();
+        if query.is_empty() {
+            self.toast("usage: /history <query>");
+            self.mark_dirty();
+            return;
+        }
+        let control = self.control_tx.clone();
+        self.handle.spawn_blocking(move || {
+            let hits = session::search_saved(&query, 30);
+            if let Some(control) = control {
+                let _ = control.send(Control::HistoryResults { query, hits });
+            }
+        });
+        self.toast("searching saved sessions…");
+    }
+
+    /// Opens the `/history` result rows as a session picker.
+    pub fn on_history_results(&mut self, query: String, hits: Vec<crate::session::HistoryHit>) {
+        if hits.is_empty() {
+            self.toast(format!("no saved session matches \"{query}\""));
+            self.mark_dirty();
+            return;
+        }
+        let rows = hits
+            .into_iter()
+            .map(|h| PickerItem {
+                label: h.snippet,
+                hint: h.label,
+                value: PickerValue::Session(h.path),
+                current: false,
+            })
+            .collect();
+        self.overlay = Some(Overlay::Picker(Picker::new(
+            PickerMode::SessionsSearch,
+            rows,
+        )));
+        self.mark_dirty();
+    }
+
+    // -- pre-flight diagnostics (/doctor) -----------------------------------------
+
+    /// Runs bounded, read-only environment checks on the blocking pool and
+    /// posts the report back as a transcript note (`/doctor`).
+    pub(crate) fn run_doctor(&mut self) {
+        let cfg = self.cfg.clone();
+        let memory_attached = self.memory.is_some();
+        let memory_db = self.memory.as_ref().map(|m| m.paths().database.clone());
+        let tool_total = crate::tools::ToolSet::catalog().len();
+        let control = self.control_tx.clone();
+        let cwd = self.cwd.clone();
+        self.handle.spawn_blocking(move || {
+            let mut lines: Vec<String> = Vec::new();
+            let mark = |ok: bool, text: String| format!("{} {}", if ok { "✓" } else { "✗" }, text);
+            lines.push(mark(
+                true,
+                format!("provider {:?} · {}", cfg.provider, cfg.base_url),
+            ));
+            lines.push(mark(
+                cfg.api_key.is_some(),
+                format!(
+                    "api key {}",
+                    if cfg.api_key.is_some() {
+                        "set (hidden)"
+                    } else {
+                        "missing - /connect"
+                    }
+                ),
+            ));
+            lines.push(mark(
+                true,
+                format!(
+                    "model {} · context limit {}",
+                    cfg.model,
+                    crate::config::model_context_limit(&cfg.model)
+                ),
+            ));
+            lines.push(mark(
+                memory_attached,
+                if memory_attached {
+                    let size = memory_db
+                        .and_then(|p| std::fs::metadata(&p).ok())
+                        .map(|m| format!(" · {}", crate::ui::text::format_tokens(m.len())))
+                        .unwrap_or_default();
+                    format!("memory attached{size}")
+                } else {
+                    "memory not attached - NANOMITE_MEMORY=0 or the store failed".into()
+                },
+            ));
+            let sessions = session::list();
+            lines.push(mark(
+                true,
+                format!(
+                    "{} saved session{} · {}",
+                    sessions.len(),
+                    if sessions.len() == 1 { "" } else { "s" },
+                    session::sessions_dir().display()
+                ),
+            ));
+            let probe = cwd.join(".nanomite-write-probe");
+            let writable = std::fs::write(&probe, b"ok").is_ok();
+            let _ = std::fs::remove_file(&probe);
+            lines.push(mark(
+                cwd.is_dir() && writable,
+                format!(
+                    "workspace {}{}",
+                    cwd.display(),
+                    if writable { "" } else { " (not writable)" }
+                ),
+            ));
+            lines.push(mark(
+                cfg.disabled_tools.is_empty(),
+                format!(
+                    "tools {}/{} enabled{}",
+                    tool_total - cfg.disabled_tools.len(),
+                    tool_total,
+                    if cfg.disabled_tools.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · disabled: {}", cfg.disabled_tools.join(", "))
+                    }
+                ),
+            ));
+            if let Some(control) = control {
+                let _ = control.send(Control::DoctorReport(lines));
+            }
+        });
+        self.toast("running diagnostics…");
+    }
+
+    /// The `/doctor` report lands as one system note per check.
+    pub fn on_doctor_report(&mut self, lines: Vec<String>) {
+        let failed = lines.iter().filter(|l| l.starts_with("✗")).count();
+        for line in lines {
+            self.entries.push(Entry::new(EntryRole::System, line));
+        }
+        self.toast(if failed == 0 {
+            "doctor: all checks passed".to_string()
+        } else {
+            format!(
+                "doctor: {failed} check{} need attention",
+                if failed == 1 { "" } else { "s" }
+            )
+        });
+        self.mark_dirty();
+    }
+
+    // -- effort A/B (/ab) ------------------------------------------------------
+
+    /// Runs `prompt` through two providers that differ only in reasoning
+    /// effort (minimal vs high) and streams both answers into the board
+    /// overlay, opencode-panel style.
+    pub(crate) fn run_ab_test(&mut self, prompt: &str) {
+        let prompt = prompt.trim().to_string();
+        if prompt.is_empty() {
+            self.toast("usage: /ab <prompt>");
+            self.mark_dirty();
+            return;
+        }
+        if self
+            .overlay
+            .as_ref()
+            .is_some_and(|o| matches!(o, Overlay::Board(b) if b.running))
+        {
+            self.toast("a board is already convening");
+            self.mark_dirty();
+            return;
+        }
+        self.board_gen += 1;
+        let gen = self.board_gen;
+        let mut cfg_a = self.cfg.clone();
+        cfg_a.reasoning = crate::config::Reasoning::Minimal;
+        let mut cfg_b = self.cfg.clone();
+        cfg_b.reasoning = crate::config::Reasoning::High;
+        let tx = self.board_tx.clone();
+        let handle = self.handle.clone();
+
+        self.overlay = Some(Overlay::Board(BoardState {
+            topic: format!("A/B: {prompt}"),
+            running: true,
+            ..BoardState::default()
+        }));
+
+        handle.spawn(async move {
+            let mut swarm = Swarm::new();
+            for cfg in [cfg_a, cfg_b] {
+                match OpenAiProvider::new(&cfg) {
+                    Ok(provider) => swarm.add_arc(Arc::new(provider)),
+                    Err(e) => {
+                        let _ = tx.send((
+                            gen,
+                            BoardEvent::Done {
+                                thread_id: None,
+                                error: Some(e.to_string()),
+                            },
+                        ));
+                        return;
+                    }
+                }
+            }
+            let results = swarm
+                .run_parallel_chat(vec![ChatMessage::user(prompt)], None)
+                .await;
+            for (index, result) in results {
+                let persona = if index == 0 {
+                    "A · minimal effort"
+                } else {
+                    "B · high effort"
+                };
+                let body = match result {
+                    Ok(text) => text,
+                    Err(e) => format!("failed: {e}"),
+                };
+                let _ = tx.send((
+                    gen,
+                    BoardEvent::Message(crate::board::store::BoardMessage {
+                        id: None,
+                        thread_id: String::new(),
+                        persona: persona.to_string(),
+                        round: 0,
+                        body,
+                        created_at: crate::memory::model::now().to_string(),
+                    }),
+                ));
+            }
+            let _ = tx.send((
+                gen,
+                BoardEvent::Done {
+                    thread_id: None,
+                    error: None,
+                },
+            ));
+        });
+        self.mark_dirty();
+    }
+
+    // -- focus mode (f2) ---------------------------------------------------------
+
+    /// Shows only the latest exchange in the transcript (`f2`, `/focus`).
+    pub fn toggle_focus(&mut self) {
+        self.focus = !self.focus;
+        self.view.mark_dirty();
+        self.toast(format!("focus mode: {}", on_off(self.focus)));
+        self.mark_dirty();
+    }
+
+    /// The welcome card's resume hint has arrived from memory.
+    pub fn on_resume_hint(&mut self, hint: String) {
+        self.resume_hint = Some(hint);
+        self.mark_dirty();
+    }
+
+    /// Records one frame's draw duration for the perf hud. Called by the
+    /// main loop right after `terminal.draw`.
+    pub fn record_frame(&mut self, micros: u64) {
+        self.frame_us = micros;
+        self.frame_peak_us = self.frame_peak_us.max(micros);
+        self.frame_draws = self.frame_draws.wrapping_add(1);
+    }
+
+    /// Toggles the perf hud (`/hud`).
+    pub fn toggle_hud(&mut self) {
+        self.hud = !self.hud;
+        self.toast(format!("perf hud: {}", on_off(self.hud)));
+        self.mark_dirty();
+    }
+
+    /// Toggles the tool-output detail level (`/details`, `ctrl+o`): the same
+    /// expand/collapse switch opencode binds to `ctrl+o`.
+    pub fn toggle_tool_details(&mut self) {
+        self.show_tool_details = !self.show_tool_details;
+        self.toast(format!("tool details: {}", on_off(self.show_tool_details)));
+        self.invalidate_transcript();
+    }
+
+    /// Opens the footer search bar, seeded with the active selection when
+    /// there is one (truncated to keep the bar readable).
+    pub fn open_search(&mut self) {
+        let selected = self.selection.take();
+        let mut query = selected
+            .map(|sel| self.get_selected_text(&sel))
+            .unwrap_or_default();
+        if query.chars().count() > 64 {
+            query = query.chars().take(64).collect();
+        }
+        // The suggestion strip must not swallow the enter/esc the bar uses.
+        self.dismiss_suggestions();
+        self.search = Some(SearchState {
+            query,
+            matches: Vec::new(),
+            current: 0,
+        });
+        self.refresh_search();
+        self.mark_dirty();
+    }
+
+    /// Re-scans the transcript for the current query (entry text and tool
+    /// details, case-insensitive) and resets the match cursor.
+    fn refresh_search(&mut self) {
+        let needle = match &self.search {
+            Some(state) => state.query.trim().to_lowercase(),
+            None => return,
+        };
+        let mut matches = Vec::new();
+        if !needle.is_empty() {
+            for (idx, entry) in self.entries.iter().enumerate() {
+                let hit = entry.text.to_lowercase().contains(&needle)
+                    || entry
+                        .tools
+                        .iter()
+                        .any(|t| t.detail.to_lowercase().contains(&needle));
+                if hit {
+                    matches.push(idx);
+                }
+            }
+        }
+        if let Some(state) = &mut self.search {
+            state.matches = matches;
+            state.current = 0;
+        }
+        self.mark_dirty();
+    }
+
+    /// Steps the search cursor to the next (`1`) or previous (`-1`) match,
+    /// wrapping, and scrolls the transcript so its entry tops the viewport.
+    /// The raw source of a fenced code block covering `row` of `entry`'s
+    /// cached render, if any.
+    fn code_block_at(&self, entry: usize, row: usize) -> Option<String> {
+        let cached = self.entries.get(entry)?.cache.as_ref()?;
+        for (start, end, source) in &cached.code_blocks {
+            let (start, end) = (usize::from(*start), usize::from(*end));
+            if start <= row && row <= end {
+                return Some(source.clone());
+            }
+        }
+        None
+    }
+
+    /// Opens/closes the full error text of a failed entry (plain click,
+    /// like opencode's error expansion).
+    pub(crate) fn toggle_error_expansion(&mut self, index: usize) {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return;
+        };
+        if entry.error.is_none() {
+            return;
+        }
+        entry.error_expanded = !entry.error_expanded;
+        entry.touch();
+        self.mark_dirty();
+    }
+
+    /// Jumps one entry up (`-1`) or down (`1`), landing it at the top of the
+    /// viewport (`alt+↑` / `alt+↓`).
+    pub(crate) fn jump_entry(&mut self, delta: i32) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let (top, _) = self.view.window();
+        let mut current = 0usize;
+        for (i, off) in self.view.offsets.iter().enumerate() {
+            if *off <= top {
+                current = i;
+            } else {
+                break;
+            }
+        }
+        let last = self.entries.len() - 1;
+        let target = (current as i64 + delta as i64).clamp(0, last as i64) as usize;
+        self.view.scroll_to_entry_index(target);
+        self.mark_dirty();
+    }
+
+    /// Steps the search cursor to the next (`1`) or previous (`-1`) match,
+    /// wrapping, and scrolls the transcript so its entry tops the viewport.
+    fn search_step(&mut self, delta: i32) {
+        let Some(state) = self.search.as_mut() else {
+            return;
+        };
+        if state.matches.is_empty() {
+            return;
+        }
+        let len = state.matches.len() as i32;
+        let next = (state.current as i32 + delta).rem_euclid(len) as usize;
+        state.current = next;
+        // Search scans the full transcript; the viewport offsets are relative
+        // to the focus window when focus mode is on.
+        let entry = state.matches[next].saturating_sub(self.focus_base);
+        self.view.scroll_to_entry_index(entry);
+        self.mark_dirty();
+    }
+
     pub fn scroll_to_end(&mut self) {
         self.view.scroll_to_bottom();
         self.mark_dirty();
@@ -3386,6 +4233,76 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
+        // Follow-up suggestions (opencode-style): while the strip is on
+        // screen, plain Tab cycles it, Enter sends the highlighted prompt and
+        // Esc dismisses. Typing anything dismisses the strip and types
+        // normally. Plain Tab would otherwise be captured by ghost-text
+        // acceptance; Shift+Tab keeps cycling the tool mode untouched.
+        if self.overlay.is_none() && self.suggestions.is_some() {
+            match key.code {
+                KeyCode::Tab => {
+                    self.cycle_suggestion(1);
+                    return;
+                }
+                KeyCode::Enter => {
+                    self.accept_suggestion();
+                    return;
+                }
+                KeyCode::Esc => {
+                    self.dismiss_suggestions();
+                    return;
+                }
+                KeyCode::Char(c) if !ctrl && !alt => {
+                    self.dismiss_suggestions();
+                    // The popup-opener keys keep opening their menus instead
+                    // of being typed: `/` on an empty composer is the command
+                    // palette, backtick the history picker.
+                    if c == '/' && self.composer.is_empty() {
+                        self.open_palette();
+                    } else if c == '`' {
+                        self.open_history_picker();
+                    } else {
+                        self.composer.insert(c);
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Transcript search: while the footer bar is open it owns the
+        // keyboard — typing edits the query, enter/↓ walk forward, ↑ walks
+        // back, esc closes. Only ctrl+c still quits from here.
+        if self.search.is_some() {
+            match key.code {
+                KeyCode::Char('c') if ctrl => self.quit = true,
+                KeyCode::Esc => {
+                    self.search = None;
+                    self.mark_dirty();
+                }
+                KeyCode::Enter | KeyCode::Down => self.search_step(1),
+                KeyCode::Up => self.search_step(-1),
+                KeyCode::Backspace => {
+                    if let Some(state) = &mut self.search {
+                        state.query.pop();
+                    }
+                    self.refresh_search();
+                }
+                KeyCode::Char(c) if !ctrl && !alt => {
+                    if let Some(state) = &mut self.search {
+                        // The bar is one footer row; bound the query so a
+                        // long paste cannot push the hints off screen.
+                        if state.query.chars().count() < 128 {
+                            state.query.push(c);
+                        }
+                    }
+                    self.refresh_search();
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match key.code {
             KeyCode::Char('c') if ctrl => self.quit = true,
             KeyCode::Char('d') if ctrl => {
@@ -3396,12 +4313,15 @@ impl App {
                 }
             }
             KeyCode::F(1) => self.open_help(),
+            KeyCode::F(2) => self.toggle_focus(),
             // `/` opens the command menu; with text on the composer it types literally.
             KeyCode::Char('/') if self.composer.is_empty() => self.open_palette(),
             KeyCode::Char('x') if ctrl => self.open_palette(),
             KeyCode::Char('t') if ctrl => self.new_session(),
             KeyCode::Char('l') if ctrl => self.clear_transcript(),
             KeyCode::Char('r') if ctrl => self.cycle_reasoning(),
+            KeyCode::Char('f') if ctrl => self.open_search(),
+            KeyCode::Char('o') if ctrl => self.toggle_tool_details(),
 
             // ` (backtick) opens fuzzy history search picker
             KeyCode::Char('`') => self.open_history_picker(),
@@ -3434,6 +4354,8 @@ impl App {
             }
 
             // Visual selection cursor movement
+            KeyCode::Up if alt => self.jump_entry(-1),
+            KeyCode::Down if alt => self.jump_entry(1),
             KeyCode::Up => {
                 if let Some(sel) = &self.selection {
                     if sel.mode.is_some() {
@@ -4019,7 +4941,7 @@ pub struct Selection {
 }
 
 impl App {
-    /// Handle mouse events: scroll wheel and right-click text selection
+    /// Handle mouse events: scroll wheel, scrollbar track, text selection
     pub fn on_mouse(&mut self, event: crossterm::event::MouseEvent) {
         use crossterm::event::MouseEventKind;
 
@@ -4033,16 +4955,68 @@ impl App {
                 self.scroll_by(-3);
                 return;
             }
+            MouseEventKind::Up(_) => self.scrollbar_drag = false,
             _ => {}
         }
 
-        // Handle right-click text selection in chat area
+        // The scrollbar track: click or drag jumps the viewport, and a press
+        // on the bottom edge re-follows the tail (as the footer promises). A
+        // press here must never start a text selection.
+        if let Some(chat_rect) = self.view.cached_chat_rect() {
+            let sb_col = chat_rect.x + chat_rect.width.saturating_sub(1);
+            let in_track = event.column == sb_col
+                && event.row >= chat_rect.y
+                && event.row < chat_rect.y + chat_rect.height;
+            if in_track {
+                let scrollable = self.view.content_height > chat_rect.height;
+                match event.kind {
+                    MouseEventKind::Down(_) if scrollable => {
+                        self.scrollbar_drag = true;
+                        self.scrollbar_jump(event.row, chat_rect);
+                        return;
+                    }
+                    MouseEventKind::Drag(_) if self.scrollbar_drag => {
+                        self.scrollbar_jump(event.row, chat_rect);
+                        return;
+                    }
+                    _ => return,
+                }
+            }
+        }
+
+        // Handle text selection in the chat area
         self.handle_chat_mouse(event);
+    }
+
+    /// Jumps the viewport so the scrollbar thumb sits at `row` of its track.
+    fn scrollbar_jump(&mut self, row: u16, chat_rect: ratatui::layout::Rect) {
+        let viewport = chat_rect.height;
+        let content = self.view.content_height;
+        if content <= viewport || viewport < 2 {
+            return;
+        }
+        let max = content - viewport;
+        let track_row = row.saturating_sub(chat_rect.y);
+        let rel = track_row as f32 / (viewport - 1) as f32;
+        let top = ((rel * max as f32).round() as u16).min(max);
+        self.view.scroll_from_bottom = max - top;
+        self.view.follow = self.view.scroll_from_bottom == 0;
+        if self.view.follow {
+            self.view.new_since_scroll = 0;
+            self.view.new_baseline = content;
+        }
+        self.mark_dirty();
     }
 
     /// Handle mouse events in the chat area for text selection
     fn handle_chat_mouse(&mut self, event: crossterm::event::MouseEvent) {
         use crossterm::event::{MouseButton, MouseEventKind};
+
+        // Focus mode renders a slice of the transcript; selection row math
+        // assumes the full list, so it waits until focus is off.
+        if self.focus {
+            return;
+        }
 
         let Some(chat_rect) = self.view.cached_chat_rect() else {
             return;
@@ -4101,6 +5075,19 @@ impl App {
                         if !text.trim().is_empty() {
                             self.control_send(crate::app::Control::Copy(text));
                             self.toast("selection copied to clipboard");
+                        } else if let Some(source) = self.code_block_at(sel.start.0, sel.start.1) {
+                            // A plain click inside a fenced block copies its
+                            // raw source, opencode-style.
+                            let count = source.lines().count();
+                            self.control_send(crate::app::Control::Copy(source));
+                            self.toast(format!(
+                                "code block copied ({})",
+                                crate::ui::text::plural(count, "line")
+                            ));
+                        } else {
+                            // Plain click elsewhere on a failed entry opens
+                            // its full error.
+                            self.toggle_error_expansion(sel.start.0);
                         }
                     }
                     self.mark_dirty();
@@ -4334,6 +5321,11 @@ fn theme_descriptor(id: ThemeId) -> &'static str {
         ThemeId::Graphite => "teal · orange on deep charcoal",
         ThemeId::Umbrella => "blood red · clinical white",
     }
+}
+
+/// Parses `/revert 3`-style turn arguments; `None` means "latest".
+fn parse_turn_arg(args: &str) -> Option<usize> {
+    args.trim().parse::<usize>().ok()
 }
 
 fn on_off(value: bool) -> &'static str {
@@ -4675,5 +5667,116 @@ mod tests {
             Control::Copy(text) => assert!(text.contains("Scripted test reply"), "{text}"),
             other => panic!("unexpected control: {other:?}"),
         }
+    }
+
+    // -- follow-up suggestions (opencode-style) ------------------------------
+
+    async fn run_turn_to_completion(app: &mut App) {
+        for _ in 0..400 {
+            app.pump_engine();
+            if !app.is_busy() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(!app.is_busy(), "turn never finished");
+    }
+
+    #[tokio::test]
+    async fn suggestion_strip_mounts_after_a_finished_turn() {
+        let mut app = test_app().await;
+        app.composer.insert_str("hello there");
+        app.submit();
+        run_turn_to_completion(&mut app).await;
+
+        // The side-call runs through the same offline provider and mounts
+        // once its reply has been parsed.
+        for _ in 0..400 {
+            app.pump_engine();
+            if app.suggestions.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let strip = app
+            .suggestions
+            .as_ref()
+            .expect("finished turn must mount suggestions");
+        assert!(!strip.items.is_empty(), "no suggestions parsed");
+        assert_eq!(strip.selected, 0);
+        assert!(strip.items.len() <= 3, "capped at the promised three");
+
+        // Submitting a new prompt clears the strip immediately.
+        app.composer.insert_str("next question");
+        app.submit();
+        assert!(app.suggestions.is_none(), "a new turn clears the strip");
+    }
+
+    #[tokio::test]
+    async fn stale_or_busy_suggestion_results_never_mount() {
+        let mut app = test_app().await;
+        app.suggest_gen = 7;
+        app.apply_suggest_result(SuggestResult {
+            gen: 6,
+            items: vec!["stale".into()],
+        });
+        assert!(app.suggestions.is_none(), "stale gen must be dropped");
+
+        // A mid-turn reply waits: the strip would otherwise pop up under a
+        // turn that already started.
+        app.composer.insert_str("go");
+        app.submit();
+        app.apply_suggest_result(SuggestResult {
+            gen: app.suggest_gen,
+            items: vec!["mid-turn".into()],
+        });
+        assert!(app.suggestions.is_none(), "busy app must not mount");
+        run_turn_to_completion(&mut app).await;
+        // And the cleared-on-start rule keeps it away after the turn too.
+        assert!(app.suggestions.is_none());
+    }
+
+    #[tokio::test]
+    async fn suggestion_keys_cycle_send_and_dismiss() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let key = |code: KeyCode| crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
+
+        let mut app = test_app().await;
+        app.suggestions = Some(SuggestionStrip {
+            items: vec!["run the tests".into(), "commit the fix".into()],
+            selected: 0,
+        });
+
+        // Plain Tab cycles the highlight (wrapping), not ghost text.
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.suggestions.as_ref().unwrap().selected, 1);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.suggestions.as_ref().unwrap().selected, 0, "wraps");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.suggestions.as_ref().unwrap().selected, 1);
+
+        // Enter submits the highlighted prompt through the normal path.
+        app.on_key(key(KeyCode::Enter));
+        assert!(app.suggestions.is_none(), "accept clears the strip");
+        assert_eq!(app.entries[0].role, EntryRole::User);
+        assert_eq!(app.entries[0].text, "commit the fix");
+        run_turn_to_completion(&mut app).await;
+
+        // Typing dismisses and types normally; Esc just dismisses.
+        app.suggestions = Some(SuggestionStrip {
+            items: vec!["another".into()],
+            selected: 0,
+        });
+        app.on_key(key(KeyCode::Char('x')));
+        assert!(app.suggestions.is_none(), "typing dismisses");
+        assert_eq!(app.composer.value(), "x");
+
+        app.suggestions = Some(SuggestionStrip {
+            items: vec!["another".into()],
+            selected: 0,
+        });
+        app.on_key(key(KeyCode::Esc));
+        assert!(app.suggestions.is_none(), "esc dismisses");
+        assert_eq!(app.composer.value(), "x", "esc must not clear the composer");
     }
 }

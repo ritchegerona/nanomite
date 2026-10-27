@@ -527,7 +527,7 @@ pub fn render(
         format!("esc interrupts {} type to queue the next turn", glyph::DOT)
     } else {
         format!(
-            "enter send {} ctrl+j newline {} / commands",
+            "enter send {} ctrl+j newline {} ctrl+o details",
             glyph::DOT,
             glyph::DOT
         )
@@ -595,7 +595,9 @@ pub fn render(
         let hint = if busy {
             "the agent is working - type to queue the next turn"
         } else {
-            "ask anything - / opens the command menu"
+            // opencode's phrasing, minus the @-file mentions nanomite has no
+            // picker for.
+            "Send a message or type / for commands"
         };
         frame.render_widget(
             Paragraph::new(Span::styled(

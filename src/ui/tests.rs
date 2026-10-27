@@ -1,6 +1,7 @@
 use super::*;
 use crate::app::{
-    App, Entry, EntryRole, Overlay, OverlayKind, Phase, PickerMode, SudoPasswordState, ToolRow,
+    App, Entry, EntryRole, Overlay, OverlayKind, Phase, PickerMode, SudoPasswordState,
+    SuggestionStrip, ToolRow,
 };
 use crate::commands;
 use crate::commands::Command;
@@ -61,6 +62,8 @@ fn with_tool(name: &str, detail: &str, ok: bool) -> ToolRow {
         edit_path: None,
         edit_replacements: None,
         preview: None,
+        started: std::time::Instant::now(),
+        elapsed: None,
     }
 }
 
@@ -139,10 +142,12 @@ async fn renders_a_turn_with_tools_and_markdown() {
     assert!(text.contains("Files"), "heading missing:\n{text}");
     assert!(text.contains("three"), "bold text missing:\n{text}");
     assert!(text.contains("fn main()"), "code block missing:\n{text}");
-    assert!(text.contains("✓"), "tool success marker missing:\n{text}");
+    // opencode-style rows: the read row carries the `→` glyph, the failure
+    // goes red with `✗`.
+    assert!(text.contains("→"), "tool read marker missing:\n{text}");
     assert!(text.contains("✗"), "tool failure marker missing:\n{text}");
-    // The `❯` caret identifies the user turn.
-    assert!(text.contains('❯'), "user marker missing:\\n{text}");
+    // The user turn is a left-bar block, like opencode's coloured prompt.
+    assert!(text.contains('▌'), "user bar missing:\n{text}");
 }
 
 #[tokio::test]
@@ -201,6 +206,452 @@ async fn streaming_entry_shows_status_row() {
         text.contains("partial ans") || text.contains("partial an▍"),
         "streamed text missing:\n{text}"
     );
+}
+
+#[tokio::test]
+async fn user_message_renders_as_a_raised_block() {
+    let mut app = test_app().await;
+    let mut user = Entry::new(EntryRole::User, "list the files");
+    user.at = std::time::SystemTime::now();
+    app.entries.push(user);
+
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("list the files"), "text missing:\n{text}");
+    assert!(text.contains('▌'), "left bar missing:\n{text}");
+    // opencode drops the YOU/AI badges and timestamps entirely.
+    assert!(!text.contains("YOU"), "badge should be gone:\n{text}");
+}
+
+#[tokio::test]
+async fn assistant_footer_shows_mode_duration_and_rate() {
+    let mut app = test_app().await;
+    let mut entry = assistant("done work");
+    entry.elapsed = Some(std::time::Duration::from_secs(5));
+    entry.usage = Some(crate::agent::provider::Usage {
+        prompt_tokens: 10,
+        completion_tokens: 50,
+        total_tokens: 60,
+    });
+    app.entries.push(entry);
+
+    let text = frame_text(&mut app, 92, 24);
+    // opencode's message footer: agent/mode name, then duration and tok/s.
+    assert!(text.contains("Build"), "mode label missing:\n{text}");
+    assert!(text.contains("5.0s"), "duration missing:\n{text}");
+    assert!(text.contains("10.0 tok/s"), "token rate missing:\n{text}");
+}
+
+#[tokio::test]
+async fn streaming_cursor_keeps_the_last_char() {
+    let mut app = test_app().await;
+    app.entries.push(streaming("xyzzy"));
+    let text = frame_text(&mut app, 92, 20);
+    // The caret is appended, so the streamed text survives intact; the old
+    // pop-a-character cursor would have rendered `xyzz▍`.
+    assert!(text.contains("xyzzy"), "cursor ate the last char:\n{text}");
+}
+
+#[tokio::test]
+async fn tool_pills_show_their_own_duration() {
+    let mut app = test_app().await;
+    let mut entry = assistant("edited the file");
+    let mut tool = with_tool("edit_file", "calculator.py", true);
+    tool.started = std::time::Instant::now();
+    tool.elapsed = Some(std::time::Duration::from_secs(5));
+    entry.tools.push(tool);
+    // The turn total must not leak into the pill.
+    entry.elapsed = None;
+    app.entries.push(entry);
+
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("5.0s"), "per-tool duration missing:\n{text}");
+}
+
+#[tokio::test]
+async fn transcript_search_finds_jumps_and_closes() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    let mut app = test_app().await;
+    app.entries
+        .push(Entry::new(EntryRole::User, "the needle is here"));
+    for i in 0..40 {
+        app.entries
+            .push(Entry::new(EntryRole::User, format!("filler row {i}")));
+    }
+    // Paint once so the viewport offsets exist for the jump math.
+    let _ = frame_text(&mut app, 92, 24);
+    app.scroll_to_end();
+
+    let key = |code, mods| KeyEvent {
+        code,
+        modifiers: mods,
+        kind: KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    };
+
+    // ctrl+f opens the bar; typing goes to the query, never the composer.
+    app.on_key(key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+    assert!(app.search.is_some(), "ctrl+f did not open search");
+    for ch in "needle".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert_eq!(app.composer.value(), "", "search leaked into the composer");
+    let state = app.search.as_ref().expect("search open");
+    assert_eq!(state.matches, vec![0], "match list wrong");
+
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("/needle"), "search bar missing:\n{text}");
+    assert!(text.contains("1/1 matches"), "match count missing:\n{text}");
+
+    // Enter jumps to the only match, which sits far above the viewport.
+    app.on_key(key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        app.view.scroll_from_bottom > 0,
+        "enter did not jump to the match"
+    );
+
+    // esc closes the bar; the composer was never touched.
+    app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.search.is_none(), "esc did not close search");
+    assert_eq!(app.composer.value(), "");
+
+    // Typing lands in the composer again once the bar is closed.
+    app.on_key(key(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert_eq!(app.composer.value(), "x");
+}
+
+#[tokio::test]
+async fn search_bar_reports_a_miss() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    let mut app = test_app().await;
+    app.entries
+        .push(Entry::new(EntryRole::User, "nothing here"));
+
+    let key = |code, mods| KeyEvent {
+        code,
+        modifiers: mods,
+        kind: KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    };
+
+    app.on_key(key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+    for ch in "zzzz".chars() {
+        app.on_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("/zzzz"), "query missing:\n{text}");
+    assert!(text.contains("no matches"), "miss not reported:\n{text}");
+}
+
+#[tokio::test]
+async fn scrollbar_click_jumps_and_bottom_follows() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = test_app().await;
+    for i in 0..40 {
+        app.entries
+            .push(Entry::new(EntryRole::User, format!("question {i}")));
+    }
+    // Paint once so the layout rects and offsets exist.
+    let _ = frame_text(&mut app, 92, 24);
+    let rect = app.view.cached_chat_rect().expect("chat rect cached");
+    let sb_col = rect.x + rect.width - 1;
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    };
+
+    // The middle of the track jumps away from the tail.
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        sb_col,
+        rect.y + rect.height / 2,
+    ));
+    assert!(
+        app.view.scroll_from_bottom > 0,
+        "scrollbar click did not jump"
+    );
+
+    // The bottom edge re-follows the tail, as the footer promises.
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        sb_col,
+        rect.y + rect.height - 1,
+    ));
+    assert_eq!(
+        app.view.scroll_from_bottom, 0,
+        "bottom click did not follow"
+    );
+    assert!(app.view.follow);
+
+    // A press on the track never starts a text selection.
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        sb_col,
+        rect.y + 2,
+    ));
+    app.on_mouse(mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        sb_col,
+        rect.y + 2,
+    ));
+    assert!(app.selection.is_none(), "scrollbar press made a selection");
+}
+
+#[tokio::test]
+async fn scrolled_up_pill_counts_new_lines() {
+    let mut app = test_app().await;
+    for i in 0..40 {
+        app.entries
+            .push(Entry::new(EntryRole::User, format!("question {i}")));
+    }
+    // Paint once so the layout rects and offsets exist before scrolling.
+    let _ = frame_text(&mut app, 92, 24);
+    // Start a turn so the app is busy while the user scrolls away.
+    app.composer.insert_str("go");
+    app.submit();
+    assert!(app.is_busy(), "turn should be running");
+
+    app.scroll_by(10_000);
+    assert!(!app.view.follow, "setup: should be scrolled away");
+
+    // New content arrives while scrolled away; the rebuild counts it.
+    app.entries
+        .push(Entry::new(EntryRole::User, "late arrival"));
+    let text = frame_text(&mut app, 92, 24);
+    assert!(app.view.new_since_scroll > 0, "no new rows counted");
+    assert!(text.contains("new lines"), "pill missing:\n{text}");
+    assert!(text.contains("end to follow"), "pill hint missing:\n{text}");
+
+    // Following the tail clears the counter and the pill.
+    app.scroll_to_end();
+    assert_eq!(app.view.new_since_scroll, 0, "counter did not reset");
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        !text.contains("end to follow"),
+        "pill stayed visible:\n{text}"
+    );
+}
+
+#[tokio::test]
+async fn error_block_collapses_and_expands() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = test_app().await;
+    // Long enough to wrap past the two collapsed lines, with a unique tail
+    // word that can only be visible when expanded.
+    let long_error = format!("{}zomega", "alpha beta gamma delta epsilon ".repeat(12));
+    let mut entry = assistant("tried and failed");
+    entry.phase = Phase::Failed;
+    entry.error = Some(long_error.to_string());
+    app.entries.push(entry);
+
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("Error:"), "error missing:\n{text}");
+    assert!(
+        text.contains("click to expand"),
+        "collapsed hint missing:\n{text}"
+    );
+    assert!(
+        !text.contains("omega"),
+        "full error should be collapsed:\n{text}"
+    );
+
+    // A plain click on the entry expands the full error, opencode-style.
+    let rect = app.view.cached_chat_rect().expect("chat rect cached");
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    };
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 8,
+        rect.y + 2,
+    ));
+    app.on_mouse(mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        rect.x + 8,
+        rect.y + 2,
+    ));
+    assert!(app.entries[0].error_expanded, "click did not expand");
+
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("omega"), "expanded error missing:\n{text}");
+    assert!(text.contains("click to collapse"), "hint missing:\n{text}");
+}
+
+#[tokio::test]
+async fn alt_arrows_jump_between_messages() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    let mut app = test_app().await;
+    for i in 0..30 {
+        app.entries
+            .push(Entry::new(EntryRole::User, format!("question {i}")));
+    }
+    let _ = frame_text(&mut app, 92, 24);
+    app.scroll_to_end();
+
+    let key = |code, mods| KeyEvent {
+        code,
+        modifiers: mods,
+        kind: KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    };
+
+    app.on_key(key(KeyCode::Up, KeyModifiers::ALT));
+    let at = app.view.scroll_from_bottom;
+    assert!(at > 0, "alt+up did not jump");
+
+    app.on_key(key(KeyCode::Up, KeyModifiers::ALT));
+    assert!(
+        app.view.scroll_from_bottom > at,
+        "second alt+up did not move further"
+    );
+
+    app.on_key(key(KeyCode::Down, KeyModifiers::ALT));
+    assert_eq!(
+        app.view.scroll_from_bottom, at,
+        "alt+down did not jump back"
+    );
+}
+
+#[tokio::test]
+async fn clicking_a_code_block_copies_it() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = test_app().await;
+    app.entries.push(assistant(
+        "here:\n\n```rust\nlet x = 1;\nlet y = 2;\n```\nafter",
+    ));
+    let _ = frame_text(&mut app, 92, 24);
+
+    // The box's recorded region gives the exact row to click.
+    let (block_row, source) = {
+        let cached = app.entries[0].cache.as_ref().expect("cached render");
+        let (s, _e, src) = cached.code_blocks[0].clone();
+        (usize::from(s), src)
+    };
+    assert_eq!(source, "let x = 1;\nlet y = 2;");
+
+    let rect = app.view.cached_chat_rect().expect("chat rect cached");
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    };
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 8,
+        rect.y + block_row as u16,
+    ));
+    app.on_mouse(mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        rect.x + 8,
+        rect.y + block_row as u16,
+    ));
+
+    let (msg, _) = app.toast.clone().expect("toast after click");
+    assert!(
+        msg.contains("code block copied (2 lines)"),
+        "unexpected toast: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn focus_mode_shows_only_the_latest_exchange() {
+    let mut app = test_app().await;
+    for i in 0..3 {
+        app.entries
+            .push(Entry::new(EntryRole::User, format!("question {i}")));
+        app.entries
+            .push(assistant(&format!("answer {i} with a little bit of text")));
+    }
+    let _ = frame_text(&mut app, 92, 40);
+    assert!(frame_text(&mut app, 92, 40).contains("question 0"));
+
+    app.toggle_focus();
+    let text = frame_text(&mut app, 92, 40);
+    assert!(text.contains("question 2"), "latest turn missing:\n{text}");
+    assert!(
+        !text.contains("question 0"),
+        "older turns must hide in focus mode:\n{text}"
+    );
+
+    app.toggle_focus();
+    assert!(frame_text(&mut app, 92, 40).contains("question 0"));
+}
+
+#[tokio::test]
+async fn time_machine_records_and_reports_reverts() {
+    let mut app = test_app().await;
+    // The runtime posts a snapshot per mutating tool call.
+    app.record_snapshot("src/lib.rs".into(), Some(b"old contents".to_vec()));
+    app.record_snapshot("src/new.rs".into(), None);
+    // Same-turn snapshots dedupe on the first content seen.
+    app.record_snapshot("src/lib.rs".into(), Some(b"other".to_vec()));
+    assert_eq!(app.snapshots.len(), 1);
+
+    app.on_revert_done(1, 2, 0);
+    let last = app.entries.last().expect("entry");
+    assert!(
+        last.text.contains("time machine: turn 1 restored 2 files"),
+        "revert notice missing: {}",
+        last.text
+    );
+}
+
+#[tokio::test]
+async fn fork_trims_the_session_to_the_requested_turn() {
+    use crate::agent::provider::ChatMessage;
+
+    let mut app = test_app().await;
+    for i in 0..3 {
+        app.entries
+            .push(Entry::new(EntryRole::User, format!("question {i}")));
+        app.entries
+            .push(assistant(&format!("answer {i} with a little bit of text")));
+        app.history.push(ChatMessage::user(format!("question {i}")));
+        app.history
+            .push(ChatMessage::assistant(format!("answer {i}")));
+    }
+    app.turn_history = vec![2, 2, 2];
+
+    app.fork_session_at(2);
+    assert_eq!(app.turn_count(), 2, "session trimmed to two turns");
+    assert_eq!(app.entries.len(), 4, "two exchanges remain");
+    assert_eq!(app.turn_history.len(), 2);
+    assert_eq!(app.history.len(), 4, "history trimmed with the turns");
+    assert!(!app.is_busy(), "forking while idle stays idle");
+}
+
+#[tokio::test]
+async fn doctor_report_lands_as_notes() {
+    let mut app = test_app().await;
+    app.on_doctor_report(vec![
+        "✓ provider scripted · http://localhost".into(),
+        "✗ api key missing - /connect".into(),
+    ]);
+    assert_eq!(app.entries.len(), 2);
+    let last = app.entries.last().expect("entry");
+    assert!(last.text.contains("api key missing"), "{}", last.text);
+    let (msg, _) = app.toast.clone().expect("toast");
+    assert!(msg.contains("1 check"), "toast: {msg}");
+}
+
+#[tokio::test]
+async fn ab_with_empty_prompt_is_refused() {
+    let mut app = test_app().await;
+    app.run_ab_test("   ");
+    assert!(app.overlay.is_none(), "no board without a prompt");
+    let (msg, _) = app.toast.clone().expect("toast");
+    assert!(msg.contains("usage"), "toast: {msg}");
 }
 
 #[tokio::test]
@@ -2270,4 +2721,47 @@ async fn esc_interrupts_during_initial_streaming() {
     }
     assert!(!app.is_busy(), "esc did not interrupt during streaming");
     assert_eq!(app.entries[1].phase, Phase::Interrupted);
+}
+
+#[tokio::test]
+async fn suggestion_strip_renders_above_the_composer() {
+    let mut app = test_app().await;
+    app.entries.push(Entry::new(EntryRole::User, "fix the bug"));
+    app.entries.push(assistant("done, here is the diff"));
+    app.suggestions = Some(SuggestionStrip {
+        items: vec!["run the tests".into(), "commit the fix".into()],
+        selected: 1,
+    });
+
+    let text = frame_text(&mut app, 80, 24);
+    assert_frame_well_formed(&text, 80, 24);
+    assert!(text.contains("next steps"), "strip header missing:\n{text}");
+    assert!(text.contains("run the tests"), "item missing:\n{text}");
+    assert!(text.contains("commit the fix"), "item missing:\n{text}");
+    assert!(text.contains("tab cycle"), "key hints missing:\n{text}");
+    // The composer box still renders below the strip.
+    assert!(text.contains('❯'), "composer prompt missing:\n{text}");
+}
+
+#[tokio::test]
+async fn no_suggestions_no_strip_rows() {
+    let mut app = test_app().await;
+    app.entries.push(Entry::new(EntryRole::User, "hello"));
+    app.entries.push(assistant("hi there"));
+
+    let plain = frame_text(&mut app, 80, 24);
+    assert_frame_well_formed(&plain, 80, 24);
+    assert!(
+        !plain.contains("next steps"),
+        "strip must stay hidden:\n{plain}"
+    );
+    assert!(!plain.contains("tab cycle"));
+
+    app.suggestions = Some(SuggestionStrip {
+        items: vec!["one".into()],
+        selected: 0,
+    });
+    let with = frame_text(&mut app, 80, 24);
+    assert!(with.contains("next steps"));
+    assert!(with.contains("one"));
 }
