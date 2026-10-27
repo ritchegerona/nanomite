@@ -40,6 +40,7 @@ never listed as released.
   only matched `Tab` + SHIFT, which real keyboards never produce (the UI
   test passed because it synthesized the event). BackTab is now the
   binding; `Tab` + SHIFT still works for modifier-reporting terminals.
+  Verified working in live use (2026-10-27).
 
 ## [0.5.0] — 2026-10-27
 
