@@ -479,7 +479,8 @@ pub fn tool_schemas() -> Vec<Tool> {
                 "properties": {
                     "command": { "type": "string", "description": "Shell command line, e.g. cargo test --quiet" },
                     "cwd": { "type": "string", "description": "Workspace-relative working directory (defaults to the workspace root)" },
-                    "timeout_ms": { "type": "integer", "description": "Hard cap in milliseconds (max 120000, default 60000)" }
+                    "timeout_ms": { "type": "integer", "description": "Hard cap in milliseconds (max 120000, default 60000)" },
+                    "sudo_password": { "type": "string", "description": "Optional sudo password for commands requiring elevation. If provided, command runs via sudo -S with password piped to stdin. Never logged or stored." }
                 },
                 "required": ["command"],
                 "additionalProperties": false

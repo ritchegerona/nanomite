@@ -225,6 +225,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 panels::overlay_rect(area, OverlayKind::Improve, panels::improve_row_count(app));
             panels::improve(frame, rect, app);
         }
+        Some(Overlay::SudoPassword(_)) => {
+            let rect = panels::overlay_rect(
+                area,
+                OverlayKind::SudoPassword,
+                panels::sudo_password_row_count(app),
+            );
+            panels::sudo_password(frame, rect, app);
+        }
         None => {}
     }
 

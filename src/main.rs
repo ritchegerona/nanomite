@@ -122,15 +122,20 @@ fn run_control(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // OSC 52 needs no suspension: the sequence is consumed by the terminal,
     // not painted, so the alternate screen and raw mode stay exactly as they
-    // were.
+    // were. Sudo results likewise: they only append a transcript entry.
     if let Control::Copy(text) = control {
         return write_clipboard(&text);
+    }
+    if let Control::SudoResult(text) = &control {
+        app.on_sudo_result(text.clone());
+        return Ok(());
     }
 
     let (target, seed) = match &control {
         // Handled above; kept explicit so a new control variant cannot fall
         // through to the editor path by accident.
         Control::Copy(_) => return Ok(()),
+        Control::SudoResult(_) => return Ok(()),
         Control::EditComposer(text) => {
             let path =
                 std::env::temp_dir().join(format!("nanomite-prompt-{}.md", std::process::id()));
@@ -153,6 +158,7 @@ fn run_control(
 
     match control {
         Control::Copy(_) => {}
+        Control::SudoResult(_) => {}
         Control::EditComposer(_) => {
             let text = std::fs::read_to_string(&target).unwrap_or_default();
             let _ = std::fs::remove_file(&target);

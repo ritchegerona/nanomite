@@ -449,6 +449,7 @@ pub enum OverlayKind {
     Board,
     Memory,
     Improve,
+    SudoPassword,
 }
 
 impl Overlay {
@@ -463,6 +464,7 @@ impl Overlay {
             Overlay::Board(_) => OverlayKind::Board,
             Overlay::Memory(_) => OverlayKind::Memory,
             Overlay::Improve(_) => OverlayKind::Improve,
+            Overlay::SudoPassword(_) => OverlayKind::SudoPassword,
         }
     }
 }
@@ -479,6 +481,8 @@ pub enum Overlay {
     /// `/improve`: pending self-edit proposals, with a second-level review view
     /// (`enter`) where the user approves (`a`) or rejects (`r`).
     Improve(ImproveState),
+    /// Modal for entering sudo password when a command requires elevation.
+    SudoPassword(SudoPasswordState),
 }
 
 /// One staged proposal as the `/improve` list shows it.
@@ -527,6 +531,36 @@ pub struct ImproveState {
     pub status: Option<ImproveStatus>,
     /// True until the first listing lands, so the view can say "loading".
     pub loading: bool,
+}
+
+/// State for the sudo password input overlay.
+#[derive(Debug, Clone)]
+pub struct SudoPasswordState {
+    /// The command that requires sudo.
+    pub command: String,
+    /// The working directory for the command.
+    pub cwd: Option<String>,
+    /// The timeout in milliseconds.
+    pub timeout_ms: Option<u64>,
+    /// The password being typed (masked in UI).
+    pub password: String,
+    /// Whether the password submission is in progress.
+    pub submitting: bool,
+    /// Error message if the previous attempt failed.
+    pub error: Option<String>,
+}
+
+impl Default for SudoPasswordState {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            cwd: None,
+            timeout_ms: None,
+            password: String::new(),
+            submitting: false,
+            error: None,
+        }
+    }
 }
 
 /// The diff of one proposal, already bounded and split into renderable lines.
@@ -615,6 +649,8 @@ pub enum Control {
     EditFile(std::path::PathBuf),
     /// Write `text` to the terminal clipboard with an OSC 52 sequence.
     Copy(String),
+    /// A sudo-elevated command finished; append its output to the transcript.
+    SudoResult(String),
 }
 
 enum ModelsResult {
@@ -1203,6 +1239,16 @@ impl App {
                 }
             }
             AgentEvent::ToolEnd { name, detail, ok } => {
+                // Capture the sudo-failure check before `name`/`detail` move into ToolRow.
+                // The exec layer fails fast with "sudo: password required" / "su: password
+                // required" when a command needs elevation but has no password, so the
+                // modal can open instead of the command hanging on /dev/tty.
+                let is_sudo_failure = name == "run_command" && detail.contains("password required");
+                let sudo_failure_detail = if is_sudo_failure {
+                    Some(detail.clone())
+                } else {
+                    None
+                };
                 if let Some(entry) = self.entries.get_mut(index) {
                     if let Some(row) = entry
                         .tools
@@ -1237,6 +1283,10 @@ impl App {
                         });
                     }
                     entry.touch();
+                }
+                // When run_command fails on a sudo prompt, offer the password modal.
+                if let Some(failure_detail) = sudo_failure_detail {
+                    self.open_sudo_password(&failure_detail);
                 }
             }
             AgentEvent::Finished {
@@ -1449,6 +1499,121 @@ impl App {
             Command::Prev => self.prev_turn(),
             Command::Next => self.next_turn(),
         }
+        self.mark_dirty();
+    }
+
+    /// Opens the sudo password modal for a command that failed on elevation.
+    /// Extracts the command line from the failure detail when possible.
+    pub fn open_sudo_password(&mut self, failure_detail: &str) {
+        // Don't stack the modal if one is already open.
+        if matches!(self.overlay, Some(Overlay::SudoPassword(_))) {
+            return;
+        }
+        // Recover the original command from the last run_command tool row: the
+        // preview field carries the command line (bounded), the detail field
+        // carries "<command> - exit N". Prefer the preview, fall back to the
+        // detail, and finally to the failure text itself.
+        let row = self
+            .entries
+            .iter()
+            .rev()
+            .flat_map(|e| e.tools.iter().rev())
+            .find(|r| r.name == "run_command");
+        let command = row
+            .and_then(|r| {
+                r.preview
+                    .clone()
+                    .filter(|p| !p.trim().is_empty())
+                    .or_else(|| Some(r.detail.clone()))
+            })
+            .unwrap_or_else(|| failure_detail.to_string());
+        self.overlay = Some(Overlay::SudoPassword(SudoPasswordState {
+            command,
+            cwd: None,
+            timeout_ms: None,
+            password: String::new(),
+            submitting: false,
+            error: None,
+        }));
+        self.mark_dirty();
+    }
+
+    /// Executes a command with sudo using the provided password.
+    /// Opens a sudo password overlay if password is empty, otherwise runs directly.
+    pub fn execute_sudo_command(
+        &mut self,
+        command: String,
+        cwd: Option<String>,
+        timeout_ms: Option<u64>,
+        password: String,
+    ) {
+        if password.trim().is_empty() {
+            // Re-open the sudo password overlay
+            self.overlay = Some(Overlay::SudoPassword(SudoPasswordState {
+                command: command.clone(),
+                cwd: cwd.clone(),
+                timeout_ms,
+                password: String::new(),
+                submitting: false,
+                error: Some("Password cannot be empty".to_string()),
+            }));
+            self.mark_dirty();
+            return;
+        }
+
+        let cwd_path = cwd.unwrap_or_else(|| self.cwd.to_string_lossy().to_string());
+        let control_tx = self.control_tx.clone();
+
+        self.toast("running with sudo - output follows in the transcript");
+        self.mark_dirty();
+
+        // Run on the blocking pool: sudo -S reads the password from stdin,
+        // the command itself never touches the terminal.
+        let fut = async move {
+            let outcome = tokio::task::spawn_blocking(move || {
+                let exec_tools = crate::tools::exec_tools::ExecTools::new(cwd_path);
+                let args = crate::tools::exec_tools::RunCommandArgs {
+                    command,
+                    cwd: None,
+                    timeout_ms,
+                    sudo_password: Some(password),
+                };
+                exec_tools.run_command(args)
+            })
+            .await;
+
+            let text = match outcome {
+                Ok(Ok(result)) => {
+                    let status = if result.exit_code == 0 {
+                        "succeeded".to_string()
+                    } else {
+                        format!("failed (exit {})", result.exit_code)
+                    };
+                    if result.stdout.is_empty() && result.stderr.is_empty() {
+                        format!("[sudo] command {status}.")
+                    } else {
+                        format!(
+                            "[sudo] command {status}:\n\nstdout:\n{}\n\nstderr:\n{}",
+                            result.stdout, result.stderr
+                        )
+                    }
+                }
+                Ok(Err(e)) => format!("[sudo] command could not run: {e}"),
+                Err(e) => format!("[sudo] background task failed: {e}"),
+            };
+            if let Some(tx) = control_tx {
+                let _ = tx.send(Control::SudoResult(text));
+            }
+        };
+        self.handle.spawn(fut);
+    }
+
+    /// Appends a finished sudo-command result to the transcript. Runs on the UI
+    /// thread via the Control channel, so it never races an active model turn.
+    pub fn on_sudo_result(&mut self, text: String) {
+        let mut entry = Entry::new(EntryRole::Assistant, text);
+        entry.phase = Phase::Done;
+        self.entries.push(entry);
         self.mark_dirty();
     }
 
@@ -3508,6 +3673,41 @@ impl App {
                 let len = self.provider_menu_rows(state.filter.value()).len();
                 state.cursor = state.cursor.min(len.saturating_sub(1));
                 self.overlay = Some(Overlay::Providers(state));
+                self.mark_dirty();
+            }
+            Overlay::SudoPassword(mut state) => {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.close_overlay();
+                        return;
+                    }
+                    KeyCode::Enter => {
+                        if state.password.trim().is_empty() {
+                            state.error = Some("Password cannot be empty".to_string());
+                        } else {
+                            state.submitting = true;
+                            state.error = None;
+                            let command = state.command.clone();
+                            let cwd = state.cwd.clone();
+                            let timeout_ms = state.timeout_ms;
+                            let password = state.password.clone();
+                            drop(state);
+                            self.overlay = None;
+                            self.execute_sudo_command(command, cwd, timeout_ms, password);
+                            return;
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        state.password.pop();
+                        state.error = None;
+                    }
+                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        state.password.push(c);
+                        state.error = None;
+                    }
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::SudoPassword(state));
                 self.mark_dirty();
             }
         }

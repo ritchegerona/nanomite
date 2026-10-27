@@ -3,15 +3,15 @@ use super::text;
 use super::theme::{glyph, Theme};
 use crate::app::{
     Action, App, BoardState, ImproveLevel, ImproveReview, ImproveState, Overlay, OverlayKind,
-    PickerItem, PickerValue, CONNECT_FIELDS, IMPROVE_DETAIL_LINES,
+    PickerItem, PickerValue, SudoPasswordState, CONNECT_FIELDS, IMPROVE_DETAIL_LINES,
 };
 use crate::commands::Command;
 use crate::config::model_context_limit;
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -1653,6 +1653,7 @@ pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
         OverlayKind::Board => (84, 40),
         OverlayKind::Memory => (76, 40),
         OverlayKind::Improve => (80, 34),
+        OverlayKind::SudoPassword => (60, 12),
     };
     let width = (area.width * w_pct / 100).clamp(40.min(area.width), 100.min(area.width));
     let height = (content_rows + 2).clamp(7.min(area.height), max_h.min(area.height));
@@ -1662,4 +1663,79 @@ pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
         width,
         height,
     }
+}
+
+// ---------------------------------------------------------------------------
+// /sudo — sudo password input overlay
+// ---------------------------------------------------------------------------
+
+/// Rows for the sudo password overlay.
+pub fn sudo_password_row_count(_app: &App) -> u16 {
+    10
+}
+
+/// Modal for entering sudo password when a command requires elevation.
+pub fn sudo_password(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+    let Some(Overlay::SudoPassword(ref state)) = app.overlay else {
+        return;
+    };
+
+    let block = Block::default()
+        .title(" sudo password required ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border()));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "Command: ",
+                Style::default()
+                    .fg(theme.text())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(&state.command, Style::default().fg(theme.text())),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "Password: ",
+                Style::default()
+                    .fg(theme.text())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "•".repeat(state.password.len()),
+                Style::default().fg(theme.accent()),
+            ),
+        ]),
+        Line::from(""),
+    ];
+
+    let mut all_lines = lines;
+    if let Some(err) = &state.error {
+        all_lines.push(Line::from(""));
+        all_lines.push(Line::from(Span::styled(
+            format!("Error: {err}"),
+            Style::default().fg(theme.danger()),
+        )));
+    }
+    if state.submitting {
+        all_lines.push(Line::from(""));
+        all_lines.push(Line::from(Span::styled(
+            "Executing with sudo...".to_string(),
+            Style::default().fg(theme.accent()),
+        )));
+    }
+
+    let paragraph = Paragraph::new(all_lines).alignment(Alignment::Left);
+    frame.render_widget(paragraph, inner);
+
+    // Show cursor at password position
+    let password_x = inner.x + 10 + state.password.len() as u16;
+    let password_y = inner.y + 2;
+    frame.set_cursor_position((password_x, password_y));
 }

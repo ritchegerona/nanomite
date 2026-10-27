@@ -95,6 +95,7 @@ async fn tool_set_exec_operations() {
             command: "echo hello".into(),
             cwd: None,
             timeout_ms: Some(5000),
+            sudo_password: None,
         })
         .unwrap();
     assert_eq!(result.exit_code, 0);
