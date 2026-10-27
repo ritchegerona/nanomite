@@ -1284,29 +1284,36 @@ async fn shift_tab_cycles_all_four_modes() {
     // Default is build.
     assert_eq!(app.cfg.tool_policy, ToolPolicy::Build);
 
-    // Shift+Tab: build -> hacker -> plan -> coder -> build.
+    // Real terminals send Shift+Tab as backtab (CSI Z) with NO shift
+    // modifier - crossterm reports KeyCode::BackTab. That is the press that
+    // must actually fire on a keyboard.
     press(
         &mut app,
-        ratatui::crossterm::event::KeyCode::Tab,
-        ratatui::crossterm::event::KeyModifiers::SHIFT,
+        ratatui::crossterm::event::KeyCode::BackTab,
+        ratatui::crossterm::event::KeyModifiers::NONE,
     );
     assert_eq!(app.cfg.tool_policy, ToolPolicy::Hacker);
+
+    // Terminals with modifier reporting (Kitty protocol) send Tab + SHIFT.
     press(
         &mut app,
         ratatui::crossterm::event::KeyCode::Tab,
         ratatui::crossterm::event::KeyModifiers::SHIFT,
     );
     assert_eq!(app.cfg.tool_policy, ToolPolicy::Plan);
+
+    // And the rest of the cycle via the real-terminal BackTab press:
+    // plan -> coder -> build, wrapping to the start.
     press(
         &mut app,
-        ratatui::crossterm::event::KeyCode::Tab,
-        ratatui::crossterm::event::KeyModifiers::SHIFT,
+        ratatui::crossterm::event::KeyCode::BackTab,
+        ratatui::crossterm::event::KeyModifiers::NONE,
     );
     assert_eq!(app.cfg.tool_policy, ToolPolicy::Coder);
     press(
         &mut app,
-        ratatui::crossterm::event::KeyCode::Tab,
-        ratatui::crossterm::event::KeyModifiers::SHIFT,
+        ratatui::crossterm::event::KeyCode::BackTab,
+        ratatui::crossterm::event::KeyModifiers::NONE,
     );
     assert_eq!(app.cfg.tool_policy, ToolPolicy::Build);
 

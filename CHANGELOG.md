@@ -34,6 +34,12 @@ never listed as released.
 - Footer render cache did not include the tool mode in its key, so a mode
   switch could keep rendering the previous mode's footer until something
   else invalidated it. The key now carries the active mode.
+- **Shift+Tab did not switch modes in real terminals**: terminals send
+  Shift+Tab as the xterm backtab sequence (CSI Z), which crossterm reports
+  as `KeyCode::BackTab` without a shift modifier - the previous binding
+  only matched `Tab` + SHIFT, which real keyboards never produce (the UI
+  test passed because it synthesized the event). BackTab is now the
+  binding; `Tab` + SHIFT still works for modifier-reporting terminals.
 
 ## [0.5.0] — 2026-10-27
 

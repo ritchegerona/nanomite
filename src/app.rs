@@ -3573,8 +3573,17 @@ impl App {
             KeyCode::Char('>') => self.quote_last_assistant(),
 
             // Shift+Tab cycles the tool mode: plan -> coder -> build -> hacker.
-            // Plain Tab stays reserved for ghost-text acceptance; overlays keep
-            // their own Shift+Tab navigation.
+            // Terminals send Shift+Tab as the xterm backtab sequence (CSI Z),
+            // which crossterm reports as KeyCode::BackTab WITHOUT the shift
+            // modifier - so BackTab is the binding that actually fires on real
+            // keyboards. `Tab` + SHIFT is kept for terminals/protocols that do
+            // report the modifier (e.g. the Kitty keyboard protocol). Plain Tab
+            // stays reserved for ghost-text acceptance; overlays keep their own
+            // Shift+Tab navigation.
+            KeyCode::BackTab => {
+                self.cycle_tool_policy();
+                return;
+            }
             KeyCode::Tab if shift => {
                 self.cycle_tool_policy();
                 return;
