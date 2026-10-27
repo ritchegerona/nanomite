@@ -484,6 +484,29 @@ pub fn rows(layout: &Layout) -> u16 {
 }
 
 /// Returns `(first_visible_row, x, y)` for the text cursor.
+/// Title spans for the composer block: workspace path plus the active tool
+/// mode in its dedicated font colour (non-default modes only). The colour
+/// code applies to the mode's text and nothing else.
+fn mode_title_spans(app: &App) -> Vec<Span<'static>> {
+    use crate::agent::policy::ToolPolicy;
+    let theme = &app.theme;
+    let mut spans = vec![Span::styled(
+        format!(" {} ", text::display_path(&app.cwd, 40)),
+        theme.faint_style(),
+    )];
+    let (mode_label, mode_color) = match app.cfg.tool_policy {
+        ToolPolicy::Plan => ("plan", theme.mode_plan()),
+        ToolPolicy::Coder => ("coder", theme.mode_coder()),
+        ToolPolicy::Build => return spans,
+        ToolPolicy::Hacker => ("hacker", theme.mode_hacker()),
+    };
+    spans.push(Span::styled(
+        format!("{} {} ", glyph::DOT, mode_label),
+        Style::default().fg(mode_color),
+    ));
+    spans
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -509,13 +532,7 @@ pub fn render(
             glyph::DOT
         )
     };
-    let path_w = (area.width as usize).saturating_sub(6).max(8);
     let hint_w = (area.width as usize).saturating_sub(4);
-    // The composer border carries the tool mode's dedicated colour whenever a
-    // non-default mode is active: plan amber, coder blue, hacker red. Build
-    // (the default) keeps the theme's own border colours, so the border only
-    // speaks up when a mode restricts or supercharges the agent.
-    let mode_border = app.mode_border_color();
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(if focused {
@@ -523,18 +540,17 @@ pub fn render(
                 // While the turn runs the composer reads as "still yours": the
                 // soft accent draws the eye without the alarm of border_focus.
                 theme.accent_soft()
-            } else if let Some(mode_color) = mode_border {
-                mode_color
             } else {
                 theme.border_focus()
             }
         } else {
             theme.border()
         }))
-        .title(Line::from(Span::styled(
-            format!(" {} ", text::display_path(&app.cwd, path_w)),
-            theme.faint_style(),
-        )))
+        // The active mode rides in the title as pure font colour - the mode's
+        // name in its dedicated colour, next to the workspace path. The border
+        // itself stays theme-standard: the colour code applies to the mode's
+        // text and nothing else.
+        .title(Line::from(mode_title_spans(app)))
         .title_bottom(
             Line::from(Span::styled(
                 text::truncate(&hint_text, hint_w),

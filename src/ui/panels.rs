@@ -251,15 +251,10 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 
     // Mode badge: every mode shows its dedicated colour - amber plan, blue
-    // coder, green build, red hacker - so the active mode is unmistakable.
+    // coder, green build, red hacker - applied to the mode's font only.
     let (badge, badge_color) = mode_badge(app);
     left.push(Span::styled("  ", theme.faint_style()));
-    left.push(Span::styled(
-        badge,
-        Style::default()
-            .fg(badge_color)
-            .add_modifier(Modifier::BOLD),
-    ));
+    left.push(Span::styled(badge, Style::default().fg(badge_color)));
     if app.cfg.tool_policy == crate::agent::policy::ToolPolicy::Plan {
         if let Some(latest) = app.latest_plan_name() {
             left.push(Span::styled(format!(" · {latest}"), theme.faint_style()));

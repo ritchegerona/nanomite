@@ -38,7 +38,9 @@ composer border while typing:
 | hacker | **red** - unrestricted, danger |
 
 Each theme tunes the exact RGB values to its ground (a palette test keeps the
-four from collapsing); 16-colour terminals get the universal codes above.
+four from collapsing); 16-colour terminals get the universal codes above. The
+colour applies to the mode's **font only** - the footer badge text and the
+mode name in the composer title - borders and other chrome stay theme-standard.
 
 ## Cycling
 

@@ -12,11 +12,11 @@ never listed as released.
   colours - amber plan, blue coder, green build, red hacker - with universal
   16-colour fallbacks (yellow/cyan/green/red) for non-truecolor terminals.
   Each theme tunes the exact values to its ground; a palette-distinctness
-  test keeps all four from collapsing. The colours show in the footer badge
-  (every mode now badges, including green build) and tint the composer
-  border while a non-default mode is active, so the mode is always visible
-  while typing. Status: implemented and tested (per-mode colour assertions
-  drawn from the real frame buffer).
+  test keeps all four from collapsing. The colour code applies to the
+  mode's font only: the footer badge text and the mode name in the
+  composer title (next to the workspace path) render in the mode colour;
+  borders and other chrome stay theme-standard. Status: implemented and
+  tested (per-mode colour assertions drawn from the real frame buffer).
 - **Four tool modes on Shift+Tab**: plan → coder → build → hacker → plan,
   each granting strictly more power (Plan ⊂ Coder ⊂ Build ⊂ Hacker).
   - **plan**: reads + plan tools only (mutations refused with `create_plan`
