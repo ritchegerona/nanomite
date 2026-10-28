@@ -15,6 +15,11 @@ type Backend = CrosstermBackend<Stdout>;
 #[tokio::main]
 async fn main() -> io::Result<()> {
     install_panic_hook();
+    log_event(&format!(
+        "start v{} (pid {})",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id()
+    ));
 
     // `nanomite --worktree <branch>`: create/reuse a managed git worktree and
     // open the agent inside it, so parallel agents never share a checkout.
@@ -350,6 +355,22 @@ fn resume(terminal: &mut Terminal<Backend>) -> io::Result<()> {
     Ok(())
 }
 
+/// Appends one line to the crash log. Best-effort: called from the panic
+/// hook (which must never panic itself) and once at startup as a start
+/// marker, so a log always reads start -> ... -> panic for a crash, and a
+/// death with a start but no panic line means a clean-exit path or a kill.
+fn log_event(message: &str) {
+    use std::io::Write;
+    let log = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("nanomite")
+        .join("crash.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+        let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let _ = writeln!(file, "[{stamp}] {message}");
+    }
+}
+
 /// A panic must never leave the terminal in raw mode inside the alternate screen.
 /// The release profile uses `panic = "abort"`, so recovery has to happen here.
 fn install_panic_hook() {
@@ -365,6 +386,29 @@ fn install_panic_hook() {
             ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
         );
         let _ = ratatui::crossterm::terminal::disable_raw_mode();
+
+        // Crash forensics: persist everything worth knowing before abort
+        // takes the process. Best-effort — never panic inside this hook.
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let message = if let Some(m) = info.payload().downcast_ref::<&str>() {
+            (*m).to_string()
+        } else if let Some(m) = info.payload().downcast_ref::<String>() {
+            m.clone()
+        } else {
+            "unknown panic payload".to_string()
+        };
+        let thread = std::thread::current().name().unwrap_or("<unnamed>").to_string();
+        let backtrace = std::backtrace::Backtrace::force_capture().to_string();
+        log_event(&format!(
+            "PANIC thread={thread} at {location}\n{message}\nbacktrace:\n{backtrace}"
+        ));
+        eprintln!(
+            "nanomite crashed: {message} ({location})\nfull report: ~/.local/share/nanomite/crash.log"
+        );
+
         previous(info);
     }));
 }
