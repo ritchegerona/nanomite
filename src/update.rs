@@ -140,10 +140,14 @@ fn timeout_runner(
     mut cmd: std::process::Command,
     timeout: Duration,
 ) -> io::Result<std::process::Output> {
-    use std::os::unix::process::CommandExt;
-    // Detach from our process group so a timeout kill does not take the
-    // caller down with it.
-    cmd.process_group(0);
+    // Unix: detach from our process group so a timeout kill does not take the
+    // caller down with it. (Windows: the child stays in the console group;
+    // the direct-process kill in the timeout path still applies.)
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     let mut child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

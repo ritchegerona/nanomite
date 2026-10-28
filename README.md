@@ -119,32 +119,86 @@ pages, and `nanomite update` to move to the next version in one command.
 
 ## Installation
 
-### From source
+Prerequisites on every platform: [Rust](https://rustup.rs) 1.75+ (via
+`rustup`), which bundles its own toolchain bootstrap.
 
-Requires Rust 1.75+ (install via [rustup](https://rustup.rs)):
+### Linux
 
 ```bash
 git clone https://github.com/ritchegerona/nanomite.git
 cd nanomite
 cargo build --release
-```
-
-The binary lands in `target/release/nanomite`. Put it on your `PATH`:
-
-```bash
 ln -sf "$(pwd)/target/release/nanomite" ~/.local/bin/nanomite
 ```
 
-### From a release
+`~/.local/bin` is usually on your `PATH` already — if not, add
+`export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
 
-Grab the prebuilt binary from the
-[releases page](https://github.com/ritchegerona/nanomite/releases), unpack it
-and move it somewhere on your `PATH`:
+### macOS
 
 ```bash
-tar xzf nanomite-v0.1.0-x86_64-linux.tar.gz
-install -m 755 nanomite ~/.local/bin/nanomite
+git clone https://github.com/ritchegerona/nanomite.git
+cd nanomite
+cargo build --release
+mkdir -p /usr/local/bin 2>/dev/null
+ln -sf "$(pwd)/target/release/nanomite" /usr/local/bin/nanomite
 ```
+
+On Apple Silicon the user-writable prefix is `/opt/homebrew/bin` instead:
+
+```bash
+ln -sf "$(pwd)/target/release/nanomite" /opt/homebrew/bin/nanomite
+```
+
+The first build may prompt for the Xcode Command Line Tools — accept it.
+
+### Windows (PowerShell)
+
+```powershell
+git clone https://github.com/ritchegerona/nanomite.git
+cd nanomite
+cargo build --release
+```
+
+Then add the binary to your `PATH` for the current user:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "Path",
+  [Environment]::GetEnvironmentVariable("Path", "User") + ";" + "$PWD\target\release",
+  "User")
+```
+
+Notes for Windows:
+
+- Run inside **Windows Terminal** — it has full virtual-terminal support;
+  legacy `cmd.exe` consoles render the UI poorly
+- The `browse` tools work out of the box: Microsoft Edge is preinstalled and
+  is auto-discovered
+- Windows support is functional but newer than Linux — report anything that
+  misbehaves
+
+### The shortcut for every platform
+
+With Rust installed, one command builds and installs the binary into
+`~/.cargo/bin` (or `%USERPROFILE%\.cargo\bin` on Windows) — no symlink
+step:
+
+```bash
+cargo install --git https://github.com/ritchegerona/nanomite
+```
+
+### Keeping up to date
+
+For git-checkout installs:
+
+```bash
+nanomite update
+```
+
+fetches origin, fast-forwards the checkout, rebuilds the release binary in
+place, and reports the new version. The running process keeps the old build
+until you restart. A newer release tag on origin is reported as well.
 
 ### First run
 
@@ -162,6 +216,16 @@ The app starts with no key configured and tells you what to do next:
 
 > **No key? Keyless endpoints still work.** Ollama and LM Studio run locally
 > with zero setup — point `/provider` at them and go.
+
+### Browser tools
+
+The `browse` and `browse_screenshot` tools need a Chromium-family browser:
+
+- **Linux**: install `google-chrome` or `chromium`
+- **macOS**: install Chrome, Brave or Edge (Safari is not supported)
+- **Windows**: nothing to do — Edge is preinstalled and auto-discovered
+
+Or point `NANOMITE_BROWSER` at any Chromium-family binary.
 
 ### Updating
 
