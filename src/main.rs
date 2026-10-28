@@ -38,6 +38,9 @@ async fn main() -> io::Result<()> {
                     return Ok(());
                 }
             },
+            "update" => {
+                return nanomite::update::run();
+            }
             "--version" | "-V" => {
                 println!("nanomite {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
@@ -47,7 +50,7 @@ async fn main() -> io::Result<()> {
                     "nanomite {} - terminal coding agent",
                     env!("CARGO_PKG_VERSION")
                 );
-                println!("usage: nanomite [--worktree <branch>]");
+                println!("usage: nanomite [--worktree <branch>] [update]");
                 return Ok(());
             }
             other => {

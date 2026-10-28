@@ -20,6 +20,7 @@ pub mod memory;
 pub mod session;
 pub mod tools;
 pub mod ui;
+pub mod update;
 pub mod worktree;
 
 /// Test support utilities - re-exports internal test types for integration tests.

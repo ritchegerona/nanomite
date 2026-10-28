@@ -16,14 +16,14 @@ siblings are not part of the project:
   `memory.json`, `test.*`, `smoke.txt` — scratch, ignore.
 - `nanomite/target/` is ~5.5 GB; build scratch copies before full rebuilds.
 
-## Build state — READ FIRST (verified 2026-10-27, follow-up suggestions landed)
+## Build state — READ FIRST (verified 2026-10-28, v0.7.0 wave: opencode-style UI, reasoning streaming, browser tools, time machine, /team, density, ETA, update command)
 
 `cargo check` (lib + bins) **passes clean**. `cargo test --lib` is
-**454 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
+**506 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
 -- -D warnings` is clean. `cargo fmt --check` is clean.
 
 `tests/production_attach.rs` is a separate **integration** target (1 test, green)
-that exercises the real startup attach path. It is *not* part of the 454; quote
+that exercises the real startup attach path. It is *not* part of the 506; quote
 the two numbers separately.
 
 `benches/perf.rs` is a stable, zero-dep harness (median of 7 batches) and
@@ -34,15 +34,15 @@ compiles on the stable toolchain: `cargo bench` works, and `cargo test`
 
 ```bash
 cargo check            # clean
-cargo test --lib       # 454 passed, 0 failed, ~5 s, fully offline (verified)
-cargo test --test production_attach   # 1 passed (integration; not in the 454)
+cargo test --lib       # 506 passed, 0 failed, ~5 s, fully offline (verified)
+cargo test --test production_attach   # 1 passed (integration; not in the 506)
 cargo bench            # benches/perf.rs harness; bench profile inherits release
 cargo clippy --all-targets -- -D warnings   # clean (no clippy.toml / CI in the repo)
 cargo fmt
 ```
 
 Do not "fix" the suite by deleting tests or by claiming a count from
-README/docs without running it. Test counts in README (454) are correct for
+README/docs without running it. Test counts in README (506) are correct for
 `--lib`; the integration target is counted separately.
 
 Release profile sets `panic = "abort"`, so the panic hook in `src/main.rs:141`
@@ -104,7 +104,7 @@ broken.
   `read_document` is the agent-facing door to it.
 - `tests/production_attach.rs` — integration target proving the real production
   attach path (memory + config) works from the outside. 1 test, separate from
-  the 454.
+  the 506.
 
 ## Invariants (do not break)
 

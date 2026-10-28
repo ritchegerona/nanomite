@@ -4,6 +4,78 @@ Every entry describes a verified change. Labels: implemented+tested,
 implemented unverified, planned, experimental, unsupported. Planned work is
 never listed as released.
 
+## [0.7.0] — 2026-10-28
+
+### Added
+
+- **opencode-style chat UI**: mode-coloured prompt blocks, icon-free tool
+  rows with per-tool durations, message footer (mode · model · duration ·
+  tok/s), reasoning-model thoughts streamed as a dim live tail and collapsed
+  to a marker, syntax-highlighted code boxes with click-to-copy, grid
+  tables, professional emoji-free rendering (✅ → ✓, pictographs stripped).
+- **Transcript selection**: char-exact mouse selection that survives wide
+  glyphs, emoji clusters, blank rows and streaming; click-to-copy code
+  blocks; click-to-expand error blocks.
+- **Performance**: engine events drained every loop pass (text updates
+  11 -> 30 fps), input-exempt frames, render benchmarks in
+  `benches/perf.rs` (24KB rebuild 1.34 ms/frame, full 300-entry frame
+  0.12 ms).
+- **Tool display levels**: hidden / rows / full cycled with `/details` or
+  `ctrl+o`; hidden is the default.
+- **Compact density**: `/density` or `ctrl+g` - single-row prompts,
+  borderless composer, tighter gaps; persisted as `compact` in config.
+- **Estimated time to finish**: per-model turn history drives a blended
+  token/step ETA on the status strip and a `~Xm each` estimate on the
+  prompt-queue strip; honestly hidden until two turns of history exist.
+- **`nanomite update`**: fetches origin, fast-forwards the checkout,
+  rebuilds the release binary in place, reports the new version; step
+  timeouts, ff-only safety, semver tag comparison.
+- **Browser automation**: `browse` (headless Chromium, JavaScript rendered,
+  readable text via the shared HTML pipeline) and `browse_screenshot`
+  (full-page PNG into the workspace); browser discovered from
+  `NANOMITE_BROWSER` or the PATH; fake-browser offline tests.
+- **`/team <goal>`**: three analysts in parallel - dispatcher splits the
+  goal, agents run concurrently (low effort, 240 s timeout, 4k-char
+  reports), synthesis merges the reports; esc cancels at checkpoints.
+- **Workspace time machine**: `/revert [n]` restores files to their
+  pre-turn state from per-turn snapshots taken before every
+  write_file/edit_file.
+- **Transcript search**: `ctrl+f` with live highlight, cluster-exact
+  matching, per-row jump navigation.
+- **Focus mode**: `f2` shows only the latest exchange.
+- **`/doctor`**: bounded pre-flight diagnostics (provider, key, memory,
+  sessions, workspace writability, tool toggles).
+- **`/hud`**: perf overlay - frame time, peak, draw count, transcript stats.
+- **Alt+letter chords for all 38 menu commands**, advertised in the palette
+  hints; completeness test fails the build if a command loses its binding.
+- **Crash forensics**: panic hook writes timestamp, message, location,
+  thread and backtrace to `~/.local/share/nanomite/crash.log` and restores
+  the terminal so the message is visible before abort.
+
+### Fixed
+
+- **Search tool aborted on files with invalid UTF-8**: line boundaries were
+  computed on raw bytes and used to slice the lossy-decoded text; offsets
+  drifted after the first invalid byte and the slice landed mid-replacement
+  character (panic = abort took the whole app down). Boundaries now come
+  from the decoded string.
+- **Mouse selection accuracy**: pointer mapping subtracted a hard-coded
+  gutter (4-char lag), painted columns used char counts instead of display
+  widths, and blank-row anchors started the highlight above the pointer.
+  One width source of truth now covers paint, pointer and text extraction.
+- **Highlight delay**: throttled frames waited on the 90 ms tick when the
+  pointer stopped.
+- **Reasoning-model waits looked like hangs**: `reasoning_content` deltas
+  were ignored entirely.
+- **Fork test wrote sessions into the real user directory** (save gated on
+  the control channel now).
+- **Streaming cursor** no longer eats the last character of the reply.
+
+### Status
+
+506 lib tests + 1 integration, clippy clean (deny warnings), fmt clean.
+Verified on the NVIDIA NIM endpoint (0.44 s TTFB, 2.2 s turns, 30.8 tok/s).
+
 ## [0.6.0] — 2026-10-27
 
 ### Added
