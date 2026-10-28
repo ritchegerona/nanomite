@@ -131,6 +131,12 @@ async fn main() -> io::Result<()> {
     let mut user_input = false;
 
     let result = loop {
+        // Drain queued engine events (streaming deltas, tool calls, board
+        // messages) every pass. Pumping only on the 90ms animation tick
+        // capped visible text updates at ~11 fps, which read as a slow
+        // response; try_recv-based draining is free when the queue is empty.
+        app.pump_engine();
+
         if app.needs_redraw() {
             let now = std::time::Instant::now();
             if user_input || !app.is_busy() || now.duration_since(last_draw) >= STREAM_FRAME {
@@ -191,7 +197,6 @@ async fn main() -> io::Result<()> {
                 continue;
             }
             _ = ticker.tick() => {
-                app.pump_engine();
                 app.on_tick();
             }
             else => break Ok(()),

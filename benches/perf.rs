@@ -228,6 +228,100 @@ fn main() {
         });
     }
 
+    // -- transcript render paths (the streaming hot path) --------------------
+    // A realistic long assistant reply: headings, lists, code fences, tables.
+    let md = {
+        let mut m = String::from("## Summary\n\nThe migration is complete:\n\n");
+        for i in 0..420 {
+            m.push_str(&format!(
+                "- item {i} with `inline code` and **bold** text\n"
+            ));
+            if i % 8 == 0 {
+                m.push_str(&format!("\n### Section {i}\n\n"));
+                m.push_str(&format!(
+                    "```rust\nfn step_{i}(&self) -> u32 {{ {i} }}\n```\n\n"
+                ));
+            }
+            if i % 16 == 0 {
+                m.push_str("| name | value |\n|---|---|\n| a | 1 |\n| b | 2 |\n\n");
+            }
+        }
+        m
+    };
+    println!("markdown doc: {} bytes\n", md.len());
+    {
+        use nanomite::ui::theme::{Theme, ThemeId};
+        let md = md.clone();
+        bench("markdown/24KB parse+wrap", 20, move || {
+            let theme = Theme::with_id(ThemeId::Umbrella);
+            let st = nanomite::ui::text::MarkdownStyles::new(&theme);
+            let (lines, blocks) = nanomite::ui::text::markdown_with_blocks(&md, 84, &st);
+            assert!(lines.len() > 100);
+            assert!(blocks.len() >= 8, "tables + fences: {}", blocks.len());
+        });
+    }
+    {
+        // The streaming rebuild: a cache-invalidated entry build - what every
+        // delta frame pays while a long response streams in.
+        use nanomite::app::{Entry, EntryRole, ToolDisplay};
+        use nanomite::ui::theme::{Theme, ThemeId};
+        let mut entry = Entry::new(EntryRole::Assistant, md.clone());
+        let theme = Theme::with_id(ThemeId::Umbrella);
+        let mode = (theme.accent(), "Build");
+        bench("entry.rebuild 24KB (streaming frame)", 20, move || {
+            entry.touch();
+            let rendered = entry.ensure_rendered(&theme, 91, ToolDisplay::Hidden, mode);
+            assert!(rendered.lines.len() > 100);
+        });
+    }
+    {
+        // Steady-state paint: cache hits only, the cost of every idle frame.
+        use nanomite::app::{Entry, EntryRole, ToolDisplay};
+        use nanomite::ui::theme::{Theme, ThemeId};
+        let mut entry = Entry::new(EntryRole::Assistant, md.clone());
+        let theme = Theme::with_id(ThemeId::Umbrella);
+        let mode = (theme.accent(), "Build");
+        let rendered = entry.ensure_rendered(&theme, 91, ToolDisplay::Hidden, mode);
+        let lines = rendered.lines.clone();
+        bench("paint/clone 250 visible lines", 200, move || {
+            let cloned: Vec<_> = lines.clone();
+            assert!(!cloned.is_empty());
+        });
+    }
+
+    // -- full frame render (real App, memory disabled) -----------------------
+    std::env::set_var("NANOMITE_MEMORY", "0");
+    let mut frame_cfg = nanomite::config::Config::from_env();
+    frame_cfg.apply_preset("openai");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("bench runtime");
+    let handle = runtime.handle().clone();
+    let mut frame_app = nanomite::app::App::new(frame_cfg, handle).expect("bench app");
+    {
+        use nanomite::app::{Entry, EntryRole};
+        for i in 0..150 {
+            frame_app.entries.push(Entry::new(
+                EntryRole::User,
+                format!("question {i} about module {i} and its streaming behaviour"),
+            ));
+            frame_app.entries.push(Entry::new(
+                EntryRole::Assistant,
+                format!("answer {i}: the module streams in chunks and renders fine."),
+            ));
+        }
+    }
+    {
+        let backend = ratatui::backend::TestBackend::new(92, 24);
+        let mut terminal = ratatui::Terminal::new(backend).expect("bench terminal");
+        bench("frame.render 300 entries (steady)", 20, move || {
+            terminal
+                .draw(|frame| nanomite::ui::render(frame, &mut frame_app))
+                .expect("draw");
+        });
+    }
+
     // -- fingerprint ---------------------------------------------------------
     let fp_body = rust_source(7).repeat(30); // ~1 MB
     let fp_p = ext.write("fp.txt", &fp_body);
