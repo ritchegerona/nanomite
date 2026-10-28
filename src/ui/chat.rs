@@ -5,9 +5,7 @@ use crate::app::{Entry, EntryRole, Phase, Rendered, ToolDisplay};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{
-    Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
-};
+use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation};
 use ratatui::Frame;
 
 /// Width of the left gutter reserved for role badges.
@@ -451,97 +449,71 @@ fn apply_selection_highlight(
     Line::from(out)
 }
 
-/// Centred placeholder shown until the first prompt is sent.
+/// Centred welcome screen: a clean title, the session facts, and the
+/// prompt hint. No box, no logo art — just typography.
 fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &Theme) {
-    let card_w = (area.width as usize).saturating_sub(8).clamp(40, 60);
+    let width = (area.width as usize).saturating_sub(4).clamp(36, 56);
 
-    let logo = vec![
-        Line::from(vec![
-            Span::styled("    ▄▄▄▄▄▄▄ ", Style::default().fg(theme.accent())),
-            Span::styled("nanomite", theme.bold().fg(theme.strong())),
-        ]),
-        Line::from(vec![
-            Span::styled("   █ ▄▄▄ █ ", Style::default().fg(theme.accent())),
-            Span::styled("the microscopic agent", theme.faint_style()),
-        ]),
-        Line::from(Span::styled(
-            "    ▀▀▀▀▀▀▀ ",
-            Style::default().fg(theme.accent()),
-        )),
-    ];
+    let mut lines: Vec<Line> = Vec::new();
 
-    let mut rows: Vec<Line> = vec![
-        Line::from(vec![
-            Span::styled("  model     ", theme.faint_style()),
-            Span::styled(text::truncate(&app.model_label(), card_w - 12), theme.dim()),
-        ]),
-        Line::from(vec![
-            Span::styled("  provider  ", theme.faint_style()),
+    // Title: name + tagline on one line.
+    lines.push(Line::from(vec![
+        Span::styled("nanomite", theme.bold().fg(theme.accent())),
+        Span::styled("  the microscopic agent", theme.faint_style()),
+    ]));
+    lines.push(Line::default());
+
+    // Session facts.
+    let fact = |label: &str, value: String, lines: &mut Vec<Line>| {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {label:<11}"), theme.faint_style()),
             Span::styled(
-                text::truncate(&app.provider_label(), card_w - 12),
+                text::truncate(&value, width.saturating_sub(13)),
                 theme.dim(),
             ),
-        ]),
-        Line::from(vec![
-            Span::styled("  workspace ", theme.faint_style()),
-            Span::styled(text::display_path(&app.cwd, card_w - 12), theme.dim()),
-        ]),
-        Line::from(vec![
-            Span::styled("  tools     ", theme.faint_style()),
-            Span::styled("files · shell · ssh · web · memory", theme.dim()),
-        ]),
-    ];
-    // The resume card: what memory says the last work session was about.
-    if let Some(hint) = &app.resume_hint {
-        rows.push(Line::from(vec![
-            Span::styled("  resume    ", theme.faint_style()),
-            Span::styled(text::truncate(hint, card_w - 12), theme.dim()),
         ]));
+    };
+    fact("model", app.model_label(), &mut lines);
+    fact("provider", app.provider_label(), &mut lines);
+    fact(
+        "workspace",
+        text::display_path(&app.cwd, width.saturating_sub(13)),
+        &mut lines,
+    );
+    fact(
+        "tools",
+        "files · shell · ssh · web · browser · memory".into(),
+        &mut lines,
+    );
+    if let Some(hint) = &app.resume_hint {
+        fact("resume", hint.clone(), &mut lines);
     }
 
-    let lines: Vec<Line> = logo
-        .into_iter()
-        .chain(std::iter::once(Line::default()))
-        .chain(rows)
-        .chain(std::iter::once(Line::default()))
-        .chain(std::iter::once(Line::from(vec![Span::styled(
-            "  ❯ ask anything to begin  ",
-            theme.accent_style(),
-        )])))
-        .chain(std::iter::once(Line::from(vec![Span::styled(
-            "  /  commands  ·  ctrl+x  palette  ·  esc  interrupt",
-            theme.faint_style(),
-        )])))
-        .collect();
+    lines.push(Line::default());
+
+    // Prompt hint.
+    lines.push(Line::from(Span::styled(
+        "  ❯ ask anything to begin",
+        theme.accent_style(),
+    )));
+    lines.push(Line::from(Span::styled(
+        "    / commands  ·  ctrl+x palette  ·  esc interrupt",
+        theme.faint_style(),
+    )));
 
     let height = lines.len() as u16;
-    if area.height <= height {
+    if area.height <= height + 2 || area.width < width as u16 {
         return;
     }
-    let x = area.x + (area.width.saturating_sub(card_w as u16)) / 2;
+    let x = area.x + (area.width.saturating_sub(width as u16)) / 2;
     let y = area.y + (area.height - height) / 2;
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border_focus()))
-        .style(Style::default().bg(theme.panel_bg()));
-
     frame.render_widget(
-        block,
+        Paragraph::new(Text::from(lines)),
         Rect {
             x,
             y,
-            width: card_w as u16,
-            height,
-        },
-    );
-    frame.render_widget(
-        Paragraph::new(Text::from(lines)).style(Style::default().bg(theme.panel_bg())),
-        Rect {
-            x,
-            y,
-            width: card_w as u16,
+            width: width as u16,
             height,
         },
     );
@@ -592,7 +564,7 @@ fn status_line(
         let tokens = usage.completion_tokens.saturating_add(usage.prompt_tokens);
         if tokens > 0 {
             spans.push(Span::styled(
-                format!("  ▋ {} tok", text::format_tokens(tokens as u64)),
+                format!("  \u{258b} {} tok", text::format_tokens(tokens as u64)),
                 Style::default().fg(theme.accent_soft()),
             ));
         }

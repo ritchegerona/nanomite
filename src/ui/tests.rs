@@ -70,15 +70,24 @@ fn with_tool(name: &str, detail: &str, ok: bool) -> ToolRow {
 #[tokio::test]
 async fn renders_welcome_state() {
     let mut app = test_app().await;
+    app.resume_hint = Some("last time: the streaming audit · 3h ago".into());
     let text = frame_text(&mut app, 92, 24);
-    assert!(text.contains("nanomite"), "header missing:\n{text}");
+    println!("{text}");
+    assert!(text.contains("nanomite"), "title missing:\n{text}");
+    assert!(
+        text.contains("the microscopic agent"),
+        "tagline missing:\n{text}"
+    );
     assert!(
         text.contains("ask anything to begin"),
-        "welcome card missing:\n{text}"
+        "welcome hint missing:\n{text}"
     );
-    // Composer frame is visible and focused.
-    assert!(text.contains('❯'), "composer prompt missing:\n{text}");
-    assert!(text.contains("ctrl+x"), "composer hint missing:\n{text}");
+    assert!(text.contains("model"), "facts missing:\n{text}");
+    assert!(text.contains("resume"), "resume row missing:\n{text}");
+    assert!(
+        !text.contains("▄▄▄"),
+        "blocky logo art must be gone:\n{text}"
+    );
 }
 
 #[tokio::test]
