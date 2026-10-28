@@ -164,6 +164,9 @@ impl Usage {
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     Delta(String),
+    /// A reasoning model's thought token (`delta.reasoning_content`) -
+    /// streamed separately from the answer so the wait stays visible.
+    ReasoningDelta(String),
     ToolCall(ToolCall),
     Usage(Usage),
     Done,
@@ -196,6 +199,9 @@ pub trait AgentProvider: Send + Sync {
         while let Some(event) = stream.next().await {
             match event? {
                 StreamEvent::Delta(d) => content.push_str(&d),
+                // Reasoning thoughts are ephemeral display data; the
+                // aggregated completion only carries the final answer.
+                StreamEvent::ReasoningDelta(_) => {}
                 StreamEvent::ToolCall(c) => calls.push(c),
                 StreamEvent::Usage(u) => usage.add(&u),
                 StreamEvent::Done => break,

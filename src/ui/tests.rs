@@ -733,6 +733,37 @@ async fn preview_of_the_new_transcript_style() {
 }
 
 #[tokio::test]
+async fn reasoning_streams_as_a_tail_then_collapses() {
+    let mut app = test_app().await;
+    app.entries.push(Entry::new(EntryRole::User, "think hard"));
+    let mut entry = Entry::streaming();
+    entry.reasoning = "step one\nstep two\nstep three".into();
+    app.entries.push(entry);
+
+    // Streaming: the dim live tail shows the model's thoughts.
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("step three"), "live tail missing:\n{text}");
+    assert!(text.contains("step one"), "tail start missing:\n{text}");
+
+    // Done: collapses to one marker line; the answer renders after it.
+    if let Some(e) = app.entries.last_mut() {
+        e.phase = Phase::Done;
+        e.text = "the answer".into();
+        e.touch();
+    }
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        text.contains("Thought · 28 chars"),
+        "collapse marker missing:\n{text}"
+    );
+    assert!(text.contains("the answer"), "answer missing:\n{text}");
+    assert!(
+        !text.contains("step three"),
+        "reasoning body must collapse when done:\n{text}"
+    );
+}
+
+#[tokio::test]
 async fn mouse_selection_survives_emoji_lines() {
     use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 

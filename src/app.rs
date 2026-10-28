@@ -121,6 +121,10 @@ pub struct Entry {
     /// Model that produced this entry; the message footer shows it
     /// (`Build · model · 8.4s · 45.2 tok/s`), like opencode's footer.
     pub model: Option<String>,
+    /// A reasoning model's thought tokens (transient display data: streamed
+    /// as a dim tail while working, collapsed to one line when done; never
+    /// persisted with the session).
+    pub reasoning: String,
     /// Full error text starts collapsed to a couple of lines; a plain click
     /// on the entry expands it (opencode's error expansion).
     pub error_expanded: bool,
@@ -142,6 +146,7 @@ impl Entry {
             usage: None,
             steps: 0,
             model: None,
+            reasoning: String::new(),
             error_expanded: false,
             rev: 1,
             cache: None,
@@ -1397,6 +1402,14 @@ impl App {
                         elapsed: None,
                     });
                     entry.touch();
+                }
+            }
+            AgentEvent::ReasoningDelta(d) => {
+                if let Some(entry) = self.entries.get_mut(index) {
+                    if entry.reasoning.len() < 65_536 {
+                        entry.reasoning.push_str(&d);
+                        entry.touch();
+                    }
                 }
             }
             AgentEvent::Snapshot { path, previous } => {

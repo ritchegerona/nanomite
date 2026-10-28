@@ -63,6 +63,9 @@ pub enum AgentEvent {
         index: usize,
     },
     Delta(String),
+    /// Reasoning-model thought tokens (`reasoning_content`); displayed as a
+    /// dim live tail so a long reasoning phase never looks like a hang.
+    ReasoningDelta(String),
     ToolStart {
         name: String,
         detail: String,
@@ -452,6 +455,7 @@ impl AgentRuntime {
             };
 
             let mut content = String::new();
+            let mut reasoning = String::new();
             let mut accumulator = ToolCallAccumulator::default();
             let mut failure: Option<String> = None;
 
@@ -470,6 +474,14 @@ impl AgentRuntime {
                             if content.len() < self.config.max_message_chars {
                                 content.push_str(&d);
                                 if tx.send(AgentEvent::Delta(d)).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(StreamEvent::ReasoningDelta(d)) => {
+                            if reasoning.len() < self.config.max_message_chars {
+                                reasoning.push_str(&d);
+                                if tx.send(AgentEvent::ReasoningDelta(d)).is_err() {
                                     break;
                                 }
                             }

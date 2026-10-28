@@ -337,11 +337,21 @@ fn parse_event(block: &str) -> Option<Result<StreamEvent, DynError>> {
         return out.map(Ok);
     }
 
-    delta
+    // The answer text first; reasoning models (nemotron, deepseek-r1, …)
+    // stream their thoughts in a separate field, which surfaces as its own
+    // event so the wait stays visible in the transcript.
+    if let Some(s) = delta
         .and_then(|d| d.get("content"))
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(|s| Ok(StreamEvent::Delta(s.to_string())))
+    {
+        return Some(Ok(StreamEvent::Delta(s.to_string())));
+    }
+    delta
+        .and_then(|d| d.get("reasoning_content"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(|s| Ok(StreamEvent::ReasoningDelta(s.to_string())))
 }
 
 #[derive(Deserialize)]
@@ -721,4 +731,29 @@ pub fn system_prompt(workspace: &str) -> String {
          Prefer reading files before answering. Cite paths as `path:line`.\n\
          Keep answers short: no preamble, no restating the request."
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_content_deltas_surface_as_events() {
+        let block = r#"data: {"choices":[{"delta":{"reasoning_content":"thinking hard"}}]}"#;
+        let event = parse_event(block).expect("event").expect("ok");
+        assert!(
+            matches!(event, StreamEvent::ReasoningDelta(ref d) if d == "thinking hard"),
+            "wrong event"
+        );
+    }
+
+    #[test]
+    fn answer_content_wins_over_reasoning_in_one_delta() {
+        let block = r#"data: {"choices":[{"delta":{"content":"ans","reasoning_content":"th"}}]}"#;
+        let event = parse_event(block).expect("event").expect("ok");
+        assert!(
+            matches!(event, StreamEvent::Delta(ref d) if d == "ans"),
+            "wrong event"
+        );
+    }
 }

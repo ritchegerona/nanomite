@@ -792,6 +792,58 @@ impl Entry {
                 bar_row(&mut lines);
             }
             EntryRole::Assistant => {
+                let st = text::MarkdownStyles::new(theme);
+
+                // Reasoning models stream their thoughts in a separate
+                // channel. A dim live tail (last few lines) keeps a long
+                // reasoning phase visibly alive; once done it collapses to
+                // one marker line so it never floods the transcript.
+                if !self.reasoning.is_empty() {
+                    match self.phase {
+                        Phase::Streaming => {
+                            const TAIL: usize = 6;
+                            let all: Vec<&str> = self.reasoning.lines().collect();
+                            let skip = all.len().saturating_sub(TAIL);
+                            if skip > 0 {
+                                lines.push(Line::from(Span::styled(
+                                    format!(
+                                        "   {} {} earlier",
+                                        glyph::DOT,
+                                        text::plural(skip, "line")
+                                    ),
+                                    st.quote,
+                                )));
+                            }
+                            for raw in all.into_iter().skip(skip) {
+                                for wrapped in text::wrap_spans(
+                                    vec![Span::raw(raw.to_string())],
+                                    inner.saturating_sub(3).max(8),
+                                ) {
+                                    let mut spans = vec![Span::raw("   ".to_string())];
+                                    spans.extend(wrapped.spans);
+                                    for span in spans.iter_mut() {
+                                        span.style = span.style.patch(st.quote);
+                                    }
+                                    lines.push(Line::from(spans));
+                                }
+                            }
+                        }
+                        Phase::Done | Phase::Interrupted | Phase::Failed => {
+                            lines.push(Line::from(Span::styled(
+                                format!(
+                                    "   {} Thought · {}",
+                                    glyph::DOT,
+                                    text::plural(self.reasoning.chars().count(), "char")
+                                ),
+                                Style::default().fg(theme.faint()),
+                            )));
+                        }
+                    }
+                    if self.phase == Phase::Streaming {
+                        lines.push(Line::default());
+                    }
+                }
+
                 // opencode-style rows: everything indented three columns.
                 // Tool activity renders per the display level: hidden (just
                 // the response), rows only, or rows with preview bodies.
@@ -805,7 +857,6 @@ impl Entry {
                     }
                 }
 
-                let st = text::MarkdownStyles::new(theme);
                 if self.text.trim().is_empty() {
                     lines.push(Line::default());
                 } else {
