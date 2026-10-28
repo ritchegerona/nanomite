@@ -742,6 +742,65 @@ async fn mouse_selection_survives_emoji_lines() {
 }
 
 #[tokio::test]
+async fn wide_glyph_drag_paints_every_cell_of_the_glyphs() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::Terminal;
+
+    let mut app = test_app().await;
+    app.entries
+        .push(Entry::new(EntryRole::User, "日本語テスト"));
+    let _ = frame_text(&mut app, 92, 24);
+    let rect = app.view.cached_chat_rect().expect("chat rect cached");
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    };
+
+    // Row layout after the 2-cell `▌ ` prefix: 日 = cols 2-3, 本 = 4-5,
+    // 語 = 6-7, テ = 8-9. A drag from inside 日 to the start of テ must
+    // paint ALL six cells of 日本語 — the old char-count paint covered
+    // only three cells, ending mid-glyph.
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 3,
+        rect.y + 1,
+    ));
+    app.on_mouse(mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        rect.x + 8,
+        rect.y + 1,
+    ));
+
+    let sel = app.selection.as_ref().expect("selection active");
+    let text = app.get_selected_text(sel);
+    assert_eq!(text, "日本語", "cluster-exact selection: {text:?}");
+
+    let accent = app.theme.accent();
+    let mut terminal = Terminal::new(TestBackend::new(92, 24)).unwrap();
+    terminal.draw(|f| render(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let row = rect.y + 1;
+    for dx in 0..10 {
+        let c = &buffer[(rect.x + dx, row)];
+        println!("cell {dx}: symbol={:?} bg={:?}", c.symbol(), c.bg);
+    }
+    let highlighted: Vec<usize> = (0..buffer.area.width)
+        .filter(|x| buffer[(*x, row)].bg == accent)
+        .map(|x| usize::from(x - rect.x))
+        .collect();
+    // The buffer paints ONE cell per wide glyph; ratatui marks the follow-up
+    // cell as a diff Skip, and terminals draw the full glyph using the first
+    // cell's attributes — so the visible highlight covers 日 through 語.
+    assert_eq!(
+        highlighted,
+        vec![2, 4, 6],
+        "every selected glyph's base cell paints: {highlighted:?}"
+    );
+}
+
+#[tokio::test]
 async fn focus_mode_shows_only_the_latest_exchange() {
     let mut app = test_app().await;
     for i in 0..3 {

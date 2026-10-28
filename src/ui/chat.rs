@@ -361,75 +361,64 @@ fn apply_selection_highlight(
         return line;
     }
 
-    // Apply highlighting to spans within the column range
-    let mut new_spans = Vec::new();
-    let mut current_col = 0usize;
+    // Char range covered on this row: the anchor columns are CHAR indices
+    // (the mouse mapping snaps clicks to grapheme-cluster starts, so wide
+    // glyphs and emoji select whole). Rows between anchor and end are
+    // selected whole.
+    let char_start = if entry_idx == start_entry && body_row == start_row {
+        start_col
+    } else {
+        0
+    };
+    let char_end = if entry_idx == end_entry && body_row == end_row {
+        end_col
+    } else {
+        usize::MAX
+    };
+
+    // Walk the row's characters with one global counter and highlight the
+    // ones inside [char_start, char_end). Every selection unit in the app
+    // is a char index - the pointer mapping, the keyboard visual mode and
+    // the text extraction - so the painted cells land exactly under the
+    // pointer; ratatui carries the style across a wide glyph's continuation
+    // cell, keeping CJK and emoji blocks fully covered.
+    let highlight = Style::default().bg(theme.accent()).fg(theme.panel_bg());
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut plain = String::new();
+    let mut marked = String::new();
+    let mut idx = 0usize;
 
     for span in line.spans {
-        let span_len = span.content.chars().count();
-        let span_end = current_col + span_len;
-
-        let sel_start = if entry_idx == start_entry && body_row == start_row {
-            start_col
-        } else {
-            0
-        };
-        let sel_end = if entry_idx == end_entry && body_row == end_row {
-            end_col
-        } else {
-            usize::MAX
-        };
-
-        // Check if this span overlaps with selection
-        if span_end > sel_start && current_col < sel_end {
-            // Split into up to 3 parts: before, selected, after
-            let chars: Vec<char> = span.content.chars().collect();
-
-            // Before selection
-            if current_col < sel_start {
-                let before_end = (sel_start - current_col).min(chars.len());
-                if before_end > 0 {
-                    let before: String = chars[0..before_end].iter().collect();
-                    new_spans.push(Span::styled(before, span.style));
+        for ch in span.content.chars() {
+            if idx >= char_start && idx < char_end {
+                if !plain.is_empty() {
+                    out.push(Span::styled(std::mem::take(&mut plain), span.style));
                 }
-            }
-
-            // Selected portion
-            let sel_begin = sel_start.saturating_sub(current_col);
-            let sel_finish = if span_end > sel_end {
-                sel_end - current_col
+                marked.push(ch);
             } else {
-                span_len
-            };
-            let sel_finish = sel_finish.min(chars.len());
-
-            if sel_begin < sel_finish && sel_begin < chars.len() {
-                let selected: String = chars[sel_begin..sel_finish].iter().collect();
-                let highlight_style = span.style.bg(theme.accent()).fg(theme.panel_bg());
-                new_spans.push(Span::styled(selected, highlight_style));
-            }
-
-            // After selection
-            if span_end > sel_end && sel_end < usize::MAX && sel_end > current_col {
-                let after_start = sel_end - current_col;
-                if after_start < chars.len() {
-                    let after: String = chars[after_start..].iter().collect();
-                    new_spans.push(Span::styled(after, span.style));
+                if !marked.is_empty() {
+                    out.push(Span::styled(
+                        std::mem::take(&mut marked),
+                        span.style.patch(highlight),
+                    ));
                 }
+                plain.push(ch);
             }
-
-            // If no overlap, keep as-is
-            if span_end <= sel_start || current_col >= sel_end {
-                new_spans.push(span);
-            }
-        } else {
-            new_spans.push(span);
+            idx += 1;
         }
-
-        current_col = span_end;
+        // Flush at span boundaries so the original per-span styles survive.
+        if !plain.is_empty() {
+            out.push(Span::styled(std::mem::take(&mut plain), span.style));
+        }
+        if !marked.is_empty() {
+            out.push(Span::styled(
+                std::mem::take(&mut marked),
+                span.style.patch(highlight),
+            ));
+        }
     }
 
-    Line::from(new_spans)
+    Line::from(out)
 }
 
 /// Centred placeholder shown until the first prompt is sent.
