@@ -3811,6 +3811,8 @@ impl App {
         let full = self.stored_session();
         let control = self.control_tx.clone();
         self.handle.spawn_blocking(move || {
+            // A control channel means a real session; test builds have none
+            // and must never write into the user's session store.
             if let Some(control) = control {
                 let _ = control.send(Control::ForkSaved {
                     path: session::save(&full).ok(),
