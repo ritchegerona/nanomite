@@ -71,7 +71,7 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
         glyph::BLOCK_LIGHT.repeat(meter_cells - filled)
     );
 
-    let mut ctx_display = format!(" {} {meter} {ctx_str}/{limit_str} · {pct}% ", glyph::BRAIN);
+    let mut ctx_display = format!(" {meter} {ctx_str}/{limit_str} · {pct}% ");
     // Burn-rate projection: at the session's average tokens per turn, how
     // many more turns fit before the window fills? Shown once the meter is
     // three quarters full so `/compact` lands before the truncation point.
@@ -186,10 +186,10 @@ fn mode_badge(app: &App) -> (String, Color) {
     use crate::agent::policy::ToolPolicy;
     let theme = &app.theme;
     match app.cfg.tool_policy {
-        ToolPolicy::Plan => (format!("{} plan mode", glyph::HOURGLASS), theme.mode_plan()),
-        ToolPolicy::Coder => (format!("{} coder mode", glyph::CHECK), theme.mode_coder()),
-        ToolPolicy::Build => (format!("{} build mode", glyph::GUTTER), theme.mode_build()),
-        ToolPolicy::Hacker => (format!("{} hacker mode", glyph::BRAIN), theme.mode_hacker()),
+        ToolPolicy::Plan => ("plan mode".into(), theme.mode_plan()),
+        ToolPolicy::Coder => ("coder mode".into(), theme.mode_coder()),
+        ToolPolicy::Build => ("build mode".into(), theme.mode_build()),
+        ToolPolicy::Hacker => ("hacker mode".into(), theme.mode_hacker()),
     }
 }
 

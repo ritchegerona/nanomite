@@ -89,8 +89,8 @@ pub fn render_prompt_queue(frame: &mut Frame, area: Rect, app: &crate::app::App)
         .unwrap_or_default();
     let mut lines = vec![Line::from(Span::styled(
         format!(
-            "  {} queued for after this turn{}",
-            glyph::HOURGLASS,
+            "  {} queued{}",
+            queue_len,
             if each.is_empty() {
                 String::new()
             } else {

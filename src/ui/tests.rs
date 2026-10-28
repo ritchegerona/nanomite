@@ -2339,10 +2339,7 @@ async fn queue_strip_renders_queued_messages_quietly() {
 
     let text = frame_text(&mut app, 100, 24);
     // The strip names the event and shows what is waiting.
-    assert!(
-        text.contains("queued for after this turn"),
-        "queue header missing:\n{text}"
-    );
+    assert!(text.contains("queued"), "queue header missing:\n{text}");
     assert!(
         text.contains("second message"),
         "queued message preview missing:\n{text}"
