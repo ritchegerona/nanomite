@@ -151,7 +151,13 @@ impl View {
     }
 
     /// Cumulative virtual row offsets for every entry plus a trailing sentinel.
-    pub fn rebuild_offsets(&mut self, entries: &[crate::app::Entry], width: usize, view_h: u16) {
+    pub fn rebuild_offsets(
+        &mut self,
+        entries: &[crate::app::Entry],
+        width: usize,
+        view_h: u16,
+        compact: bool,
+    ) {
         let view_h_eff = view_h;
         if !self.offsets_dirty
             && self.offset_width == width as u16
@@ -165,7 +171,7 @@ impl View {
         let mut acc = 0u16;
         self.offsets.push(acc);
         for entry in entries {
-            acc = acc.saturating_add(entry.status_rows() + entry.height() + 1);
+            acc = acc.saturating_add(entry.slot(compact));
             self.offsets.push(acc);
         }
         self.content_height = acc;
@@ -207,7 +213,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // value in sync so Up/Down behave identically at any terminal size.
     app.composer_layout_width = inner_width;
     let prompt_layout = app.composer.layout(inner_width, theme.base());
-    let composer_rows = composer::rows(&prompt_layout);
+    let composer_rows = if app.compact {
+        composer::rows_compact(&prompt_layout)
+    } else {
+        composer::rows(&prompt_layout)
+    };
 
     let queue_rows = if app.prompt_queue_len() > 0 {
         app.prompt_queue_len() as u16 + 1
@@ -234,7 +244,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     panels::footer(frame, rects.footer, app);
 
-    let cursor = composer::render(frame, rects.composer, app, &prompt_layout);
+    let cursor = composer::render(frame, rects.composer, app, &prompt_layout, app.compact);
 
     match app.overlay.clone() {
         Some(Overlay::Picker(picker)) => {

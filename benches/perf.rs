@@ -270,7 +270,7 @@ fn main() {
         let mode = (theme.accent(), "Build");
         bench("entry.rebuild 24KB (streaming frame)", 20, move || {
             entry.touch();
-            let rendered = entry.ensure_rendered(&theme, 91, ToolDisplay::Hidden, mode);
+            let rendered = entry.ensure_rendered(&theme, 91, ToolDisplay::Hidden, false, mode);
             assert!(rendered.lines.len() > 100);
         });
     }
@@ -281,7 +281,7 @@ fn main() {
         let mut entry = Entry::new(EntryRole::Assistant, md.clone());
         let theme = Theme::with_id(ThemeId::Umbrella);
         let mode = (theme.accent(), "Build");
-        let rendered = entry.ensure_rendered(&theme, 91, ToolDisplay::Hidden, mode);
+        let rendered = entry.ensure_rendered(&theme, 91, ToolDisplay::Hidden, false, mode);
         let lines = rendered.lines.clone();
         bench("paint/clone 250 visible lines", 200, move || {
             let cloned: Vec<_> = lines.clone();

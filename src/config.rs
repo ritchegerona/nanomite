@@ -509,6 +509,9 @@ pub struct Config {
     /// side-call asks the model for 3 short next-step prompts, shown as a
     /// strip above the composer. Persisted; `NANOMITE_SUGGESTIONS` overrides.
     pub followup_suggestions: bool,
+    /// Compact transcript density: single-row prompts, no message footers,
+    /// tighter gaps. Persisted; `/density` or `ctrl+g` toggles it live.
+    pub compact: bool,
     pub workspace: PathBuf,
     /// Shown once in the transcript when something needs the user's attention.
     pub notice: Option<String>,
@@ -536,6 +539,7 @@ struct Stored {
     prompt_file: Option<String>,
     reduced_motion: Option<bool>,
     suggestions: Option<bool>,
+    compact: Option<bool>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
@@ -565,6 +569,7 @@ fn parse_stored(text: &str) -> Stored {
             "prompt_file" => stored.prompt_file = Some(value),
             "reduced_motion" => stored.reduced_motion = value.parse().ok(),
             "suggestions" => stored.suggestions = value.parse().ok(),
+            "compact" => stored.compact = value.parse().ok(),
             _ => {}
         }
     }
@@ -653,6 +658,7 @@ fn stored_text(cfg: &Config) -> String {
     }
     lines.push(format!("reduced_motion = {}", cfg.reduced_motion));
     lines.push(format!("suggestions = {}", cfg.followup_suggestions));
+    lines.push(format!("compact = {}", cfg.compact));
     lines.push(String::new());
     lines.join("\n")
 }
@@ -916,6 +922,11 @@ impl Config {
                 }
             } else {
                 stored.suggestions.unwrap_or(true)
+            },
+            compact: if use_env {
+                matches!(first_env_one("NANOMITE_COMPACT"), Some(v) if matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            } else {
+                stored.compact.unwrap_or(false)
             },
         }
     }

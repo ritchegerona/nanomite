@@ -66,6 +66,8 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
   of messages, markdown rendering with syntax-highlighted code blocks and
   grid tables, live tool-call rows, unified diffs in edit previews, context
   meter with a burn-rate projection, CJK/wide-character-safe composer
+- **Compact density** — `/density` or `ctrl+g` switches to single-row prompts,
+  borderless composer and tighter gaps (persisted); auto saves vertical space
 - **Perf hud** — `/hud` overlays frame time, peak, draw count and transcript
   stats into the footer, so "snappy" is a measurement, not a vibe
 - **File-state time machine** — every `write_file`/`edit_file` snapshots the
@@ -350,6 +352,7 @@ to `LIKE` search, reporting the index in use honestly.
 | click a failed message | Expand the full error |
 | `f1` | This keysheet |
 | `f2` | Focus mode — only the latest exchange |
+| `ctrl+g` | Toggle compact density |
 
 While the agent works you can keep typing — the next prompt is queued and
 sends automatically when the turn finishes.
@@ -390,6 +393,7 @@ features · appearance · output.
 | `/details` | | Cycle tool display: hidden · rows · full (`ctrl+o`) |
 | `/thinking` | | Toggle the thinking indicator |
 | `/focus` | | Show only the latest exchange (`f2`) |
+| `/density` | | Toggle compact density (cozy ↔ compact, `ctrl+g`) |
 | `/themes` | `/theme` | Switch colour theme (persisted) |
 | `/hud` | | Toggle the performance hud (frame time, transcript stats) |
 | `/export` | | Write the session to markdown |

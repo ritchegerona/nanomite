@@ -89,6 +89,8 @@ pub struct Rendered {
     pub width: u16,
     /// Tool-display level this cache was built for.
     pub tool_display: ToolDisplay,
+    /// Density the cache was built for.
+    pub compact: bool,
     /// Tool-mode colour the cache was built for: the user-message bar and the
     /// assistant footer follow the active mode, like opencode's per-agent
     /// colouring.
@@ -617,6 +619,15 @@ struct UndoStep {
     delta: usize,
 }
 
+/// One finished turn's footprint, feeding the ETA estimator.
+#[derive(Debug, Clone)]
+pub struct TurnStat {
+    pub model: String,
+    pub duration: Duration,
+    pub completion_tokens: u32,
+    pub steps: usize,
+}
+
 /// How tool activity renders in the transcript (`/details`, `ctrl+o`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ToolDisplay {
@@ -864,6 +875,10 @@ pub struct App {
     pub hud: bool,
     /// Tool activity display level (`/details`, `ctrl+o`).
     pub tool_display: ToolDisplay,
+    /// Compact transcript density (`/density`, `ctrl+g`).
+    pub compact: bool,
+    /// Footprints of the last finished turns (per-model ETA source).
+    turn_stats: VecDeque<TurnStat>,
     /// Time machine: pre-change file contents per turn, newest last.
     pub(crate) snapshots: Vec<TurnSnapshot>,
     /// Monotonic turn serial, incremented per prompt.
@@ -990,6 +1005,8 @@ impl App {
             scrollbar_drag: false,
             hud: false,
             tool_display: ToolDisplay::Hidden,
+            compact: cfg.compact,
+            turn_stats: VecDeque::new(),
             snapshots: Vec::new(),
             turn_serial: 0,
             focus: false,
@@ -1475,6 +1492,7 @@ impl App {
                 elapsed,
             } => {
                 self.usage.add(&usage);
+                let mut stat: Option<TurnStat> = None;
                 if let Some(entry) = self.entries.get_mut(index) {
                     if entry.text.trim().is_empty() {
                         entry.text = text.clone();
@@ -1483,6 +1501,26 @@ impl App {
                     entry.elapsed = Some(elapsed);
                     entry.usage = Some(usage.clone());
                     entry.touch();
+                    // Feed the ETA estimator: only real turns (>= 1s) count.
+                    let duration = entry.elapsed.unwrap_or_default();
+                    if duration.as_secs() >= 1 {
+                        stat = Some(TurnStat {
+                            model: entry.model.clone().unwrap_or_else(|| "unknown".into()),
+                            duration,
+                            completion_tokens: entry
+                                .usage
+                                .as_ref()
+                                .map(|u| u.completion_tokens)
+                                .unwrap_or(0),
+                            steps: entry.steps,
+                        });
+                    }
+                }
+                if let Some(stat) = stat {
+                    self.turn_stats.push_back(stat);
+                    while self.turn_stats.len() > 8 {
+                        self.turn_stats.pop_front();
+                    }
                 }
                 self.history.push(ChatMessage::assistant(text));
                 self.note_history_appended();
@@ -1816,6 +1854,7 @@ impl App {
             Command::Compact => self.run_compact(),
             Command::Details => self.toggle_tool_details(),
             Command::Hud => self.toggle_hud(),
+            Command::Density => self.toggle_compact(),
             Command::Revert => self.revert_turn(parse_turn_arg(args)),
             Command::Fork => self.fork_session_at(parse_turn_arg(args).unwrap_or(0)),
             Command::History => self.search_history(args),
@@ -4302,6 +4341,91 @@ impl App {
         self.mark_dirty();
     }
 
+    /// ETA for the running turn, blended from the model's recent history:
+    /// a token-rate signal and a step-progress signal, averaged and clamped.
+    /// `None` while there is not enough finished-turn history (honest by
+    /// default - no fabricated countdowns on the first turns).
+    pub fn turn_eta(&self) -> Option<Duration> {
+        let entry = self.entries.get(self.active?)?;
+        let elapsed = entry.elapsed.unwrap_or_else(|| entry.started.elapsed());
+        if elapsed.as_secs() < 3 {
+            return None;
+        }
+        let model = entry.model.clone()?;
+        let recent: Vec<&TurnStat> = self
+            .turn_stats
+            .iter()
+            .filter(|s| s.model == model)
+            .collect();
+        if recent.len() < 2 {
+            return None;
+        }
+        let n = recent.len() as f64;
+        let avg_tokens = recent
+            .iter()
+            .map(|s| s.completion_tokens as f64)
+            .sum::<f64>()
+            / n;
+        let avg_steps = recent.iter().map(|s| s.steps as f64).sum::<f64>() / n;
+        let elapsed_s = elapsed.as_secs_f64();
+        let done = entry
+            .usage
+            .as_ref()
+            .map(|u| u.completion_tokens)
+            .unwrap_or(0) as f64;
+        let tok_s = if elapsed_s > 0.5 {
+            done / elapsed_s
+        } else {
+            0.0
+        };
+        let mut signals: Vec<f64> = Vec::new();
+        if avg_tokens > 50.0 && tok_s > 1.0 {
+            let eta = (avg_tokens - done) / tok_s;
+            if eta > 0.0 {
+                signals.push(eta);
+            }
+        }
+        if entry.steps > 0 && avg_steps > entry.steps as f64 {
+            let eta = elapsed_s * (avg_steps / entry.steps as f64 - 1.0);
+            if eta > 0.0 {
+                signals.push(eta);
+            }
+        }
+        if signals.is_empty() {
+            return None;
+        }
+        let eta = signals.iter().sum::<f64>() / signals.len() as f64;
+        Some(Duration::from_secs_f64(eta.clamp(5.0, 900.0)))
+    }
+
+    /// Average finished-turn duration for the current model - the per-queued
+    /// prompt estimate for the queue strip. `None` without history.
+    pub fn avg_turn_duration(&self) -> Option<Duration> {
+        let model = self.entries.get(self.active?)?.model.clone()?;
+        let recent: Vec<&TurnStat> = self
+            .turn_stats
+            .iter()
+            .filter(|s| s.model == model)
+            .collect();
+        if recent.len() < 2 {
+            return None;
+        }
+        let n = recent.len() as f64;
+        Some(Duration::from_secs_f64(
+            recent.iter().map(|s| s.duration.as_secs_f64()).sum::<f64>() / n,
+        ))
+    }
+
+    /// Toggles compact transcript density (`/density`, `ctrl+g`).
+    pub fn toggle_compact(&mut self) {
+        self.compact = !self.compact;
+        self.toast(format!(
+            "density: {}",
+            if self.compact { "compact" } else { "cozy" }
+        ));
+        self.invalidate_transcript();
+    }
+
     /// Cycles the tool display level (`/details`, `ctrl+o`):
     /// hidden -> rows -> full -> hidden.
     pub fn toggle_tool_details(&mut self) {
@@ -4542,6 +4666,7 @@ impl App {
             }
             KeyCode::F(1) => self.open_help(),
             KeyCode::F(2) => self.toggle_focus(),
+            KeyCode::Char('g') if ctrl => self.toggle_compact(),
             // `/` opens the command menu; with text on the composer it types literally.
             KeyCode::Char('/') if self.composer.is_empty() => self.open_palette(),
             KeyCode::Char('x') if ctrl => self.open_palette(),
@@ -5351,7 +5476,7 @@ impl App {
         // Walk through entries to find which one contains this virtual row
         let mut current_row = 0usize;
         for (idx, entry) in self.entries.iter().enumerate() {
-            let entry_h = entry.status_rows() as usize + entry.height() as usize + 1; // +1 for separator
+            let entry_h = entry.slot(self.compact) as usize;
             if virtual_row < current_row + entry_h {
                 // Found the entry
                 let local_row = virtual_row - current_row;

@@ -77,8 +77,26 @@ pub fn render_prompt_queue(frame: &mut Frame, area: Rect, app: &crate::app::App)
     // bright colours. It reads like a margin note listing what is waiting,
     // so the user knows the messages are held and will run after the current
     // turn - without competing with the transcript for attention.
+    let each = app
+        .avg_turn_duration()
+        .map(|d| {
+            if d.as_secs() < 60 {
+                format!("~{}s each", d.as_secs())
+            } else {
+                format!("~{}m each", d.as_secs() / 60)
+            }
+        })
+        .unwrap_or_default();
     let mut lines = vec![Line::from(Span::styled(
-        format!("  {} queued for after this turn", glyph::HOURGLASS),
+        format!(
+            "  {} queued for after this turn{}",
+            glyph::HOURGLASS,
+            if each.is_empty() {
+                String::new()
+            } else {
+                format!(" · {each}")
+            }
+        ),
         theme.faint_style(),
     ))];
 
@@ -135,6 +153,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     app.focus_base = focus_base;
 
     let busy = app.is_busy();
+    let turn_eta = app.turn_eta();
+    let compact = app.compact;
     let crate::app::App { entries, view, .. } = app;
     let entries = &mut entries[focus_base..];
     // Reserve space for scrollbar
@@ -150,7 +170,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
         .filter(|q| !q.trim().is_empty());
 
     // 1. Offsets come from cached heights; entries outside the window use a cheap estimate.
-    view.rebuild_offsets(entries, width, view_h);
+    view.rebuild_offsets(entries, width, view_h, compact);
     let (mut top, window_bottom) = view.window();
 
     // Warm the render cache, then rebuild offsets so scrolling uses exact heights.
@@ -160,11 +180,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     for idx in first..entries.len() {
         let (start, end) = (view.offsets[idx], view.offsets[idx + 1]);
         if entries.len() <= WARM_LIMIT || (end > top + pad && start < window_bottom + pad) {
-            entries[idx].ensure_rendered(&theme, width, tool_display, mode);
+            entries[idx].ensure_rendered(&theme, width, tool_display, compact, mode);
         }
     }
     view.mark_dirty();
-    view.rebuild_offsets(entries, width, view_h);
+    view.rebuild_offsets(entries, width, view_h, compact);
     (top, _) = view.window();
     let bottom = top + view_h;
 
@@ -186,9 +206,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
         }
 
         let status_rows = entries[idx].status_rows() as usize;
-        let status = status_line(&entries[idx], &theme, view.spinner).filter(|_| show_thinking);
+        let status =
+            status_line(&entries[idx], &theme, view.spinner, turn_eta).filter(|_| show_thinking);
         let entry = &mut entries[idx];
-        let cached = entry.ensure_rendered(&theme, width, tool_display, mode);
+        let cached = entry.ensure_rendered(&theme, width, tool_display, compact, mode);
 
         let batch_start = row;
         let mut batch: Vec<Line<'static>> = Vec::with_capacity((bottom - row) as usize);
@@ -293,6 +314,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
 /// Overlay the search-match style on every case-insensitive occurrence of
 /// `query` in a rendered line, preserving each span's original style. Lines
 /// without a hit are returned untouched, so most rows cost one `contains`.
+/// Finalizes an early-returned build path: wraps lines and blocks into the
+/// tuple the entry cache stores.
+fn finish_build(
+    lines: Vec<Line<'static>>,
+    code_blocks: Vec<(u16, u16, String)>,
+) -> (Vec<Line<'static>>, Vec<(u16, u16, String)>) {
+    (lines, code_blocks)
+}
+
 fn apply_search_highlight(line: Line<'static>, query: &str, theme: &Theme) -> Line<'static> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
@@ -521,7 +551,12 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
 /// same three-column indent as the rest of the assistant content. Terminal
 /// states render in the body itself: failures as `Error: …`, interrupts on
 /// the message footer.
-fn status_line(entry: &Entry, theme: &Theme, spinner: usize) -> Option<Line<'static>> {
+fn status_line(
+    entry: &Entry,
+    theme: &Theme,
+    spinner: usize,
+    eta: Option<std::time::Duration>,
+) -> Option<Line<'static>> {
     if entry.phase != Phase::Streaming {
         return None;
     }
@@ -562,23 +597,52 @@ fn status_line(entry: &Entry, theme: &Theme, spinner: usize) -> Option<Line<'sta
             ));
         }
     }
+    // ETA from the model's recent history, once it has enough turns.
+    if let Some(eta) = eta {
+        let secs = eta.as_secs();
+        let label = if secs < 60 {
+            format!("~{secs}s")
+        } else {
+            format!("~{}m", secs / 60)
+        };
+        spans.push(Span::styled(
+            format!("  · {label} left"),
+            Style::default().fg(theme.accent_soft()),
+        ));
+    }
     Some(Line::from(spans))
 }
 
 impl Entry {
     /// Height of the cached body (excludes the dynamic status line and trailing gap).
-    pub fn height(&self) -> u16 {
+    pub fn height(&self, compact: bool) -> u16 {
         self.cache
             .as_ref()
             .map(|c| c.height)
-            .unwrap_or_else(|| self.estimated_height(80))
+            .unwrap_or_else(|| self.estimated_height(80, compact))
+    }
+
+    /// Total virtual rows this entry owns: body + live status + the trailing
+    /// separator gap (which compact density folds away).
+    pub fn slot(&self, compact: bool) -> u16 {
+        self.status_rows() + self.height(compact) + u16::from(!compact)
     }
 
     /// Cheap pre-render height so offscreen entries never touch markdown.
-    pub fn estimated_height(&self, width: usize) -> u16 {
+    pub fn estimated_height(&self, width: usize, compact: bool) -> u16 {
         let inner = width.saturating_sub(GUTTER).max(8);
         match self.role {
             EntryRole::User => {
+                if compact {
+                    // One `❯ text` row plus wrapped continuations.
+                    let wrap_w = inner.saturating_sub(2).max(8);
+                    let mut rows = 1usize;
+                    for line in self.text.lines() {
+                        let w = text::width(line) as u16;
+                        rows += w.div_ceil(wrap_w as u16).max(1) as usize;
+                    }
+                    return rows.max(1) as u16;
+                }
                 let wrap_w = inner.saturating_sub(2).max(8);
                 let mut rows = 2usize; // raised-block padding above and below
                 for line in self.text.lines() {
@@ -589,7 +653,7 @@ impl Entry {
             }
             _ => {
                 let text_w = inner.saturating_sub(3).max(8);
-                let mut h = self.tools.len() as u16 + 1; // message footer
+                let mut h = self.tools.len() as u16 + if compact { 0 } else { 1 }; // message footer
                 if !self.tools.is_empty() {
                     h += 1; // gap between tool rows and the body
                 }
@@ -622,22 +686,25 @@ impl Entry {
         theme: &Theme,
         width: usize,
         display: ToolDisplay,
+        compact: bool,
         mode: (Color, &'static str),
     ) -> &Rendered {
         let stale = self.cache.as_ref().is_none_or(|c| {
             c.rev != self.rev
                 || c.width as usize != width
                 || c.tool_display != display
+                || c.compact != compact
                 || c.mode_color != mode.0
                 || c.mode_label != mode.1
         });
         if stale {
-            let (lines, code_blocks) = self.build(theme, width, display, mode);
+            let (lines, code_blocks) = self.build(theme, width, display, compact, mode);
             let height = lines.len() as u16;
             self.cache = Some(Rendered {
                 rev: self.rev,
                 width: width as u16,
                 tool_display: display,
+                compact,
                 mode_color: mode.0,
                 mode_label: mode.1.to_string(),
                 code_blocks,
@@ -734,12 +801,14 @@ impl Entry {
         theme: &Theme,
         width: usize,
         display: ToolDisplay,
+        compact: bool,
         mode: (Color, &'static str),
     ) -> (Vec<Line<'static>>, Vec<(u16, u16, String)>) {
         let inner = width.saturating_sub(GUTTER).max(8);
         let mut lines = Vec::new();
         let mut code_blocks = Vec::new();
         let (mode_color, mode_label) = mode;
+        let _ = compact;
 
         match self.role {
             EntryRole::System => {
@@ -749,6 +818,37 @@ impl Entry {
                 )));
             }
             EntryRole::User => {
+                if compact {
+                    // Compact density: a single `❯ text` row, continuations
+                    // indented - no raised block, no padding rows.
+                    let wrap_w = inner.saturating_sub(2).max(8);
+                    let text_style = Style::default().fg(theme.strong());
+                    let mut first = true;
+                    for raw in self.text.split('\n') {
+                        if raw.trim().is_empty() {
+                            lines.push(Line::default());
+                            continue;
+                        }
+                        for seg in wrap_spans(vec![Span::raw(raw.to_string())], wrap_w) {
+                            let content: String =
+                                seg.spans.iter().map(|s| s.content.as_ref()).collect();
+                            let marker = if first {
+                                format!("{} ", glyph::PROMPT)
+                            } else {
+                                "  ".to_string()
+                            };
+                            first = false;
+                            lines.push(Line::from(vec![
+                                Span::styled(marker, Style::default().fg(mode_color)),
+                                Span::styled(content, text_style),
+                            ]));
+                        }
+                    }
+                    if first {
+                        lines.push(Line::default());
+                    }
+                    return finish_build(lines, code_blocks);
+                }
                 // opencode-style prompt block: a mode-coloured bar down the
                 // left edge of a raised background, plain text inside. No
                 // badge, no timestamp.
@@ -800,6 +900,17 @@ impl Entry {
                 // one marker line so it never floods the transcript.
                 if !self.reasoning.is_empty() {
                     match self.phase {
+                        Phase::Streaming if compact => {
+                            lines.push(Line::from(Span::styled(
+                                format!(
+                                    "   {} thinking · {}",
+                                    glyph::DOT,
+                                    text::plural(self.reasoning.chars().count(), "char")
+                                ),
+                                st.quote,
+                            )));
+                            lines.push(Line::default());
+                        }
                         Phase::Streaming => {
                             const TAIL: usize = 6;
                             let all: Vec<&str> = self.reasoning.lines().collect();
@@ -906,7 +1017,9 @@ impl Entry {
 
                 // opencode-style message footer: Mode · model · duration ·
                 // tok/s, with `· interrupted` appended when cut short.
-                if matches!(self.phase, Phase::Done | Phase::Interrupted) {
+                // Compact density drops it: the header carries the model and
+                // the /hud carries timing.
+                if !compact && matches!(self.phase, Phase::Done | Phase::Interrupted) {
                     let mut spans = vec![
                         Span::raw("   ".to_string()),
                         Span::styled(mode_label.to_string(), Style::default().fg(mode_color)),
@@ -979,6 +1092,6 @@ impl Entry {
             }
         }
 
-        (lines, code_blocks)
+        finish_build(lines, code_blocks)
     }
 }

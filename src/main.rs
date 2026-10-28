@@ -348,7 +348,8 @@ fn resume(terminal: &mut Terminal<Backend>) -> io::Result<()> {
     ratatui::crossterm::execute!(
         terminal.backend_mut(),
         EnterAlternateScreen,
-        EnableMouseCapture
+        EnableMouseCapture,
+        ratatui::crossterm::cursor::SetCursorStyle::BlinkingBlock
     )?;
     terminal.hide_cursor()?;
     terminal.clear()?;
@@ -365,7 +366,11 @@ fn log_event(message: &str) {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("nanomite")
         .join("crash.log");
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+    {
         let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
         let _ = writeln!(file, "[{stamp}] {message}");
     }
@@ -383,6 +388,7 @@ fn install_panic_hook() {
             io::stdout(),
             DisableMouseCapture,
             LeaveAlternateScreen,
+            ratatui::crossterm::cursor::SetCursorStyle::DefaultUserShape,
             ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
         );
         let _ = ratatui::crossterm::terminal::disable_raw_mode();
@@ -400,7 +406,10 @@ fn install_panic_hook() {
         } else {
             "unknown panic payload".to_string()
         };
-        let thread = std::thread::current().name().unwrap_or("<unnamed>").to_string();
+        let thread = std::thread::current()
+            .name()
+            .unwrap_or("<unnamed>")
+            .to_string();
         let backtrace = std::backtrace::Backtrace::force_capture().to_string();
         log_event(&format!(
             "PANIC thread={thread} at {location}\n{message}\nbacktrace:\n{backtrace}"
@@ -423,7 +432,10 @@ fn setup_terminal() -> io::Result<Terminal<Backend>> {
         // Without mouse capture the wheel never reaches the app: in the alternate
         // screen there is no scrollback, and terminals fall back to arrow-key
         // emulation. OpenCode's TUI enables mouse reporting for the same reason.
-        EnableMouseCapture
+        EnableMouseCapture,
+        // A blinking block caret in the composer: unambiguous over text,
+        // impossible to lose. Terminals without DECSCUSR ignore this.
+        ratatui::crossterm::cursor::SetCursorStyle::BlinkingBlock
     )?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     terminal.hide_cursor()?;
@@ -432,10 +444,13 @@ fn setup_terminal() -> io::Result<Terminal<Backend>> {
 
 fn restore_terminal(terminal: &mut Terminal<Backend>) -> io::Result<()> {
     // Same ordering as `suspend`: capture off first, raw mode off second.
+    // The cursor shape is handed back too - the user's terminal setting
+    // applies again once nanomite exits.
     ratatui::crossterm::execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
         LeaveAlternateScreen,
+        ratatui::crossterm::cursor::SetCursorStyle::DefaultUserShape,
         ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
     )?;
     ratatui::crossterm::terminal::disable_raw_mode()?;

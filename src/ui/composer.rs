@@ -483,6 +483,12 @@ pub fn rows(layout: &Layout) -> u16 {
     (layout.rows().clamp(MIN_INNER_ROWS, MAX_INNER_ROWS) + 2) as u16
 }
 
+/// Total composer height in compact density: no border, no hint row — just
+/// the text rows (still grows with multiline input).
+pub fn rows_compact(layout: &Layout) -> u16 {
+    layout.rows().clamp(MIN_INNER_ROWS, MAX_INNER_ROWS) as u16
+}
+
 /// Returns `(first_visible_row, x, y)` for the text cursor.
 /// Title spans for the composer block: workspace path plus the active tool
 /// mode in its dedicated font colour (non-default modes only). The colour
@@ -507,18 +513,108 @@ fn mode_title_spans(app: &App) -> Vec<Span<'static>> {
     spans
 }
 
-pub fn render(
+/// Compact composer: a borderless single prompt row (`❯ text`), no hints.
+/// Still grows with multiline input; the caret math mirrors the bordered
+/// renderer minus the border inset.
+fn render_compact(
     frame: &mut Frame,
     area: Rect,
     app: &App,
     layout: &Layout,
 ) -> Option<(usize, u16, u16)> {
-    if area.width < 8 || area.height < 3 {
+    let theme = &app.theme;
+    let busy = app.is_busy();
+    let text_top = area.y;
+    let text_h = area.height as usize;
+
+    let prompt = Span::styled(
+        format!("{} ", glyph::PROMPT),
+        Style::default().fg(if area.height > 0 {
+            theme.accent()
+        } else {
+            theme.muted()
+        }),
+    );
+    frame.render_widget(
+        Paragraph::new(prompt),
+        Rect {
+            x: area.x,
+            y: text_top,
+            width: 2,
+            height: 1,
+        },
+    );
+    let text_x = area.x + 2;
+    let text_w = area.width.saturating_sub(2);
+
+    if app.composer.is_empty() {
+        let hint = if busy {
+            "the agent is working - type to queue"
+        } else {
+            "Send a message or type / for commands"
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                text::truncate(hint, text_w as usize),
+                theme.faint_style(),
+            )),
+            Rect {
+                x: text_x,
+                y: text_top,
+                width: text_w,
+                height: 1,
+            },
+        );
+        return Some((0, text_x, text_top));
+    }
+
+    let cursor_row = layout.cursor.0;
+    let first = cursor_row.saturating_sub(text_h - 1);
+    let visible: Vec<_> = layout
+        .lines
+        .iter()
+        .skip(first)
+        .map(|l| {
+            Line::from(
+                l.spans
+                    .iter()
+                    .map(|s| Span::styled(s.content.to_string(), s.style))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    frame.render_widget(
+        Paragraph::new(ratatui::text::Text::from(visible)),
+        Rect {
+            x: text_x,
+            y: text_top,
+            width: text_w,
+            height: text_h as u16,
+        },
+    );
+
+    let cursor_y = text_top + (layout.cursor.0 - first) as u16;
+    let cursor_x = text_x + layout.cursor.1.min(text_w.saturating_sub(1) as usize) as u16;
+    Some((first, cursor_x, cursor_y))
+}
+
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    layout: &Layout,
+    compact: bool,
+) -> Option<(usize, u16, u16)> {
+    if area.width < 8 || (area.height < 3 && !compact) || (compact && area.height < 1) {
         return None;
     }
     let theme = &app.theme;
     let busy = app.is_busy();
     let focused = app.overlay.is_none();
+
+    if compact {
+        return render_compact(frame, area, app, layout);
+    }
 
     // Rounded block: the workspace path sits on the top border and the key
     // hints on the bottom one. The border itself separates transcript from

@@ -704,6 +704,41 @@ async fn mouse_selection_survives_blank_gap_rows() {
 }
 
 #[tokio::test]
+async fn compact_density_shows_single_row_prompts() {
+    let mut app = test_app().await;
+    app.compact = true;
+    app.entries
+        .push(Entry::new(EntryRole::User, "first prompt"));
+    app.entries.push(assistant("done"));
+
+    let text = frame_text(&mut app, 92, 24);
+    // Single-row prompt with the ❯ marker, no raised block, no bars.
+    assert!(
+        text.contains("❯ first prompt"),
+        "compact prompt missing:\n{text}"
+    );
+    // Only the footer's mode badge may carry a ▌; no bar rows at line start.
+    assert!(
+        !text.lines().any(|l| l.trim_start().starts_with('▌')),
+        "user block bars must hide in compact:\n{text}"
+    );
+    // The assistant footer is dropped in compact.
+    assert!(
+        !text.lines().any(|l| l.contains("Build ·")),
+        "footer must hide in compact:\n{text}"
+    );
+    assert!(text.contains("done"), "response missing:\n{text}");
+
+    // Cozy density restores the block + footer.
+    app.compact = false;
+    app.entries[0].touch();
+    app.entries[1].touch();
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("▌"), "cozy block missing:\n{text}");
+    assert!(text.contains("Build"), "cozy footer missing:\n{text}");
+}
+
+#[tokio::test]
 async fn preview_of_the_new_transcript_style() {
     let mut app = test_app().await;
     app.entries

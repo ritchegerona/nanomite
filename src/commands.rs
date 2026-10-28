@@ -45,6 +45,7 @@ pub enum Command {
     Ab,
     Focus,
     Team,
+    Density,
 }
 
 pub struct Entry {
@@ -231,6 +232,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "show only the latest exchange (f2)",
         kind: Command::Focus,
+    },
+    Entry {
+        command: "/density",
+        aliases: &[],
+        hint: "toggle compact density (ctrl+g)",
+        kind: Command::Density,
     },
     Entry {
         command: "/themes",
