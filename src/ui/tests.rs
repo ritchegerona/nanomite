@@ -700,6 +700,48 @@ async fn mouse_selection_survives_blank_gap_rows() {
 }
 
 #[tokio::test]
+async fn mouse_selection_survives_emoji_lines() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = test_app().await;
+    // "⚠️ ok" after the 2-cell `▌ ` prefix: ⚠ renders at column 2, the VS16
+    // top-up at 3, the space at 4, "ok" at 5-6. A raw char-count mapping
+    // would drift every click after the emoji by one cell.
+    app.entries
+        .push(Entry::new(EntryRole::User, "\u{26A0}\u{FE0F} ok"));
+    let _ = frame_text(&mut app, 92, 24);
+    let rect = app.view.cached_chat_rect().expect("chat rect cached");
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    };
+
+    // Click the ⚠ glyph (column 2) → anchor at its base char (index 2).
+    app.on_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        rect.x + 2,
+        rect.y + 1,
+    ));
+    // Drag to column 4 (just past the cluster) → the whole emoji selects.
+    app.on_mouse(mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        rect.x + 4,
+        rect.y + 1,
+    ));
+
+    let sel = app.selection.as_ref().expect("selection active");
+    assert_eq!(sel.start, (0, 1, 2), "anchor at the cell under the pointer");
+    assert_eq!(sel.end, (0, 1, 4));
+    let text = app.get_selected_text(sel);
+    assert_eq!(
+        text, "\u{26A0}\u{FE0F}",
+        "the emoji cluster selects whole: {text:?}"
+    );
+}
+
+#[tokio::test]
 async fn focus_mode_shows_only_the_latest_exchange() {
     let mut app = test_app().await;
     for i in 0..3 {

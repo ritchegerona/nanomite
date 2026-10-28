@@ -5333,20 +5333,26 @@ fn parse_turn_arg(args: &str) -> Option<usize> {
 }
 
 /// Maps a display column (terminal cells from the row's left edge) onto a
-/// char index inside the row, walking the spans by display width so a click
-/// lands on the exact glyph under the pointer — wide (CJK) glyphs occupy
-/// two cells and a click on either half snaps to them. A click past the end
-/// clamps to the row's char count. Mirrors the composer's `char_index_at`.
+/// char index inside the row, walking the spans through the shared width
+/// rules (`text::WidthState`) so a click lands on the exact glyph under the
+/// pointer: wide (CJK) glyphs occupy two cells and a click on either half
+/// snaps to them, and emoji clusters (⚠️, 👨‍👩‍👧, 🇵🇭) anchor at their base
+/// character. A click past the end clamps to the row's char count.
 fn display_col_to_char(line: &Line<'_>, mouse_col: usize) -> usize {
+    let mut state = crate::ui::text::WidthState::default();
     let mut cells = 0usize;
     let mut chars = 0usize;
+    let mut cluster_start = 0usize;
     for span in &line.spans {
         for ch in span.content.chars() {
-            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-            if cells + cw > mouse_col {
-                return chars;
+            let step = state.feed(ch);
+            if !step.continues {
+                cluster_start = chars;
             }
-            cells += cw;
+            if cells + step.cells > mouse_col {
+                return cluster_start;
+            }
+            cells += step.cells;
             chars += 1;
         }
     }

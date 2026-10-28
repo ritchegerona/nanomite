@@ -3,10 +3,106 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::path::Path;
 use std::time::Duration;
-use unicode_width::UnicodeWidthStr;
+
+/// Stateful display-width calculator that approximates how terminals render
+/// grapheme clusters — the piece plain `unicode-width` misses and the reason
+/// mouse selection could drift on emoji-laden lines:
+///
+/// - `⚠` + VS16 (`⚠️`) renders as **2** cells, not 1
+/// - ZWJ families (`👨‍👩‍👧`) collapse into one glyph of 2 cells
+/// - regional indicator pairs (`🇵🇭`) render as one flag of 2 cells
+/// - skin-tone modifiers (`👍🏽`) add no cells
+///
+/// Wrapping, truncation and mouse mapping all feed the same state, so the
+/// painted columns and the pointer columns can never disagree.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WidthState {
+    merge_next: bool,
+    ri_open: bool,
+    last_cluster: usize,
+}
+
+/// One character's contribution: how many cells it adds and whether it
+/// continues the previous grapheme cluster.
+#[derive(Debug, Clone, Copy)]
+pub struct WidthStep {
+    pub cells: usize,
+    pub continues: bool,
+}
+
+impl WidthState {
+    pub fn feed(&mut self, ch: char) -> WidthStep {
+        match ch {
+            // ZWJ: the next glyph joins the current cluster.
+            '\u{200D}' => {
+                self.merge_next = true;
+                WidthStep {
+                    cells: 0,
+                    continues: true,
+                }
+            }
+            // Emoji presentation selector: the cluster renders two cells;
+            // top up a narrow base (⚠️ = ⚠ + VS16).
+            '\u{FE0F}' => {
+                let add = 2 - self.last_cluster.min(2);
+                self.last_cluster = 2;
+                WidthStep {
+                    cells: add,
+                    continues: true,
+                }
+            }
+            // Text presentation selector adds nothing.
+            '\u{FE0E}' => WidthStep {
+                cells: 0,
+                continues: true,
+            },
+            // Skin-tone modifiers render inside the previous glyph.
+            c if ('\u{1F3FB}'..='\u{1F3FF}').contains(&c) => WidthStep {
+                cells: 0,
+                continues: true,
+            },
+            // Regional indicators pair into one flag glyph; a non-RI char
+            // closes an open pair.
+            c if ('\u{1F1E6}'..='\u{1F1FF}').contains(&c) => {
+                if self.ri_open {
+                    self.ri_open = false;
+                    WidthStep {
+                        cells: 0,
+                        continues: true,
+                    }
+                } else {
+                    self.ri_open = true;
+                    self.last_cluster = 2;
+                    WidthStep {
+                        cells: 2,
+                        continues: false,
+                    }
+                }
+            }
+            c => {
+                self.ri_open = false;
+                let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                if self.merge_next {
+                    self.merge_next = false;
+                    WidthStep {
+                        cells: 0,
+                        continues: true,
+                    }
+                } else {
+                    self.last_cluster = w;
+                    WidthStep {
+                        cells: w,
+                        continues: false,
+                    }
+                }
+            }
+        }
+    }
+}
 
 pub fn width(s: &str) -> usize {
-    UnicodeWidthStr::width(s)
+    let mut state = WidthState::default();
+    s.chars().map(|ch| state.feed(ch).cells).sum()
 }
 
 /// Truncates to `max` display columns, appending an ellipsis when it has to cut.
@@ -18,14 +114,15 @@ pub fn truncate(s: &str, max: usize) -> String {
         return s.to_string();
     }
     let mut out = String::new();
+    let mut state = WidthState::default();
     let mut w = 0;
     for ch in s.chars() {
-        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if w + cw > max.saturating_sub(1) {
+        let step = state.feed(ch);
+        if w + step.cells > max.saturating_sub(1) {
             break;
         }
         out.push(ch);
-        w += cw;
+        w += step.cells;
     }
     out.push('…');
     out
@@ -147,19 +244,31 @@ pub fn truncate_head(s: &str, max: usize) -> String {
     if width(s) <= max {
         return s.to_string();
     }
+    // Split into grapheme clusters first so reversed trimming never cuts a
+    // ZWJ family or an emoji + selector pair in half.
+    let mut clusters: Vec<(String, usize)> = Vec::new();
+    let mut state = WidthState::default();
+    for ch in s.chars() {
+        let step = state.feed(ch);
+        if step.continues && !clusters.is_empty() {
+            let last = clusters.last_mut().expect("checked above");
+            last.0.push(ch);
+            last.1 += step.cells;
+        } else {
+            clusters.push((ch.to_string(), step.cells));
+        }
+    }
     let keep = max.saturating_sub(1);
-    let mut out: Vec<char> = Vec::new();
+    let mut out = String::new();
     let mut w = 0;
-    for ch in s.chars().rev() {
-        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+    for (text, cw) in clusters.into_iter().rev() {
         if w + cw > keep {
             break;
         }
-        out.push(ch);
+        out.insert_str(0, &text);
         w += cw;
     }
-    out.reverse();
-    format!("…{}", out.into_iter().collect::<String>())
+    format!("…{out}")
 }
 
 /// `~/dev/nanomite` - home collapsed, middle trimmed only if still too long.
@@ -1528,6 +1637,34 @@ mod tests {
         assert!(*end < out.len());
         // The bottom border row carries the copy hint.
         assert!(out[*end].to_string().contains("copy"));
+    }
+
+    #[test]
+    fn width_matches_terminal_emoji_rendering() {
+        // Variation selector: ⚠ renders 1, ⚠️ renders 2.
+        assert_eq!(width("\u{26A0}"), 1);
+        assert_eq!(width("\u{26A0}\u{FE0F}"), 2);
+        // ZWJ families collapse into one glyph.
+        assert_eq!(width("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"), 2);
+        // Flags: two regional indicators, one 2-cell glyph.
+        assert_eq!(width("\u{1F1F5}\u{1F1ED}"), 2);
+        // Skin-tone modifiers add nothing.
+        assert_eq!(width("\u{1F44D}\u{1F3FD}"), 2);
+        // Plain text and CJK are untouched.
+        assert_eq!(width("hello"), 5);
+        assert_eq!(width("日本語"), 6);
+        // A non-RI char closes an open regional pair.
+        assert_eq!(width("\u{1F1F5}x\u{1F1ED}"), 5);
+    }
+
+    #[test]
+    fn truncate_never_splits_an_emoji_cluster() {
+        // "⚠️ ok" is 5 cells; a cut to 2 cannot fit the 2-cell cluster, so
+        // the selector is dropped with the rest and the bare base stays —
+        // a valid glyph that still renders 1 cell (no width drift).
+        let out = truncate("\u{26A0}\u{FE0F} ok", 2);
+        assert_eq!(out, "\u{26A0}…");
+        assert_eq!(width(out.trim_end_matches('…')), 1);
     }
 
     #[test]
