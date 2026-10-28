@@ -352,6 +352,7 @@ to `LIKE` search, reporting the index in use honestly.
 | click a failed message | Expand the full error |
 | `f1` | This keysheet |
 | `f2` | Focus mode — only the latest exchange |
+| `alt+<letter>` | Runs the matching slash command — every menu entry has one |
 | `ctrl+g` | Toggle compact density |
 
 While the agent works you can keep typing — the next prompt is queued and

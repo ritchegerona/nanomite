@@ -459,6 +459,10 @@ pub fn help_keys() -> &'static [(&'static str, &'static str)] {
             "approve · reject the self-edit under review in /improve",
         ),
         ("f1", "this sheet"),
+        (
+            "alt+letter",
+            "runs the matching command - the full list is above",
+        ),
         ("f2", "focus mode - only the latest exchange"),
     ]
 }

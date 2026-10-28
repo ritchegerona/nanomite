@@ -63,155 +63,155 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/connect",
         aliases: &["/login", "/auth"],
-        hint: "edit the endpoint url and api key",
+        hint: "edit the endpoint url and api key (alt+c)",
         kind: Command::Connect,
     },
     Entry {
         command: "/provider",
         aliases: &["/providers"],
-        hint: "switch the provider - pick from the list",
+        hint: "switch the provider - pick from the list (alt+p)",
         kind: Command::ProviderMenu,
     },
     Entry {
         command: "/models",
         aliases: &["/model"],
-        hint: "switch the model - filter or type an id",
+        hint: "switch the model - filter or type an id (alt+m)",
         kind: Command::Models,
     },
     Entry {
         command: "/reasoning",
         aliases: &["/effort"],
-        hint: "cycle reasoning effort: minimal · low · medium · high",
+        hint: "cycle reasoning effort: minimal · low · medium · high (ctrl+r)",
         kind: Command::Reasoning,
     },
     // -- agent scope ---------------------------------------------------------
     Entry {
         command: "/policy",
         aliases: &["/mode"],
-        hint: "cycle tool mode: plan · coder · build · hacker",
+        hint: "cycle tool mode: plan · coder · build · hacker (shift+tab)",
         kind: Command::Policy,
     },
     Entry {
         command: "/tools",
         aliases: &[],
-        hint: "tool library - enable or disable agent tools",
+        hint: "tool library - enable or disable agent tools (alt+l)",
         kind: Command::Tools,
     },
     Entry {
         command: "/worktrees",
         aliases: &["/wt"],
-        hint: "list git worktrees for parallel agents",
+        hint: "list git worktrees for parallel agents (alt+w)",
         kind: Command::Worktrees,
     },
     // -- session -------------------------------------------------------------
     Entry {
         command: "/new",
         aliases: &["/clear"],
-        hint: "start a new session",
+        hint: "start a new session (ctrl+t)",
         kind: Command::New,
     },
     Entry {
         command: "/sessions",
         aliases: &["/resume", "/continue"],
-        hint: "list and switch sessions",
+        hint: "list and switch sessions (alt+s)",
         kind: Command::Sessions,
     },
     Entry {
         command: "/history",
         aliases: &[],
-        hint: "search all saved sessions - /history <query>",
+        hint: "search all saved sessions - /history <query> (alt+h)",
         kind: Command::History,
     },
     Entry {
         command: "/fork",
         aliases: &[],
-        hint: "branch the session at turn N - /fork <n>",
+        hint: "branch the session at turn N - /fork <n> (alt+f)",
         kind: Command::Fork,
     },
     Entry {
         command: "/compact",
         aliases: &["/summarize"],
-        hint: "summarise the session to free up context",
+        hint: "summarise the session to free up context (alt+g)",
         kind: Command::Compact,
     },
     Entry {
         command: "/undo",
         aliases: &[],
-        hint: "drop the last exchange",
+        hint: "drop the last exchange (alt+u)",
         kind: Command::Undo,
     },
     Entry {
         command: "/redo",
         aliases: &[],
-        hint: "restore the last undone exchange",
+        hint: "restore the last undone exchange (alt+shift+u)",
         kind: Command::Redo,
     },
     Entry {
         command: "/revert",
         aliases: &[],
-        hint: "time machine - restore files to their state before a turn",
+        hint: "time machine - restore files to their state before a turn (alt+r)",
         kind: Command::Revert,
     },
     // -- transcript ----------------------------------------------------------
     Entry {
         command: "/prev",
         aliases: &[],
-        hint: "browse to the previous turn",
+        hint: "browse to the previous turn (alt+,)",
         kind: Command::Prev,
     },
     Entry {
         command: "/next",
         aliases: &[],
-        hint: "browse to the next turn",
+        hint: "browse to the next turn (alt+.)",
         kind: Command::Next,
     },
     Entry {
         command: "/copy",
         aliases: &[],
-        hint: "copy the last assistant message",
+        hint: "copy the last assistant message (alt+y)",
         kind: Command::Copy,
     },
     Entry {
         command: "/editor",
         aliases: &[],
-        hint: "compose the prompt in $EDITOR",
+        hint: "compose the prompt in $EDITOR (alt+e)",
         kind: Command::Editor,
     },
     // -- agent features --------------------------------------------------------
     Entry {
         command: "/memory",
         aliases: &["/mem"],
-        hint: "browse stored memories",
+        hint: "browse stored memories (alt+n)",
         kind: Command::Memory,
     },
     Entry {
         command: "/panel",
         aliases: &[],
-        hint: "convene the agent board - /panel <topic>",
+        hint: "convene the agent board - /panel <topic> (alt+b)",
         kind: Command::Panel,
     },
     Entry {
         command: "/ab",
         aliases: &[],
-        hint: "compare minimal vs high reasoning side by side - /ab <prompt>",
+        hint: "compare minimal vs high reasoning side by side - /ab <prompt> (alt+x)",
         kind: Command::Ab,
     },
     Entry {
         command: "/team",
         aliases: &["/parallel"],
-        hint: "run three agents in parallel on one goal - /team <goal>",
+        hint: "run three agents in parallel on one goal - /team <goal> (alt+shift+t)",
         kind: Command::Team,
     },
     Entry {
         command: "/improve",
         aliases: &[],
-        hint: "review self-edit proposals",
+        hint: "review self-edit proposals (alt+i)",
         kind: Command::Improve,
     },
     Entry {
         command: "/improve-from-board",
         aliases: &[],
-        hint: "stage the board's synthesis as a proposal",
+        hint: "stage the board's synthesis as a proposal (alt+shift+i)",
         kind: Command::ImproveFromBoard,
     },
     // -- appearance ------------------------------------------------------------
@@ -224,7 +224,7 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/thinking",
         aliases: &[],
-        hint: "show or hide the thinking indicator",
+        hint: "show or hide the thinking indicator (alt+k)",
         kind: Command::Thinking,
     },
     Entry {
@@ -242,56 +242,56 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/themes",
         aliases: &["/theme"],
-        hint: "switch colour theme",
+        hint: "switch colour theme (alt+t)",
         kind: Command::Themes,
     },
     Entry {
         command: "/hud",
         aliases: &[],
-        hint: "toggle the performance hud (frame time, transcript stats)",
+        hint: "toggle the performance hud (frame time, transcript stats) (alt+z)",
         kind: Command::Hud,
     },
     // -- output & general --------------------------------------------------------
     Entry {
         command: "/export",
         aliases: &[],
-        hint: "write the session to markdown",
+        hint: "write the session to markdown (alt+j)",
         kind: Command::Export,
     },
     Entry {
         command: "/share",
         aliases: &[],
-        hint: "export a shareable copy",
+        hint: "export a shareable copy (alt+shift+s)",
         kind: Command::Share,
     },
     Entry {
         command: "/unshare",
         aliases: &[],
-        hint: "remove any shared copy",
+        hint: "remove any shared copy (alt+shift+x)",
         kind: Command::Unshare,
     },
     Entry {
         command: "/init",
         aliases: &[],
-        hint: "create or update AGENTS.md",
+        hint: "create or update AGENTS.md (alt+shift+n)",
         kind: Command::Init,
     },
     Entry {
         command: "/doctor",
         aliases: &[],
-        hint: "run pre-flight diagnostics on the setup",
+        hint: "run pre-flight diagnostics on the setup (alt+o)",
         kind: Command::Doctor,
     },
     Entry {
         command: "/help",
         aliases: &[],
-        hint: "keyboard shortcuts and commands",
+        hint: "keyboard shortcuts and commands (f1)",
         kind: Command::Help,
     },
     Entry {
         command: "/exit",
         aliases: &["/quit", "/q"],
-        hint: "quit nanomite",
+        hint: "quit nanomite (alt+q)",
         kind: Command::Exit,
     },
 ];
@@ -373,6 +373,21 @@ mod tests {
             assert!(
                 lookup(name.trim_start_matches('/')).is_some(),
                 "{name} missing"
+            );
+        }
+    }
+
+    #[test]
+    fn every_command_advertises_a_keybinding() {
+        for entry in COMMANDS {
+            let hint = entry.hint;
+            let bound = ["alt+", "ctrl+", "shift+tab", "f1", "f2"]
+                .iter()
+                .any(|k| hint.contains(k));
+            assert!(
+                bound,
+                "{} has no keybinding in its hint: {hint}",
+                entry.command
             );
         }
     }

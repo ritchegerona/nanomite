@@ -1014,6 +1014,37 @@ fn parse_subtasks_extracts_three_numbered_lines() {
 }
 
 #[tokio::test]
+async fn alt_chords_drive_the_menu() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    let mut app = test_app().await;
+    let key = |code, mods| KeyEvent {
+        code,
+        modifiers: mods,
+        kind: KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    };
+
+    // alt+s opens the sessions picker.
+    app.on_key(key(KeyCode::Char('s'), KeyModifiers::ALT));
+    assert!(matches!(app.overlay, Some(Overlay::Picker(_))), "alt+s");
+    app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
+
+    // alt+t opens the themes picker.
+    app.on_key(key(KeyCode::Char('t'), KeyModifiers::ALT));
+    assert!(matches!(app.overlay, Some(Overlay::Picker(_))), "alt+t");
+    app.on_key(key(KeyCode::Esc, KeyModifiers::NONE));
+
+    // alt+u drops the last exchange (nothing to undo here, but the chord
+    // must not be swallowed by the composer).
+    app.on_key(key(KeyCode::Char('u'), KeyModifiers::ALT));
+
+    // alt+q quits.
+    app.on_key(key(KeyCode::Char('q'), KeyModifiers::ALT));
+    assert!(app.should_quit(), "alt+q did not quit");
+}
+
+#[tokio::test]
 async fn team_refuses_empty_goal_and_busy_board() {
     let mut app = test_app().await;
     app.run_team("   ");
