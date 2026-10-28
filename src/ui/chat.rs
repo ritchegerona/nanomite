@@ -899,13 +899,14 @@ impl Entry {
                 // reasoning phase visibly alive; once done it collapses to
                 // one marker line so it never floods the transcript.
                 if !self.reasoning.is_empty() {
+                    let reasoning_display = text::professionalize(&self.reasoning);
                     match self.phase {
                         Phase::Streaming if compact => {
                             lines.push(Line::from(Span::styled(
                                 format!(
                                     "   {} thinking · {}",
                                     glyph::DOT,
-                                    text::plural(self.reasoning.chars().count(), "char")
+                                    text::plural(reasoning_display.chars().count(), "char")
                                 ),
                                 st.quote,
                             )));
@@ -913,7 +914,7 @@ impl Entry {
                         }
                         Phase::Streaming => {
                             const TAIL: usize = 6;
-                            let all: Vec<&str> = self.reasoning.lines().collect();
+                            let all: Vec<&str> = reasoning_display.lines().collect();
                             let skip = all.len().saturating_sub(TAIL);
                             if skip > 0 {
                                 lines.push(Line::from(Span::styled(
@@ -944,7 +945,7 @@ impl Entry {
                                 format!(
                                     "   {} Thought · {}",
                                     glyph::DOT,
-                                    text::plural(self.reasoning.chars().count(), "char")
+                                    text::plural(reasoning_display.chars().count(), "char")
                                 ),
                                 Style::default().fg(theme.faint()),
                             )));
@@ -972,8 +973,12 @@ impl Entry {
                     lines.push(Line::default());
                 } else {
                     let base = lines.len();
-                    let (md_lines, blocks) =
-                        text::markdown_with_blocks(&self.text, inner.saturating_sub(3).max(8), &st);
+                    let display_text = text::professionalize(&self.text);
+                    let (md_lines, blocks) = text::markdown_with_blocks(
+                        &display_text,
+                        inner.saturating_sub(3).max(8),
+                        &st,
+                    );
                     for mut line in md_lines {
                         let mut spans = Vec::with_capacity(line.spans.len() + 1);
                         spans.push(Span::raw("   ".to_string()));

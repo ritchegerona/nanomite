@@ -739,6 +739,33 @@ async fn compact_density_shows_single_row_prompts() {
 }
 
 #[tokio::test]
+async fn model_emoji_render_as_professional_markers() {
+    let mut app = test_app().await;
+    app.entries.push(Entry::new(EntryRole::User, "check"));
+    app.entries.push(assistant(
+        "\u{2705} 4/4 tasks done\n\n\u{274C} one failure\n\n\u{1F389} shipped",
+    ));
+
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        text.contains("\u{2713} 4/4 tasks done"),
+        "monochrome check missing:\n{text}"
+    );
+    assert!(
+        text.contains("\u{2717} one failure"),
+        "cross missing:\n{text}"
+    );
+    assert!(
+        !text.contains("\u{2705}"),
+        "raw emoji must not render:\n{text}"
+    );
+    assert!(
+        !text.contains("\u{1F389}"),
+        "celebration emoji must strip:\n{text}"
+    );
+}
+
+#[tokio::test]
 async fn preview_of_the_new_transcript_style() {
     let mut app = test_app().await;
     app.entries

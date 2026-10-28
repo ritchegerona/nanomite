@@ -10,9 +10,7 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
  ⬡ NANOMITE [umbrella] › ~/dev/nanomite        medium ›  🧠 [██░░░░░░] 42.3k/200.0k · 21%
  ▌ list the files in src and read Cargo.toml
 
-    → list_files src · 6 files + 3 dirs · 12ms
-    → read_file Cargo.toml · 23 lines · 3ms
-
+    · Thought · 1,842 chars
     The crate is a ratatui app with 3 layers:
 
     • ui/ — theme, transcript, composer
@@ -23,7 +21,7 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
 
     ▏ let mut app = App::new(cfg, handle)?;
 
-    Build · 8.4s · 45.2 tok/s
+    Build · nemotron-3.5 · 8.4s · 45.2 tok/s
  ────────────────────────────────────────────────────────────────────────────
  ↑ 2.1k  ↓ 800  ·  ready
  ❯ Send a message or type / for commands
@@ -66,6 +64,14 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
   of messages, markdown rendering with syntax-highlighted code blocks and
   grid tables, live tool-call rows, unified diffs in edit previews, context
   meter with a burn-rate projection, CJK/wide-character-safe composer
+- **Reasoning streaming** — reasoning models (nemotron, deepseek-r1, …)
+  stream their thoughts as a dim live tail while working, collapsing to a
+  one-line marker when done: a long reasoning phase never looks like a hang
+- **Estimated time to finish** — the status strip shows `~Xs/Xm left` for the
+  running turn and the queue strip `~Xm each`, blended from the model's own
+  recent history (honestly hidden on the first turns)
+- **Blinking block cursor** — the composer caret is a blinking block
+  (DECSCUSR), restored to your terminal's setting on exit
 - **Compact density** — `/density` or `ctrl+g` switches to single-row prompts,
   borderless composer and tighter gaps (persisted); auto saves vertical space
 - **Perf hud** — `/hud` overlays frame time, peak, draw count and transcript
@@ -364,46 +370,46 @@ Type `/` to open the command menu — aliases included, listed grouped by
 purpose: connect & model · agent scope · session · transcript · agent
 features · appearance · output.
 
-| Command | Aliases | Purpose |
-|---|---|---|
-| `/connect` | `/login`, `/auth` | Edit the endpoint URL and API key |
-| `/provider` | `/providers` | Switch the provider — pick from the list |
-| `/models` | `/model` | Switch the model — filter or type an id |
-| `/reasoning` | `/effort` | Cycle reasoning effort: minimal · low · medium · high |
-| `/policy` | `/mode` | Cycle tool mode: plan · coder · build · hacker |
-| `/tools` | | Tool library — enable or disable the agent's tools |
-| `/worktrees` | `/wt` | List git worktrees for parallel agents |
-| `/new` | `/clear` | Start a new session |
-| `/sessions` | `/resume`, `/continue` | List and switch sessions |
-| `/history` | | Search all saved sessions — `/history <query>` |
-| `/fork` | | Branch the session at turn N — `/fork <n>` |
-| `/compact` | `/summarize` | Summarise the session to free up context |
-| `/undo` | | Drop the last exchange |
-| `/redo` | | Restore the last undone exchange |
-| `/revert` | | Time machine — restore files to their state before a turn |
-| `/prev` | | Browse to the previous turn |
-| `/next` | | Browse to the next turn |
-| `/copy` | | Copy the last assistant message |
-| `/editor` | | Compose the prompt in `$EDITOR` |
-| `/memory` | `/mem` | Browse persistent memory |
-| `/panel` | | Convene the agent board on a topic (`/panel <topic>`) |
-| `/ab` | | Compare minimal vs high reasoning side by side — `/ab <prompt>` |
-| `/team` | `/parallel` | Run three agents in parallel on one goal — decompose, execute, synthesize |
-| `/improve` | | Review self-edit proposals — `a` approve (with regression gate), `r` reject |
-| `/improve-from-board` | | Stage the board's synthesis as a proposal |
-| `/details` | | Cycle tool display: hidden · rows · full (`ctrl+o`) |
-| `/thinking` | | Toggle the thinking indicator |
-| `/focus` | | Show only the latest exchange (`f2`) |
-| `/density` | | Toggle compact density (cozy ↔ compact, `ctrl+g`) |
-| `/themes` | `/theme` | Switch colour theme (persisted) |
-| `/hud` | | Toggle the performance hud (frame time, transcript stats) |
-| `/export` | | Write the session to markdown |
-| `/share` | | Export a shareable copy |
-| `/unshare` | | Remove any shared copy |
-| `/init` | | Create or update AGENTS.md |
-| `/doctor` | | Run pre-flight diagnostics on the setup |
-| `/help` | | Keysheet and command list |
-| `/exit` | `/quit`, `/q` | Quit nanomite |
+| Command | Aliases | Key | Purpose |
+|---|---|---|---|
+| `/connect` | `/login`, `/auth` | alt+c | Edit the endpoint URL and API key |
+| `/provider` | `/providers` | alt+p | Switch the provider — pick from the list |
+| `/models` | `/model` | alt+m | Switch the model — filter or type an id |
+| `/reasoning` | `/effort` | ctrl+r | Cycle reasoning effort: minimal · low · medium · high |
+| `/policy` | `/mode` | shift+tab | Cycle tool mode: plan · coder · build · hacker |
+| `/tools` |  | alt+l | Tool library — enable or disable the agent's tools |
+| `/worktrees` | `/wt` | alt+w | List git worktrees for parallel agents |
+| `/new` | `/clear` | ctrl+t | Start a new session |
+| `/sessions` | `/resume`, `/continue` | alt+s | List and switch sessions |
+| `/history` |  | alt+h | Search all saved sessions — `/history <query>` |
+| `/fork` |  | alt+f | Branch the session at turn N — `/fork <n>` |
+| `/compact` | `/summarize` | alt+g | Summarise the session to free up context |
+| `/undo` |  | alt+u | Drop the last exchange |
+| `/redo` |  | alt+shift+u | Restore the last undone exchange |
+| `/revert` |  | alt+r | Time machine — restore files to their state before a turn |
+| `/prev` |  | alt+, | Browse to the previous turn |
+| `/next` |  | alt+. | Browse to the next turn |
+| `/copy` |  | alt+y | Copy the last assistant message |
+| `/editor` |  | alt+e | Compose the prompt in `$EDITOR` |
+| `/memory` | `/mem` | alt+n | Browse persistent memory |
+| `/panel` |  | alt+b | Convene the agent board on a topic (`/panel <topic>`) |
+| `/ab` |  | alt+x | Compare minimal vs high reasoning side by side — `/ab <prompt>` |
+| `/team` | `/parallel` | alt+shift+t | Run three agents in parallel on one goal — decompose, execute, synthesize |
+| `/improve` |  | alt+i | Review self-edit proposals — `a` approve (with regression gate), `r` reject |
+| `/improve-from-board` |  | alt+shift+i | Stage the board's synthesis as a proposal |
+| `/details` |  | ctrl+o | Cycle tool display: hidden · rows · full (`ctrl+o`) |
+| `/thinking` |  | alt+k | Toggle the thinking indicator |
+| `/focus` |  | f2 | Show only the latest exchange (`f2`) |
+| `/density` |  | ctrl+g | Toggle compact density (cozy ↔ compact, `ctrl+g`) |
+| `/themes` | `/theme` | alt+t | Switch colour theme (persisted) |
+| `/hud` |  | alt+z | Toggle the performance hud (frame time, transcript stats) |
+| `/export` |  | alt+j | Write the session to markdown |
+| `/share` |  | alt+shift+s | Export a shareable copy |
+| `/unshare` |  | alt+shift+x | Remove any shared copy |
+| `/init` |  | alt+shift+n | Create or update AGENTS.md |
+| `/doctor` |  | alt+o | Run pre-flight diagnostics on the setup |
+| `/help` |  | f1 | Keysheet and command list |
+| `/exit` | `/quit`, `/q` | alt+q | Quit nanomite |
 
 ### Themes
 

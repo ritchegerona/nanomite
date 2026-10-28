@@ -4,6 +4,49 @@ use ratatui::text::{Line, Span};
 use std::path::Path;
 use std::time::Duration;
 
+/// Maps model-output emoji to professional monochrome markers and strips the
+/// remaining pictographs from the rendered transcript. Display-only: the
+/// stored text and copy/export keep the original bytes.
+///
+/// - ✅ ✔️ ☑️ → `✓` (monochrome, inherits the surrounding style)
+/// - ❌ ✖️ ❎ → `✗`
+/// - ⚠️ ❗ → `!`
+/// - ZWJ families, flags, skin tones and every other pictograph are dropped
+pub fn professionalize(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        let mapped: Option<&str> = match ch {
+            '\u{2705}' | '\u{2714}' | '\u{2611}' => Some("\u{2713}"),
+            '\u{274C}' | '\u{2716}' | '\u{274E}' => Some("\u{2717}"),
+            '\u{26A0}' | '\u{2757}' => Some("!"),
+            // Selectors, joiners and modifiers: absorbed by the mapping above
+            // or dropped with their base glyph.
+            '\u{FE0F}' | '\u{200D}' | '\u{20E3}' => Some(""),
+            c if ('\u{1F3FB}'..='\u{1F3FF}').contains(&c) => Some(""),
+            c if ('\u{1F1E6}'..='\u{1F1FF}').contains(&c) => Some(""),
+            c if ('\u{1F000}'..='\u{1FAFF}').contains(&c) => Some(""),
+            c if ('\u{2600}'..='\u{26FF}').contains(&c)
+                && !matches!(c, '\u{2611}' | '\u{26A0}') =>
+            {
+                Some("")
+            }
+            c if ('\u{2700}'..='\u{27BF}').contains(&c)
+                && !matches!(c, '\u{2713}' | '\u{2717}' | '\u{2718}') =>
+            {
+                Some("")
+            }
+            '\u{2B50}' => Some(""),
+            _ => None,
+        };
+        if let Some(marker) = mapped {
+            out.push_str(marker);
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Stateful display-width calculator that approximates how terminals render
 /// grapheme clusters — the piece plain `unicode-width` misses and the reason
 /// mouse selection could drift on emoji-laden lines:
@@ -1655,6 +1698,24 @@ mod tests {
         assert_eq!(width("日本語"), 6);
         // A non-RI char closes an open regional pair.
         assert_eq!(width("\u{1F1F5}x\u{1F1ED}"), 5);
+    }
+
+    #[test]
+    fn professionalize_maps_status_emoji() {
+        assert_eq!(professionalize("\u{2705} done"), "\u{2713} done");
+        assert_eq!(professionalize("\u{2714}\u{FE0F} ok"), "\u{2713} ok");
+        assert_eq!(professionalize("\u{274C} fail"), "\u{2717} fail");
+        assert_eq!(professionalize("\u{26A0}\u{FE0F} careful"), "! careful");
+    }
+
+    #[test]
+    fn professionalize_strips_pictographs() {
+        assert_eq!(professionalize("party \u{1F389}"), "party ");
+        assert_eq!(professionalize("\u{1F1F5}\u{1F1ED} flag"), " flag");
+        assert_eq!(professionalize("thumb \u{1F44D}\u{1F3FD}"), "thumb ");
+        assert_eq!(professionalize("star \u{2B50}"), "star ");
+        // Plain text and our own markers are untouched.
+        assert_eq!(professionalize("✓ ✗ plain"), "✓ ✗ plain");
     }
 
     #[test]
