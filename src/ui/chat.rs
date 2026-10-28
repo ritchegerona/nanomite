@@ -1,7 +1,7 @@
 use super::diff::DiffView;
 use super::text::{self, wrap_spans};
 use super::theme::{glyph, Theme};
-use crate::app::{Entry, EntryRole, Phase, Rendered};
+use crate::app::{Entry, EntryRole, Phase, Rendered, ToolDisplay};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -111,7 +111,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     }
     let theme = app.theme;
     let show_thinking = app.show_thinking;
-    let show_details = app.show_tool_details;
+    let tool_display = app.tool_display;
     let mode = mode_parts(app.cfg.tool_policy, &theme);
 
     if !app.entries.iter().any(|e| e.role != EntryRole::System) {
@@ -160,7 +160,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     for idx in first..entries.len() {
         let (start, end) = (view.offsets[idx], view.offsets[idx + 1]);
         if entries.len() <= WARM_LIMIT || (end > top + pad && start < window_bottom + pad) {
-            entries[idx].ensure_rendered(&theme, width, show_details, mode);
+            entries[idx].ensure_rendered(&theme, width, tool_display, mode);
         }
     }
     view.mark_dirty();
@@ -188,7 +188,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
         let status_rows = entries[idx].status_rows() as usize;
         let status = status_line(&entries[idx], &theme, view.spinner).filter(|_| show_thinking);
         let entry = &mut entries[idx];
-        let cached = entry.ensure_rendered(&theme, width, show_details, mode);
+        let cached = entry.ensure_rendered(&theme, width, tool_display, mode);
 
         let batch_start = row;
         let mut batch: Vec<Line<'static>> = Vec::with_capacity((bottom - row) as usize);
@@ -621,23 +621,23 @@ impl Entry {
         &mut self,
         theme: &Theme,
         width: usize,
-        details: bool,
+        display: ToolDisplay,
         mode: (Color, &'static str),
     ) -> &Rendered {
         let stale = self.cache.as_ref().is_none_or(|c| {
             c.rev != self.rev
                 || c.width as usize != width
-                || c.details != details
+                || c.tool_display != display
                 || c.mode_color != mode.0
                 || c.mode_label != mode.1
         });
         if stale {
-            let (lines, code_blocks) = self.build(theme, width, details, mode);
+            let (lines, code_blocks) = self.build(theme, width, display, mode);
             let height = lines.len() as u16;
             self.cache = Some(Rendered {
                 rev: self.rev,
                 width: width as u16,
-                details,
+                tool_display: display,
                 mode_color: mode.0,
                 mode_label: mode.1.to_string(),
                 code_blocks,
@@ -648,6 +648,84 @@ impl Entry {
         self.cache.as_ref().expect("cache filled above")
     }
 
+    /// Renders one tool call as an opencode-style row (`icon label · 2ms`)
+    /// plus its preview body when `with_previews` is on and the tool has
+    /// finished. Appends to `lines`.
+    fn tool_row(
+        &self,
+        tool: &crate::app::ToolRow,
+        theme: &Theme,
+        inner: usize,
+        with_previews: bool,
+        lines: &mut Vec<Line<'static>>,
+    ) {
+        let (icon, style) = if tool.running {
+            (tool_glyph::RUNNING, Style::default().fg(theme.muted()))
+        } else if tool.ok {
+            (tool_icon(&tool.name), Style::default().fg(theme.muted()))
+        } else {
+            (tool_glyph::FAILURE, Style::default().fg(theme.danger()))
+        };
+        let label = if tool.detail.is_empty() {
+            tool.name.clone()
+        } else {
+            format!("{} {}", tool.name, tool.detail)
+        };
+        let budget = inner.saturating_sub(5).max(8);
+        let mut spans = vec![
+            Span::raw("   ".to_string()),
+            Span::styled(format!("{icon} "), style),
+            Span::styled(text::truncate(&label, budget), style),
+        ];
+        if !tool.running {
+            if let Some(elapsed) = tool.elapsed {
+                spans.push(Span::styled(
+                    format!(" · {}", text::format_duration(elapsed)),
+                    Style::default().fg(theme.faint()),
+                ));
+            }
+        }
+        lines.push(Line::from(spans));
+
+        // Completed block bodies: output or patch, shown once the tool has
+        // finished (opencode keeps running rows bare).
+        if with_previews && !tool.running {
+            if let Some(preview) = &tool.preview {
+                if tool.name == "edit_file" {
+                    let mut diff = DiffView::with_theme(*theme);
+                    for raw in preview.split('\n') {
+                        diff.push_diff(raw.to_string());
+                    }
+                    for line in diff.styled_lines() {
+                        let content: String =
+                            line.spans.iter().map(|s| s.content.as_ref()).collect();
+                        let style = line.spans.first().map(|s| s.style).unwrap_or_default();
+                        let shown = text::truncate(&content, inner.saturating_sub(5));
+                        if shown.is_empty() {
+                            lines.push(Line::from(Span::raw("     ")));
+                        } else {
+                            lines.push(Line::from(Span::styled(format!("     {shown}"), style)));
+                        }
+                    }
+                } else {
+                    for raw in preview.split('\n') {
+                        let style = if raw.starts_with('…') {
+                            Style::default().fg(theme.faint())
+                        } else {
+                            Style::default().fg(theme.muted())
+                        };
+                        let shown = text::truncate(raw, inner.saturating_sub(5));
+                        if shown.is_empty() {
+                            lines.push(Line::from(Span::raw("     ")));
+                        } else {
+                            lines.push(Line::from(Span::styled(format!("     {shown}"), style)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Renders the entry's lines directly. Cached paths go through
     /// `ensure_rendered`; `pub(crate)` for height diagnostics in tests.
     #[allow(clippy::type_complexity)]
@@ -655,7 +733,7 @@ impl Entry {
         &self,
         theme: &Theme,
         width: usize,
-        details: bool,
+        display: ToolDisplay,
         mode: (Color, &'static str),
     ) -> (Vec<Line<'static>>, Vec<(u16, u16, String)>) {
         let inner = width.saturating_sub(GUTTER).max(8);
@@ -714,87 +792,17 @@ impl Entry {
                 bar_row(&mut lines);
             }
             EntryRole::Assistant => {
-                // opencode-style rows: everything indented three columns,
-                // tool calls as `icon label` in one colour, no badge. Running
-                // rows show a bare `•`; failures go red with `✗`.
-                for tool in &self.tools {
-                    let (icon, style) = if tool.running {
-                        (tool_glyph::RUNNING, Style::default().fg(theme.muted()))
-                    } else if tool.ok {
-                        (tool_icon(&tool.name), Style::default().fg(theme.muted()))
-                    } else {
-                        (tool_glyph::FAILURE, Style::default().fg(theme.danger()))
-                    };
-                    let label = if tool.detail.is_empty() {
-                        tool.name.clone()
-                    } else {
-                        format!("{} {}", tool.name, tool.detail)
-                    };
-                    let budget = inner.saturating_sub(5).max(8);
-                    let mut spans = vec![
-                        Span::raw("   ".to_string()),
-                        Span::styled(format!("{icon} "), style),
-                        Span::styled(text::truncate(&label, budget), style),
-                    ];
-                    if !tool.running {
-                        if let Some(elapsed) = tool.elapsed {
-                            spans.push(Span::styled(
-                                format!(" · {}", text::format_duration(elapsed)),
-                                Style::default().fg(theme.faint()),
-                            ));
-                        }
+                // opencode-style rows: everything indented three columns.
+                // Tool activity renders per the display level: hidden (just
+                // the response), rows only, or rows with preview bodies.
+                if display != ToolDisplay::Hidden {
+                    let with_previews = display == ToolDisplay::Full;
+                    for tool in &self.tools {
+                        self.tool_row(tool, theme, inner, with_previews, &mut lines);
                     }
-                    lines.push(Line::from(spans));
-
-                    // Completed block bodies: output or patch, shown once the
-                    // tool has finished (opencode keeps running rows bare) and
-                    // only while `/details` / `ctrl+o` is on.
-                    if details && !tool.running {
-                        if let Some(preview) = &tool.preview {
-                            if tool.name == "edit_file" {
-                                let mut diff = DiffView::with_theme(*theme);
-                                for raw in preview.split('\n') {
-                                    diff.push_diff(raw.to_string());
-                                }
-                                for line in diff.styled_lines() {
-                                    let content: String =
-                                        line.spans.iter().map(|s| s.content.as_ref()).collect();
-                                    let style =
-                                        line.spans.first().map(|s| s.style).unwrap_or_default();
-                                    let shown = text::truncate(&content, inner.saturating_sub(5));
-                                    if shown.is_empty() {
-                                        lines.push(Line::from(Span::raw("     ")));
-                                    } else {
-                                        lines.push(Line::from(Span::styled(
-                                            format!("     {shown}"),
-                                            style,
-                                        )));
-                                    }
-                                }
-                            } else {
-                                for raw in preview.split('\n') {
-                                    let style = if raw.starts_with('…') {
-                                        Style::default().fg(theme.faint())
-                                    } else {
-                                        Style::default().fg(theme.muted())
-                                    };
-                                    let shown = text::truncate(raw, inner.saturating_sub(5));
-                                    if shown.is_empty() {
-                                        lines.push(Line::from(Span::raw("     ")));
-                                    } else {
-                                        lines.push(Line::from(Span::styled(
-                                            format!("     {shown}"),
-                                            style,
-                                        )));
-                                    }
-                                }
-                            }
-                        }
+                    if !self.tools.is_empty() {
+                        lines.push(Line::default());
                     }
-                }
-
-                if !self.tools.is_empty() {
-                    lines.push(Line::default());
                 }
 
                 let st = text::MarkdownStyles::new(theme);

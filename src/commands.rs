@@ -210,7 +210,7 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/details",
         aliases: &[],
-        hint: "toggle tool output details (ctrl+o)",
+        hint: "cycle tool display: hidden · rows · full (ctrl+o)",
         kind: Command::Details,
     },
     Entry {

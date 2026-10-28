@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::{
     App, Entry, EntryRole, Overlay, OverlayKind, Phase, PickerMode, SudoPasswordState,
-    SuggestionStrip, ToolRow,
+    SuggestionStrip, ToolDisplay, ToolRow,
 };
 use crate::commands;
 use crate::commands::Command;
@@ -121,6 +121,7 @@ async fn composer_layout_width_tracks_terminal() {
 #[tokio::test]
 async fn renders_a_turn_with_tools_and_markdown() {
     let mut app = test_app().await;
+    app.tool_display = ToolDisplay::Full;
     app.entries
         .push(Entry::new(EntryRole::User, "list the files in src"));
     let mut reply = assistant(
@@ -153,6 +154,7 @@ async fn renders_a_turn_with_tools_and_markdown() {
 #[tokio::test]
 async fn tool_rows_show_code_preview_live() {
     let mut app = test_app().await;
+    app.tool_display = ToolDisplay::Full;
     app.entries
         .push(Entry::new(EntryRole::User, "make a calculator"));
     let mut reply = assistant("writing the file");
@@ -172,7 +174,7 @@ async fn tool_rows_show_code_preview_live() {
     );
 
     // `/details` off collapses previews back to bare tool rows.
-    app.show_tool_details = false;
+    app.tool_display = ToolDisplay::Rows;
     let text = frame_text(&mut app, 92, 24);
     assert!(
         !text.contains("def add(a, b):"),
@@ -183,6 +185,7 @@ async fn tool_rows_show_code_preview_live() {
 #[tokio::test]
 async fn edit_preview_shows_old_and_new_lines() {
     let mut app = test_app().await;
+    app.tool_display = ToolDisplay::Full;
     app.entries.push(Entry::new(EntryRole::User, "fix it"));
     let mut reply = assistant("editing");
     let mut tool = with_tool("edit_file", "calculator.py", true);
@@ -254,6 +257,7 @@ async fn streaming_cursor_keeps_the_last_char() {
 #[tokio::test]
 async fn tool_pills_show_their_own_duration() {
     let mut app = test_app().await;
+    app.tool_display = ToolDisplay::Rows;
     let mut entry = assistant("edited the file");
     let mut tool = with_tool("edit_file", "calculator.py", true);
     tool.started = std::time::Instant::now();
@@ -700,6 +704,35 @@ async fn mouse_selection_survives_blank_gap_rows() {
 }
 
 #[tokio::test]
+async fn preview_of_the_new_transcript_style() {
+    let mut app = test_app().await;
+    app.entries
+        .push(Entry::new(EntryRole::User, "lets continue this project"));
+    let mut reply = assistant(
+        "Found the workout app. The build passes and tests are green.\n\nNext I'll wire the login screen.",
+    );
+    for (name, detail) in [
+        ("list_files", "src · 6 files + 3 dirs"),
+        ("run_command", "npm test 2>&1"),
+        ("read_file", "src/main.rs · 23 lines"),
+    ] {
+        let mut tool = with_tool(name, detail, true);
+        tool.elapsed = Some(std::time::Duration::from_millis(340));
+        reply.tools.push(tool);
+    }
+    reply.elapsed = Some(std::time::Duration::from_secs(12));
+    reply.usage = Some(crate::agent::provider::Usage {
+        prompt_tokens: 4200,
+        completion_tokens: 900,
+        total_tokens: 5100,
+    });
+    app.entries.push(reply);
+
+    let text = frame_text(&mut app, 96, 20);
+    println!("{}", text);
+}
+
+#[tokio::test]
 async fn mouse_selection_survives_emoji_lines() {
     use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
@@ -798,6 +831,30 @@ async fn wide_glyph_drag_paints_every_cell_of_the_glyphs() {
         vec![2, 4, 6],
         "every selected glyph's base cell paints: {highlighted:?}"
     );
+}
+
+#[tokio::test]
+async fn hidden_tool_display_shows_only_the_response() {
+    let mut app = test_app().await;
+    app.entries.push(Entry::new(EntryRole::User, "build it"));
+    let mut reply = assistant("done building");
+    reply.tools.push(with_tool("run_command", "npm test", true));
+    app.entries.push(reply);
+
+    // Default level is Hidden: no tool rows at all, just the response.
+    let text = frame_text(&mut app, 92, 24);
+    assert!(!text.contains("run_command"), "tool row leaked:\n{text}");
+    assert!(text.contains("done building"), "response missing:\n{text}");
+
+    // Rows level: the row appears, still without previews.
+    app.tool_display = ToolDisplay::Rows;
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("run_command"), "tool row missing:\n{text}");
+
+    // Full level: identical here (no preview body on this row).
+    app.tool_display = ToolDisplay::Full;
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("run_command"), "tool row missing:\n{text}");
 }
 
 #[tokio::test]
@@ -1812,6 +1869,8 @@ fn help_sheet_lists_every_on_key_binding() {
 
 #[tokio::test]
 async fn edit_file_preview_uses_the_diff_renderer() {
+    let mut app = test_app().await;
+    app.tool_display = ToolDisplay::Full;
     fn fg_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<Color> {
         for y in 0..buffer.area.height {
             let mut row = String::new();
@@ -1825,7 +1884,6 @@ async fn edit_file_preview_uses_the_diff_renderer() {
         None
     }
 
-    let mut app = test_app().await;
     app.entries.push(Entry::new(EntryRole::User, "fix it"));
     let mut reply = assistant("editing");
     let mut tool = with_tool("edit_file", "calculator.py", true);
@@ -1857,7 +1915,7 @@ async fn edit_file_preview_uses_the_diff_renderer() {
     );
 
     // `/details` off still collapses the whole preview.
-    app.show_tool_details = false;
+    app.tool_display = ToolDisplay::Rows;
     let text = frame_text(&mut app, 92, 24);
     assert!(
         !text.contains("return a"),

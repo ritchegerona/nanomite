@@ -429,7 +429,7 @@ pub fn help_keys() -> &'static [(&'static str, &'static str)] {
             "ctrl+f",
             "search the transcript (enter/↓ next · ↑ prev · esc close)",
         ),
-        ("ctrl+o", "toggle tool output details"),
+        ("ctrl+o", "cycle tool display: hidden · rows · full"),
         ("ctrl+p / ctrl+n", "previous · next prompt from history"),
         ("ctrl+a / ctrl+e", "prompt home · prompt end"),
         (

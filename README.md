@@ -337,7 +337,7 @@ to `LIKE` search, reporting the index in use honestly.
 | `ctrl+t` / `ctrl+l` | New session · clear transcript |
 | `ctrl+r` | Cycle reasoning effort |
 | `ctrl+f` | Search the transcript (enter/↓ next · ↑ prev · esc closes) |
-| `ctrl+o` | Toggle tool output details |
+| `ctrl+o` | Cycle tool display: hidden · rows · full |
 | `ctrl+p` / `ctrl+n` | Previous · next prompt from history |
 | `tab` | Cycle follow-up suggestions (when shown) · accept ghost text |
 | `ctrl+w` / `ctrl+u` / `ctrl+k` | Delete word · clear line · delete to end |
@@ -386,7 +386,7 @@ features · appearance · output.
 | `/ab` | | Compare minimal vs high reasoning side by side — `/ab <prompt>` |
 | `/improve` | | Review self-edit proposals — `a` approve (with regression gate), `r` reject |
 | `/improve-from-board` | | Stage the board's synthesis as a proposal |
-| `/details` | | Toggle tool output details (`ctrl+o`) |
+| `/details` | | Cycle tool display: hidden · rows · full (`ctrl+o`) |
 | `/thinking` | | Toggle the thinking indicator |
 | `/focus` | | Show only the latest exchange (`f2`) |
 | `/themes` | `/theme` | Switch colour theme (persisted) |

@@ -87,8 +87,8 @@ pub struct ToolRow {
 pub struct Rendered {
     pub rev: u64,
     pub width: u16,
-    /// `/details` state this cache was built for.
-    pub details: bool,
+    /// Tool-display level this cache was built for.
+    pub tool_display: ToolDisplay,
     /// Tool-mode colour the cache was built for: the user-message bar and the
     /// assistant footer follow the active mode, like opencode's per-agent
     /// colouring.
@@ -612,6 +612,19 @@ struct UndoStep {
     delta: usize,
 }
 
+/// How tool activity renders in the transcript (`/details`, `ctrl+o`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolDisplay {
+    /// No tool rows at all - just the response text. The default: the
+    /// status strip still shows live step/tool progress while working.
+    #[default]
+    Hidden,
+    /// One muted row per tool call, no preview bodies.
+    Rows,
+    /// Tool rows with their preview bodies (code, command output, diffs).
+    Full,
+}
+
 /// One turn's pre-change file contents for `/revert` (the time machine).
 #[derive(Debug)]
 pub(crate) struct TurnSnapshot {
@@ -844,6 +857,8 @@ pub struct App {
     /// Performance hud (`/hud`): draws the last frame time, peak and
     /// transcript stats into the footer.
     pub hud: bool,
+    /// Tool activity display level (`/details`, `ctrl+o`).
+    pub tool_display: ToolDisplay,
     /// Time machine: pre-change file contents per turn, newest last.
     pub(crate) snapshots: Vec<TurnSnapshot>,
     /// Monotonic turn serial, incremented per prompt.
@@ -969,6 +984,7 @@ impl App {
             selection: None,
             scrollbar_drag: false,
             hud: false,
+            tool_display: ToolDisplay::Hidden,
             snapshots: Vec::new(),
             turn_serial: 0,
             focus: false,
@@ -4083,11 +4099,20 @@ impl App {
         self.mark_dirty();
     }
 
-    /// Toggles the tool-output detail level (`/details`, `ctrl+o`): the same
-    /// expand/collapse switch opencode binds to `ctrl+o`.
+    /// Cycles the tool display level (`/details`, `ctrl+o`):
+    /// hidden -> rows -> full -> hidden.
     pub fn toggle_tool_details(&mut self) {
-        self.show_tool_details = !self.show_tool_details;
-        self.toast(format!("tool details: {}", on_off(self.show_tool_details)));
+        self.tool_display = match self.tool_display {
+            ToolDisplay::Hidden => ToolDisplay::Rows,
+            ToolDisplay::Rows => ToolDisplay::Full,
+            ToolDisplay::Full => ToolDisplay::Hidden,
+        };
+        let label = match self.tool_display {
+            ToolDisplay::Hidden => "hidden",
+            ToolDisplay::Rows => "rows only",
+            ToolDisplay::Full => "full",
+        };
+        self.toast(format!("tool display: {label}"));
         self.invalidate_transcript();
     }
 
