@@ -305,37 +305,36 @@ impl FileTools {
                 let text = String::from_utf8_lossy(bytes);
                 let rel = self.relative(&path);
 
-                // Use memchr to find line boundaries quickly
-                let mut line_start = 0;
-                let mut line_no = 1;
-                let mut search_pos = 0;
+                // Line boundaries come from the DECODED string, never from the
+                // raw bytes: lossy decoding expands invalid bytes into 3-byte
+                // replacement characters, so raw-byte offsets drift and a
+                // `&text[..]` slice can land mid-character (the abort this
+                // fixes). '\n' is ASCII and cannot appear inside a multi-byte
+                // sequence, so memchr on the decoded bytes finds the same
+                // boundaries safely.
+                let decoded = text.as_bytes();
+                let mut line_start = 0usize;
+                let mut line_no = 1usize;
+                let mut search_pos = 0usize;
 
-                while search_pos < bytes.len() {
+                while search_pos < decoded.len() {
                     // Find next newline
-                    let line_end = memchr(b'\n', &bytes[search_pos..])
+                    let line_end = memchr(b'\n', &decoded[search_pos..])
                         .map(|i| search_pos + i)
-                        .unwrap_or(bytes.len());
+                        .unwrap_or(decoded.len());
 
-                    // Quick ASCII check on this line slice
-                    let line_bytes = &bytes[line_start..line_end];
-                    let is_ascii = line_bytes.iter().all(|&b| b.is_ascii());
-
-                    let matched = if is_ascii && !needle_bytes.is_empty() {
-                        contains_ci_ascii(line_bytes, needle_bytes)
-                    } else if !needle_bytes.is_empty() {
-                        // Fallback: use the already-decoded text
-                        let line_str = &text[line_start..line_end.min(text.len())];
-                        line_str.to_lowercase().contains(&needle)
+                    let line_str = &text[line_start..line_end];
+                    let matched = if !needle_bytes.is_empty() && line_str.is_ascii() {
+                        contains_ci_ascii(line_str.as_bytes(), needle_bytes)
                     } else {
-                        false
+                        line_str.to_lowercase().contains(&needle)
                     };
 
                     if matched {
-                        let display_line = &text[line_start..line_end.min(text.len())];
                         hits.push(SearchHit {
                             path: rel.clone(),
                             line: line_no,
-                            text: display_line.trim_end().chars().take(200).collect(),
+                            text: line_str.trim_end().chars().take(200).collect(),
                         });
                         if hits.len() >= MAX_HITS {
                             truncated = true;
@@ -578,6 +577,46 @@ mod tests {
 
     /// End-to-end: case-insensitive hits still found through the public tool,
     /// with the hit text carrying the file's original casing.
+    #[test]
+    fn search_survives_invalid_utf8_and_multibyte_files() {
+        // Regression: the search walk sliced the lossy-decoded string with
+        // raw-byte offsets - invalid bytes expand into 3-byte replacement
+        // characters, the offsets drifted mid-glyph, and the abort took the
+        // whole app down.
+        let dir = std::env::temp_dir().join(format!("nanomite-search-utf8-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut broken = b"ok ascii line\nbroken \xff\xfe marker\n".to_vec();
+        broken.extend_from_slice("needle here\n".as_bytes());
+        broken.extend_from_slice(b"more \x80 stuff\n");
+        fs::write(dir.join("broken.txt"), &broken).unwrap();
+        fs::write(
+            dir.join("cjk.txt"),
+            "\u{65e5}\u{672c}\u{8a9e} \u{30c6}\u{30b9}\u{30c8} needle\n".as_bytes(),
+        )
+        .unwrap();
+        let tools = FileTools::new(dir.clone(), 1024 * 1024);
+        let result = tools
+            .search(SearchArgs {
+                query: "needle".into(),
+                path: None,
+            })
+            .expect("search must not panic on non-utf8 files");
+        assert_eq!(result.hits.len(), 2);
+        assert_eq!(result.hits[0].line, 3, "ascii needle line");
+        assert_eq!(result.hits[1].line, 1, "cjk needle line");
+
+        // Non-ASCII needle exercises the lowercase fallback path.
+        let result = tools
+            .search(SearchArgs {
+                query: "\u{30c6}\u{30b9}\u{30c8}".into(),
+                path: None,
+            })
+            .expect("search");
+        assert_eq!(result.hits.len(), 1);
+        assert!(result.hits[0].text.contains("\u{30c6}\u{30b9}\u{30c8}"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn search_finds_case_insensitive_hits() {
         let dir = std::env::temp_dir().join(format!("nanomite-search-{}", std::process::id()));
