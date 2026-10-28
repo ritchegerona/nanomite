@@ -43,7 +43,7 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
   (SQLite + human-readable markdown) that survives restarts and provider
   changes. It is on by default: records are retrieved before every turn and
   captured after, per policy (see [Persistent memory](#persistent-memory))
-- **18 built-in tools** — file access, document extraction, a workspace shell,
+- **20 built-in tools** — file access, document extraction, a workspace shell,
   SSH, web access, six memory tools and two self-improvement tools
   (see [Tools](#tools))
 - **Tool library** — `/tools` lists every tool grouped by category and lets you
@@ -64,6 +64,9 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
   of messages, markdown rendering with syntax-highlighted code blocks and
   grid tables, live tool-call rows, unified diffs in edit previews, context
   meter with a burn-rate projection, CJK/wide-character-safe composer
+- **Browser automation** — `browse` renders JavaScript-heavy pages in a
+  headless browser (plain `web_fetch` only sees raw HTTP), and
+  `browse_screenshot` saves full-page PNGs into the workspace
 - **Reasoning streaming** — reasoning models (nemotron, deepseek-r1, …)
   stream their thoughts as a dim live tail while working, collapsing to a
   one-line marker when done: a long reasoning phase never looks like a hang
@@ -183,7 +186,7 @@ Precedence: **built-in defaults < config file < environment variables**.
 
 ## Tools
 
-The model sees these as callable functions — 18 in all, defined once in
+The model sees these as callable functions — 20 in all, defined once in
 `src/tools/catalog.rs` and rendered as OpenAI-function schemas. Everything
 file-shaped is sandboxed to the workspace root — paths that escape are refused.
 `/tools` turns any of them off.
@@ -200,6 +203,8 @@ file-shaped is sandboxed to the workspace root — paths that escape are refused
 | `ssh_run` | Run a command on a remote host (`user@host`), key-based auth only, `BatchMode=yes` so it never hangs on a password prompt |
 | `web_fetch` | GET an http(s) URL and return readable text (HTML stripped, entities decoded, size-capped) |
 | `web_search` | Search the web (DuckDuckGo Lite) and return titles, URLs, snippets |
+| `browse` | Open a URL in a headless browser (JavaScript rendered) and return the readable text |
+| `browse_screenshot` | Render a URL headless and save a full-page screenshot PNG in the workspace |
 | `memory_search` | Search persistent memory (keyword + category/tag/project filters) |
 | `memory_save` | Store a durable fact, decision, preference or lesson |
 | `memory_get` | Fetch one memory by id |
@@ -211,7 +216,7 @@ file-shaped is sandboxed to the workspace root — paths that escape are refused
 
 **Tool library**
 
-`/tools` lists all 18 tools grouped by category (files · exec · web · memory ·
+`/tools` lists all 20 tools grouped by category (files · exec · web · memory ·
 document · self-improve) with ✓ enabled / ✗ disabled. Toggles are written to
 `disabled_tools` in `~/.config/nanomite/config.toml` and survive restarts;
 `NANOMITE_DISABLED_TOOLS` overrides the file. A disabled tool is filtered out of

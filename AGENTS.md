@@ -68,7 +68,7 @@ broken.
   reply parsing for the side-call the app fires on a finished turn; pure logic,
   no channel), `testdouble.rs` (`#[cfg(test)]` only). `trivial.rs` is **deleted**; do
   not restore it.
-- `src/tools/` — `catalog.rs` (the single 18-tool inventory as
+- `src/tools/` — `catalog.rs` (the single 34-tool inventory as
   `ToolSpec{name, description, category}`; drives schemas, the `/tools`
   overlay and the dispatch refusal — tests pin catalog and schemas together),
   `file_tools`, `document_tools` (`read_document` over `extract/`), `exec_tools`
@@ -154,7 +154,7 @@ claims are **now false** — do not "fix code" because a doc says so:
   `improve`, `extract`) and caps `max_steps` at 12 / `max_tool_calls` at 24
   (both are unlimited by default now).
 - `docs/TOOLS.md` still counts 9 tools and calls the memory tools L1/unverified;
-  the catalog is 18.
+  the catalog is 34.
 - `docs/MEMORY.md` and `docs/SECURITY.md` were accurate on the store and the
   gate and are updated as of 2026-10-16 for production activation and the
   self-edit gate.

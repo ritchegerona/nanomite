@@ -1,3 +1,4 @@
+pub mod browser_tools;
 pub mod catalog;
 pub mod document_tools;
 pub mod exec_tools;
@@ -22,6 +23,9 @@ pub struct ToolSet {
     pub files: crate::tools::file_tools::FileTools,
     pub exec: crate::tools::exec_tools::ExecTools,
     pub web: crate::tools::web_tools::WebTools,
+    /// Headless browser automation (chrome/chromium CLI). Always present;
+    /// the tools fail with a clean message when no browser is installed.
+    pub browser: crate::tools::browser_tools::BrowserTools,
     /// Document extraction (pdf, docx, xlsx, odt, rtf, csv, …). Always
     /// present: the registry is built in-process and needs no engine.
     pub documents: crate::tools::document_tools::DocumentTools,
@@ -53,6 +57,7 @@ impl ToolSet {
             files: crate::tools::file_tools::FileTools::new(workspace.clone(), max_file_bytes),
             exec: crate::tools::exec_tools::ExecTools::new(workspace.clone()),
             web: crate::tools::web_tools::WebTools,
+            browser: crate::tools::browser_tools::BrowserTools::new(workspace.clone()),
             documents: crate::tools::document_tools::DocumentTools::new(
                 workspace.clone(),
                 max_file_bytes,

@@ -37,7 +37,7 @@ fn tool_icon(name: &str) -> &'static str {
         "read_file" | "read_document" | "list_files" => "→",
         "write_file" | "edit_file" => "←",
         "search" => "✱",
-        "web_fetch" => "%",
+        "web_fetch" | "browse" | "browse_screenshot" => "%",
         "web_search" => "◈",
         _ => "⚙",
     }

@@ -92,6 +92,16 @@ impl ToolSet {
                 category: Web,
             },
             ToolSpec {
+                name: "browse",
+                description: "Open a URL in a headless browser (JavaScript rendered) and return the page's readable text.",
+                category: Web,
+            },
+            ToolSpec {
+                name: "browse_screenshot",
+                description: "Open a URL in a headless browser and save a full-page screenshot PNG in the workspace.",
+                category: Web,
+            },
+            ToolSpec {
                 name: "memory_search",
                 description: "Search persistent memory for facts, decisions and preferences from earlier sessions.",
                 category: Memory,
@@ -220,7 +230,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate tool names in catalog");
-        assert_eq!(count, 32, "expected the full 32-tool inventory");
+        assert_eq!(count, 34, "expected the full 34-tool inventory");
     }
 
     /// Catalog and schemas must stay in step: the exact name set the model

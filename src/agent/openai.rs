@@ -535,6 +535,32 @@ pub fn tool_schemas() -> Vec<Tool> {
             }),
         ),
         Tool::new(
+            "browse",
+            "Open a URL in a headless browser (JavaScript rendered) and return the page's readable text.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "Absolute http(s) URL" },
+                    "wait_ms": { "type": "integer", "description": "Optional virtual-time budget in ms for JavaScript rendering (200-15000, default 3000)" }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "browse_screenshot",
+            "Open a URL in a headless browser and save a full-page screenshot PNG in the workspace.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "Absolute http(s) URL" },
+                    "output": { "type": "string", "description": "Workspace-relative PNG path (defaults to screenshot-<unix time>.png)" }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
             "git_status",
             "Show git status: current branch, ahead/behind counts, staged, unstaged and untracked files.",
             json!({
@@ -727,7 +753,8 @@ pub fn system_prompt(workspace: &str) -> String {
         "You are nanomite, a terse terminal coding agent working in {workspace}.\n\
          You have tools: file access (list_files, read_file, write_file, edit_file, search),\n\
          a workspace shell (run_command), SSH to remote hosts (ssh_run) and web access\n\
-         (web_fetch, web_search), git (git_status, git_diff, git_log, git_commit, git_branch),\n         and test runner (run_tests), symbol index (index_symbols, find_symbol, find_references), plan (create_plan, get_plan, update_task, list_plans, delete_plan).\n\
+         (web_fetch, web_search), a headless browser for JavaScript-rendered pages\n\
+         (browse, browse_screenshot), git (git_status, git_diff, git_log, git_commit, git_branch),\n         and test runner (run_tests), symbol index (index_symbols, find_symbol, find_references), plan (create_plan, get_plan, update_task, list_plans, delete_plan).\n\
          Prefer reading files before answering. Cite paths as `path:line`.\n\
          Keep answers short: no preamble, no restating the request."
     )

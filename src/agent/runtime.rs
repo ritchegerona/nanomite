@@ -907,6 +907,28 @@ pub(crate) fn run_tool(
                 format!("{} · {}", shorten(&url, 40), summary.trim()),
             ))
         }
+        "browse" => {
+            let parsed: crate::tools::browser_tools::BrowseArgs =
+                serde_json::from_value(args).map_err(|e| format!("bad browse arguments: {e}"))?;
+            let result = tools
+                .browser
+                .browse(parsed)
+                .map_err(|e| format!("browse failed: {e}"))?;
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            let summary = if result.truncated { " (truncated)" } else { "" };
+            Ok((payload, format!("rendered {}{summary}", result.url)))
+        }
+        "browse_screenshot" => {
+            let parsed: crate::tools::browser_tools::BrowseScreenshotArgs =
+                serde_json::from_value(args)
+                    .map_err(|e| format!("bad browse_screenshot arguments: {e}"))?;
+            let result = tools
+                .browser
+                .screenshot(parsed)
+                .map_err(|e| format!("browse_screenshot failed: {e}"))?;
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, format!("screenshot -> {}", result.path)))
+        }
         "web_search" => {
             let parsed: WebSearchArgs = serde_json::from_value(args)
                 .map_err(|e| format!("bad web_search arguments: {e}"))?;
@@ -1878,7 +1900,7 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        assert_eq!(filter_disabled_schemas(schemas, &[]).len(), 24);
+        assert_eq!(filter_disabled_schemas(schemas, &[]).len(), 26);
     }
 
     #[test]
