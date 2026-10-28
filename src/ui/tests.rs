@@ -969,6 +969,35 @@ async fn doctor_report_lands_as_notes() {
     assert!(msg.contains("1 check"), "toast: {msg}");
 }
 
+#[test]
+fn parse_subtasks_extracts_three_numbered_lines() {
+    let reply = "Here is the split:\n1. Implement the login screen\n2) Audit the token refresh path\n- 3. Wire e2e tests\nextra prose";
+    let tasks = crate::app::parse_subtasks(reply);
+    assert_eq!(tasks.len(), 3);
+    assert!(tasks[0].contains("login screen"));
+    assert!(tasks[2].contains("e2e tests"));
+}
+
+#[tokio::test]
+async fn team_refuses_empty_goal_and_busy_board() {
+    let mut app = test_app().await;
+    app.run_team("   ");
+    let (msg, _) = app.toast.clone().expect("toast");
+    assert!(msg.contains("usage"), "toast: {msg}");
+    assert!(app.overlay.is_none());
+
+    // A convening board blocks a second team.
+    app.overlay = Some(Overlay::Board(crate::app::BoardState {
+        running: true,
+        ..Default::default()
+    }));
+    app.run_team("a real goal");
+    let (msg, _) = app.toast.clone().expect("toast");
+    assert!(msg.contains("already convening"), "toast: {msg}");
+    // The overlay is untouched (still the pre-existing board, not replaced).
+    assert!(matches!(app.overlay, Some(Overlay::Board(_))));
+}
+
 #[tokio::test]
 async fn ab_with_empty_prompt_is_refused() {
     let mut app = test_app().await;

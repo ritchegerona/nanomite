@@ -44,6 +44,7 @@ pub enum Command {
     Doctor,
     Ab,
     Focus,
+    Team,
 }
 
 pub struct Entry {
@@ -193,6 +194,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "compare minimal vs high reasoning side by side - /ab <prompt>",
         kind: Command::Ab,
+    },
+    Entry {
+        command: "/team",
+        aliases: &["/parallel"],
+        hint: "run three agents in parallel on one goal - /team <goal>",
+        kind: Command::Team,
     },
     Entry {
         command: "/improve",

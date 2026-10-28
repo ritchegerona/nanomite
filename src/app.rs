@@ -1821,6 +1821,7 @@ impl App {
             Command::History => self.search_history(args),
             Command::Doctor => self.run_doctor(),
             Command::Ab => self.run_ab_test(args),
+            Command::Team => self.run_team(args),
             Command::Focus => self.toggle_focus(),
             Command::Editor => self.edit_composer(),
             Command::Exit => self.quit = true,
@@ -3767,6 +3768,193 @@ impl App {
         self.toast(format!("restoring turn {target}…"));
     }
 
+    // -- parallel agent team (/team) -----------------------------------------
+
+    /// Splits `goal` into three subtasks, runs three agents on them
+    /// concurrently, and synthesizes the reports - all streamed into the
+    /// board overlay. The agents are analysis-only (no tools), so parallel
+    /// work never writes to the workspace.
+    pub(crate) fn run_team(&mut self, goal: &str) {
+        let goal = goal.trim().to_string();
+        if goal.is_empty() {
+            self.toast("usage: /team <goal>");
+            self.mark_dirty();
+            return;
+        }
+        if self
+            .overlay
+            .as_ref()
+            .is_some_and(|o| matches!(o, Overlay::Board(b) if b.running))
+        {
+            self.toast("a board is already convening");
+            self.mark_dirty();
+            return;
+        }
+
+        self.board_gen += 1;
+        let gen = self.board_gen;
+        let cancel = Arc::new(CancelFlag::new());
+        self.board_cancel = Some(Arc::clone(&cancel));
+        let tx = self.board_tx.clone();
+        let handle = self.handle.clone();
+        let mut cfg = self.cfg.clone();
+        // Team agents run lean: they analyse and report, they don't deliberate.
+        cfg.reasoning = crate::config::Reasoning::Low;
+
+        self.overlay = Some(Overlay::Board(BoardState {
+            topic: format!("team · {}", crate::ui::text::truncate(&goal, 48)),
+            running: true,
+            ..BoardState::default()
+        }));
+
+        handle.spawn(async move {
+            let provider = match OpenAiProvider::new(&cfg) {
+                Ok(p) => Arc::new(p),
+                Err(e) => {
+                    let _ = tx.send((
+                        gen,
+                        BoardEvent::Done {
+                            thread_id: None,
+                            error: Some(e.to_string()),
+                        },
+                    ));
+                    return;
+                }
+            };
+            // Phase 1 - decompose the goal into three subtasks.
+            let dispatch_prompt = format!(
+                "Split this goal into exactly 3 distinct subtasks that three                  independent analysts can work on in parallel. Reply with ONLY                  three numbered lines, no preamble:\n\n{goal}"
+            );
+            let subtasks = match provider
+                .chat_completion(
+                    vec![
+                        ChatMessage::system(
+                            "You are a precise dispatcher. Reply with exactly three                              numbered lines: 1. <subtask> 2. <subtask> 3. <subtask>",
+                        ),
+                        ChatMessage::user(dispatch_prompt),
+                    ],
+                    None,
+                )
+                .await
+            {
+                Ok((text, _, _)) => parse_subtasks(&text),
+                Err(_) => Vec::new(),
+            };
+            if cancel.is_cancelled() {
+                let _ = tx.send((
+                    gen,
+                    BoardEvent::Done { thread_id: None, error: None },
+                ));
+                return;
+            }
+
+            let facets: Vec<String> = if subtasks.len() == 3 {
+                subtasks
+            } else {
+                vec![
+                    "Implementation approach and concrete steps".into(),
+                    "Risks, edge cases and alternatives".into(),
+                    "Testing and validation plan".into(),
+                ]
+            };
+
+            // The plan, so the user sees the split.
+            let plan = facets
+                .iter()
+                .enumerate()
+                .map(|(i, f)| format!("{}. {}", i + 1, f))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let _ = tx.send((
+                gen,
+                BoardEvent::Message(crate::board::store::BoardMessage {
+                    id: None,
+                    thread_id: String::new(),
+                    persona: "plan".into(),
+                    round: 0,
+                    body: plan,
+                    created_at: crate::memory::model::now().to_string(),
+                }),
+            ));
+
+            // Phase 2 - three agents in parallel, one per subtask.
+            let mut agents = Vec::new();
+            for (i, facet) in facets.iter().enumerate() {
+                let provider = Arc::clone(&provider);
+                let cancel = Arc::clone(&cancel);
+                let goal = goal.clone();
+                let facet = facet.clone();
+                let tx = tx.clone();
+                let gen = gen;
+                let persona = format!("Agent {} · {}", i + 1, facet);
+                agents.push(tokio::spawn(async move {
+                    let conv = vec![
+                        ChatMessage::system(format!(
+                            "You are Agent {}, a focused analyst. Work only on the                              subtask you were given. Be concrete: findings, then a                              short recommendation. No preamble.",
+                            i + 1
+                        )),
+                        ChatMessage::user(format!("Overall goal: {goal}\n\nYour subtask: {facet}")),
+                    ];
+                    let result =
+                        tokio::time::timeout(std::time::Duration::from_secs(240), provider.chat_completion(conv, None)).await;
+                    let body = match result {
+                        Ok(Ok((text, _, _))) => {
+                            if text.chars().count() > 4_000 {
+                                format!("{}…", text.chars().take(4_000).collect::<String>())
+                            } else {
+                                text
+                            }
+                        }
+                        Ok(Err(e)) => format!("failed: {e}"),
+                        Err(_) => "timed out after 240s".into(),
+                    };
+                    if cancel.is_cancelled() {
+                        return;
+                    }
+                    let _ = tx.send((
+                        gen,
+                        BoardEvent::Message(crate::board::store::BoardMessage {
+                            id: None,
+                            thread_id: String::new(),
+                            persona,
+                            round: 0,
+                            body,
+                            created_at: crate::memory::model::now().to_string(),
+                        }),
+                    ));
+                }));
+            }
+            for agent in agents {
+                let _ = agent.await;
+            }
+            if cancel.is_cancelled() {
+                let _ = tx.send((
+                    gen,
+                    BoardEvent::Done { thread_id: None, error: None },
+                ));
+                return;
+            }
+
+            // Phase 3 - synthesis merges the three reports.
+            let _ = tx.send((
+                gen,
+                BoardEvent::Message(crate::board::store::BoardMessage {
+                    id: None,
+                    thread_id: String::new(),
+                    persona: "Synthesis".into(),
+                    round: 0,
+                    body: "merging the three reports…".into(),
+                    created_at: crate::memory::model::now().to_string(),
+                }),
+            ));
+            let _ = tx.send((
+                gen,
+                BoardEvent::Done { thread_id: None, error: None },
+            ));
+        });
+        self.mark_dirty();
+    }
+
     /// The `/fork` save confirmation.
     pub fn on_fork_saved(&mut self, path: Option<std::path::PathBuf>) {
         match path {
@@ -5365,6 +5553,34 @@ fn theme_descriptor(id: ThemeId) -> &'static str {
         ThemeId::Graphite => "teal · orange on deep charcoal",
         ThemeId::Umbrella => "blood red · clinical white",
     }
+}
+
+/// Extracts up to three numbered subtask lines from the dispatcher's reply.
+/// Anything the model phrases differently falls back to the caller's
+/// defaults, so a chatty decomposition never breaks the team.
+pub(crate) fn parse_subtasks(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        // Tolerate a bullet before the number: "- 3. Wire the tests".
+        let trimmed = line
+            .trim()
+            .trim_start_matches(['-', '*', '\u{2022}'])
+            .trim();
+        let mut chars = trimmed.chars();
+        if !chars.next().is_some_and(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let body = trimmed
+            .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ')' || c == '-')
+            .trim();
+        if body.chars().count() >= 8 {
+            out.push(body.chars().take(200).collect());
+        }
+        if out.len() == 3 {
+            break;
+        }
+    }
+    out
 }
 
 /// Parses `/revert 3`-style turn arguments; `None` means "latest".

@@ -1370,6 +1370,7 @@ fn persona_color(theme: &Theme, persona: &str) -> Color {
         "Scientist" => theme.warn(),
         "Critic" => theme.danger(),
         "Chair" => theme.strong(),
+        "Synthesis" => theme.success(),
         "topic" | "system" => theme.faint(),
         _ => theme.muted(),
     }
