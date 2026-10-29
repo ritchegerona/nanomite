@@ -19,11 +19,11 @@ siblings are not part of the project:
 ## Build state — READ FIRST (verified 2026-10-28, v0.7.0 wave: opencode-style UI, reasoning streaming, browser tools, time machine, /team, density, ETA, update command)
 
 `cargo check` (lib + bins) **passes clean**. `cargo test --lib` is
-**506 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
+**508 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
 -- -D warnings` is clean. `cargo fmt --check` is clean.
 
 `tests/production_attach.rs` is a separate **integration** target (1 test, green)
-that exercises the real startup attach path. It is *not* part of the 506; quote
+that exercises the real startup attach path. It is *not* part of the 508; quote
 the two numbers separately.
 
 `benches/perf.rs` is a stable, zero-dep harness (median of 7 batches) and
@@ -34,15 +34,15 @@ compiles on the stable toolchain: `cargo bench` works, and `cargo test`
 
 ```bash
 cargo check            # clean
-cargo test --lib       # 506 passed, 0 failed, ~5 s, fully offline (verified)
-cargo test --test production_attach   # 1 passed (integration; not in the 506)
+cargo test --lib       # 508 passed, 0 failed, ~5 s, fully offline (verified)
+cargo test --test production_attach   # 1 passed (integration; not in the 508)
 cargo bench            # benches/perf.rs harness; bench profile inherits release
 cargo clippy --all-targets -- -D warnings   # clean (no clippy.toml / CI in the repo)
 cargo fmt
 ```
 
 Do not "fix" the suite by deleting tests or by claiming a count from
-README/docs without running it. Test counts in README (506) are correct for
+README/docs without running it. Test counts in README (508) are correct for
 `--lib`; the integration target is counted separately.
 
 Release profile sets `panic = "abort"`, so the panic hook in `src/main.rs:141`
@@ -73,6 +73,8 @@ broken.
   overlay and the dispatch refusal — tests pin catalog and schemas together),
   `file_tools`, `document_tools` (`read_document` over `extract/`), `exec_tools`
   (`run_command` = `sh -c`, `ssh_run` = key-only + `BatchMode=yes`), `web_tools`,
+  `browser_tools` (`browse`, `browse_screenshot` — headless Chromium via
+  CLI, discovered from `NANOMITE_BROWSER` or PATH),
   `memory_tools`, `improve_tools` (`propose_self_edit`, `list_self_edits` —
   stage only, never apply). Dispatch is a `match` in `runtime.rs::run_tool`.
 - `src/board/` — the multi-agent board: `personas.rs` (Architect, Engineer,
@@ -84,6 +86,7 @@ broken.
   (`.bak` backup, `cargo test --lib` regression gate, byte-exact rollback),
   `audit.rs` (append-only JSONL decision log). UI: `/improve` list + review
   view; `a` approves, `r` rejects.
+- `src/update.rs` — `nanomite update`: fetch origin, ff-only pull, rebuild the release binary in place (git-checkout installs)
 - `src/ui/` — `theme.rs` (4 palettes, persisted, and the shared
   `theme::glyph` constants), `chat.rs`, `composer.rs`, `panels.rs`
   (incl. `panels::suggestions`, the follow-up suggestion strip above the
@@ -104,7 +107,7 @@ broken.
   `read_document` is the agent-facing door to it.
 - `tests/production_attach.rs` — integration target proving the real production
   attach path (memory + config) works from the outside. 1 test, separate from
-  the 506.
+  the 508.
 
 ## Invariants (do not break)
 

@@ -71,6 +71,17 @@ never listed as released.
   the control channel now).
 - **Streaming cursor** no longer eats the last character of the reply.
 
+### Documentation
+
+- Per-platform installation guide: Linux, macOS (Apple Silicon prefix note)
+  and Windows (PowerShell PATH setup, Windows Terminal recommendation, Edge
+  preinstalled for the browser tools), plus the cross-platform
+  `cargo install --git` shortcut and the `nanomite update` flow
+- Every slash command advertises its keybinding in the palette hints; the
+  commands table in the README gained a Key column
+- Why-nanomite comparison and the launch kit (X / Reddit / HN / LinkedIn
+  drafts) in `docs/launch-kit.md`
+
 ### Status
 
 506 lib tests + 1 integration, clippy clean (deny warnings), fmt clean.
