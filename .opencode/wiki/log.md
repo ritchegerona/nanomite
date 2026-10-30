@@ -24,6 +24,23 @@ caveat.
 ## [2026-10-30] ingest | concepts/scroll-model
 Bottom-anchored scroll offsets and the custom flush-at-both-ends chat scrollbar.
 
+## [2026-10-30] ingest | entities/clickable-links
+Feature complete and verified (530/530 lib tests, clippy 0 warnings, fmt clean).
+Data flow, injection-safe `xdg-open` spawn, test inventory. Click test locates
+its target from the link's own cached region (row + start + 2), like the
+code-block copy test.
+
+## [2026-10-30] ingest | concepts/transcript-row-mapping
+Documented `mouse_to_text_position` semantics: `status_rows()` is streaming-only,
+unanchored selections bail before fallbacks, char-index space for columns.
+Recorded the `rect.y` vs `rect.y + 1` test gotcha (line 0 of a block is a spacer
+row for user entries; locate clicks from cache instead of guessing).
+
+## [2026-10-30] merge | concurrent-session clobber restored
+A parallel session rewrote index.md/log.md as if the wiki were empty, dropping
+the catalog and log. Merged back: full page list + both sessions' entries; added
+a working note warning parallel sessions to re-read before rewriting.
+
 ## [2026-10-30] lint | pending
 - AGENTS.md still says "no central authorization engine" — now partially stale:
   ToolPolicy (static) + Confirmer gate (interactive) exist; per-call authorization

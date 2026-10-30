@@ -24,6 +24,11 @@ never listed as released.
   `NANOMITE_CONFIRM_EXTERNAL=0` disables. implemented+tested.
 - Custom proportional chat scrollbar whose thumb reaches both track ends;
   bottom-anchored scroll offsets documented in tests. implemented+tested.
+- **Clickable chat links**: a plain mouse click on a bare `http(s)://` URL —
+  or on the visible target of a markdown `[label](url)` link — opens it in the
+  system browser via `xdg-open` (fire-and-forget, single argument, no shell).
+  Hard-wrapped URLs are merged back into one link, so any covered row opens
+  the full address. implemented+tested.
 
 ### Changed
 

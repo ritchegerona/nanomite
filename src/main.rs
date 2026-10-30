@@ -266,6 +266,10 @@ fn run_control(
         app.on_image_attached(result.clone());
         return Ok(());
     }
+    if let Control::OpenLink(url) = &control {
+        open_in_browser(url, app);
+        return Ok(());
+    }
 
     let (target, seed) = match &control {
         // Handled above; kept explicit so a new control variant cannot fall
@@ -278,6 +282,7 @@ fn run_control(
         Control::ResumeHint(_) => return Ok(()),
         Control::ForkSaved { .. } => return Ok(()),
         Control::ImageAttached(_) => return Ok(()),
+        Control::OpenLink(_) => return Ok(()),
         Control::EditComposer(text) => {
             let path =
                 std::env::temp_dir().join(format!("nanomite-prompt-{}.md", std::process::id()));
@@ -307,6 +312,7 @@ fn run_control(
         Control::ResumeHint(_) => {}
         Control::ForkSaved { .. } => {}
         Control::ImageAttached(_) => {}
+        Control::OpenLink(_) => {}
         Control::EditComposer(_) => {
             let text = std::fs::read_to_string(&target).unwrap_or_default();
             let _ = std::fs::remove_file(&target);
@@ -333,6 +339,24 @@ fn write_clipboard(text: &str) -> Result<(), Box<dyn std::error::Error + Send + 
     stdout.write_all(nanomite::app::osc52(text).as_bytes())?;
     stdout.flush()?;
     Ok(())
+}
+
+/// Hands a clicked chat link to the system browser.
+///
+/// `xdg-open` forks and exits immediately, so the event loop never blocks and
+/// the browser outlives nanomite; its output is discarded so the TUI stays
+/// clean. The URL arrives as a single argument — no shell — so model-authored
+/// text can never inject a command.
+fn open_in_browser(url: &str, app: &mut App) {
+    let spawned = std::process::Command::new("xdg-open")
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if spawned.is_err() {
+        app.on_link_opened(false);
+    }
 }
 
 fn suspend(terminal: &mut Terminal<Backend>) -> io::Result<()> {

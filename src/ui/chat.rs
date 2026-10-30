@@ -684,6 +684,12 @@ impl Entry {
         });
         if stale {
             let (lines, code_blocks) = self.build(theme, width, display, compact, mode);
+            // Link regions are computed in `lines` index space; the cache
+            // stores u16s like every other row reference.
+            let links = crate::ui::text::link_regions(&lines)
+                .into_iter()
+                .map(|(r, s, e, u)| (r as u16, s as u16, e as u16, u))
+                .collect();
             let height = lines.len() as u16;
             self.cache = Some(Rendered {
                 rev: self.rev,
@@ -693,6 +699,7 @@ impl Entry {
                 mode_color: mode.0,
                 mode_label: mode.1.to_string(),
                 code_blocks,
+                links,
                 lines,
                 height,
             });

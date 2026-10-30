@@ -532,6 +532,55 @@ async fn error_block_collapses_and_expands() {
 }
 
 #[tokio::test]
+async fn clicking_a_link_opens_it_in_the_browser() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = test_app().await;
+    // Long URL: any early-column click lands inside its region.
+    let url = "https://example.com/guide/aaaa/bbbb/cccc/dddd";
+    app.entries
+        .push(assistant(&format!("{url} plus trailing prose")));
+
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        text.contains("https://example.com"),
+        "link missing:\n{text}"
+    );
+    let cached = app.entries[0].cache.as_ref().expect("rendered");
+    assert!(
+        cached.links.iter().any(|(_, _, _, u)| u == url),
+        "link region missing: {:?}",
+        cached.links
+    );
+
+    // A plain click on the link hands it to the browser path. The link's own
+    // cached region gives the exact row and column — no layout assumptions
+    // (same trick as the code-block copy test above). Land strictly inside
+    // the region, two chars past its start.
+    let (link_row, link_start, _, _) = app.entries[0]
+        .cache
+        .as_ref()
+        .expect("rendered")
+        .links
+        .iter()
+        .find(|(_, _, _, u)| u == url)
+        .expect("link region")
+        .clone();
+    let rect = app.view.cached_chat_rect().expect("chat rect cached");
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    };
+    let (column, row) = (rect.x + link_start + 2, rect.y + link_row);
+    app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), column, row));
+    app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), column, row));
+    let (toast, _) = app.toast.clone().expect("link toast");
+    assert!(toast.starts_with("opening"), "toast: {toast}");
+}
+
+#[tokio::test]
 async fn alt_arrows_jump_between_messages() {
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 

@@ -1264,6 +1264,112 @@ fn split_link(raw: &str) -> (String, String) {
     }
 }
 
+/// Click-to-open link regions for rendered lines.
+///
+/// Returns `(row, char_start, char_end_exclusive, url)` per link, rows and
+/// char offsets indexing the same `lines` slice the selection uses. Bare
+/// `http(s)://` URLs are found wherever the renderer emits them — including
+/// the visible `(url)` target of a markdown `[label](url)` link — so a mouse
+/// click on either opens the whole address. Boundaries mirror
+/// [`match_inline`]: a URL ends at whitespace, `)` or `,`.
+///
+/// A URL hard-wrapped across rows is merged back into one link spanning all
+/// of its rows, so a click on any row opens the full address. The merge is
+/// heuristic (a segment that ends flush with its row continues on the next
+/// row when that row starts mid-token); a URL that exactly fills its row and
+/// is followed flush by another word is vanishingly rare and mis-opens at
+/// worst.
+pub fn link_regions(lines: &[Line<'static>]) -> Vec<(usize, usize, usize, String)> {
+    /// A URL ends where the renderer ends it: whitespace, `)` or `,`.
+    fn url_end(chars: &[char], from: usize) -> usize {
+        let mut end = from;
+        while end < chars.len()
+            && !chars[end].is_whitespace()
+            && chars[end] != ')'
+            && chars[end] != ','
+        {
+            end += 1;
+        }
+        end
+    }
+
+    let row_texts: Vec<Vec<char>> = lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+                .chars()
+                .collect()
+        })
+        .collect();
+
+    // One raw segment per row the link occupies.
+    let mut segments: Vec<(usize, usize, usize, String)> = Vec::new();
+    for (row, chars) in row_texts.iter().enumerate() {
+        let mut i = 0usize;
+        while i < chars.len() {
+            if starts_with(chars, i, "https://") || starts_with(chars, i, "http://") {
+                let end = url_end(chars, i);
+                if end > i + 8 {
+                    let url: String = chars[i..end].iter().collect();
+                    segments.push((row, i, end, url));
+                }
+                i = end.max(i + 1);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // Merge hard-wrapped continuations into the link that precedes them.
+    struct Link {
+        parts: Vec<(usize, usize, usize)>,
+        url: String,
+    }
+    let mut links: Vec<Link> = segments
+        .into_iter()
+        .map(|(row, start, end, url)| Link {
+            parts: vec![(row, start, end)],
+            url,
+        })
+        .collect();
+    for link in links.iter_mut() {
+        while let Some(&(lr, _, lend)) = link.parts.last() {
+            // Not flush with its row → the URL ended inside the row.
+            if lend != row_texts[lr].len() {
+                break;
+            }
+            let next = lr + 1;
+            if next >= row_texts.len() {
+                break;
+            }
+            let chars = &row_texts[next];
+            if chars.is_empty() || chars[0].is_whitespace() || chars[0] == ')' || chars[0] == ',' {
+                break;
+            }
+            let cend = url_end(chars, 0);
+            let cont: String = chars[..cend].iter().collect();
+            link.parts.push((next, 0, cend));
+            link.url.push_str(&cont);
+            if cend != chars.len() {
+                break;
+            }
+        }
+    }
+
+    // Emit one region per covered row, each carrying the full URL.
+    let mut out = Vec::new();
+    for link in links {
+        let Link { parts, url } = link;
+        for (row, start, end) in parts {
+            out.push((row, start, end, url.clone()));
+        }
+    }
+    out
+}
+
 fn find(chars: &[char], from: usize, pattern: &str) -> Option<usize> {
     (from..chars.len()).find(|&i| starts_with(chars, i, pattern))
 }
@@ -1413,6 +1519,57 @@ mod tests {
             .join("\n");
         assert!(joined.contains("Title"));
         assert!(joined.contains("one"));
+    }
+
+    #[test]
+    fn link_regions_find_bare_urls_and_markdown_targets() {
+        let theme = Theme::detect();
+        let st = MarkdownStyles::new(&theme);
+
+        // Bare URL with a ',' boundary: no trailing punctuation in the URL.
+        let out = markdown("see https://example.com/x, then done", 80, &st);
+        let regions = link_regions(&out);
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        let (row, start, end, url) = regions[0].clone();
+        assert_eq!(row, 0);
+        assert_eq!(url, "https://example.com/x");
+        let line: String = out[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let sliced: String = line.chars().collect::<Vec<_>>()[start..end]
+            .iter()
+            .collect();
+        assert_eq!(sliced, url);
+
+        // A markdown `[label](url)` renders the target visibly: it is found
+        // and stops before the closing ')'.
+        let out = markdown("read [docs](https://docs.rs/guide) now", 80, &st);
+        let regions = link_regions(&out);
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        assert_eq!(regions[0].3, "https://docs.rs/guide");
+
+        // Plain prose has no links.
+        let out = markdown("no links in this sentence at all", 80, &st);
+        assert!(link_regions(&out).is_empty());
+    }
+
+    #[test]
+    fn link_regions_merge_hard_wrapped_urls_into_one_link() {
+        let theme = Theme::detect();
+        let st = MarkdownStyles::new(&theme);
+        let long = format!("https://example.com/{}", "a".repeat(60));
+        let out = markdown(&long, 20, &st);
+        assert!(out.len() > 1, "expected the URL to wrap: {:?}", out.len());
+
+        let regions = link_regions(&out);
+        // Every row the URL covers carries the FULL merged address.
+        assert!(regions.len() > 1, "{regions:?}");
+        assert!(
+            regions.iter().all(|(_r, _, _, u)| u == &long),
+            "rows: {:?}",
+            regions
+        );
+        // The covered rows are consecutive.
+        let rows: Vec<usize> = regions.iter().map(|(r, _, _, _)| *r).collect();
+        assert_eq!(rows, (0..rows.len()).collect::<Vec<_>>());
     }
 
     #[test]

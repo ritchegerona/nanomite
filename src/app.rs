@@ -99,6 +99,11 @@ pub struct Rendered {
     /// Fenced code blocks as `(first body row, last border row, raw source)`,
     /// rows indexing `lines` — the click-to-copy target list.
     pub code_blocks: Vec<(u16, u16, String)>,
+    /// Click-to-open links as `(row, char_start, char_end_exclusive, url)`,
+    /// rows indexing `lines` — discovered at cache build time by
+    /// [`crate::ui::text::link_regions`] so a mouse click resolves a URL
+    /// without re-rendering.
+    pub links: Vec<(u16, u16, u16, String)>,
     pub lines: Vec<Line<'static>>,
     pub height: u16,
 }
@@ -897,6 +902,8 @@ pub enum Control {
     /// `/image` finished reading + encoding an attachment on the blocking
     /// pool; `Err` carries the refusal reason for the toast.
     ImageAttached(Result<PendingImage, String>),
+    /// A clicked chat link; the main loop hands it to the system browser.
+    OpenLink(String),
 }
 
 enum ModelsResult {
@@ -1463,6 +1470,14 @@ impl App {
     fn mark_dirty(&mut self) {
         self.dirty = true;
         self.view.mark_dirty();
+    }
+
+    /// UI feedback after the main loop hands a clicked link to the system
+    /// browser; only a failed spawn surfaces (the click already toasted).
+    pub fn on_link_opened(&mut self, ok: bool) {
+        if !ok {
+            self.toast("could not open browser (xdg-open)");
+        }
     }
 
     fn toast(&mut self, msg: impl Into<String>) {
@@ -4895,6 +4910,19 @@ impl App {
         None
     }
 
+    /// The URL under a plain click, if the cell lands inside a link region
+    /// of `entry`'s cached render (row and char column in `lines` space).
+    fn link_at(&self, entry: usize, row: usize, col: usize) -> Option<String> {
+        let cached = self.entries.get(entry)?.cache.as_ref()?;
+        cached
+            .links
+            .iter()
+            .find(|(r, start, end, _)| {
+                *r as usize == row && (*start as usize..*end as usize).contains(&col)
+            })
+            .map(|(_, _, _, url)| url.clone())
+    }
+
     /// Opens/closes the full error text of a failed entry (plain click,
     /// like opencode's error expansion).
     pub(crate) fn toggle_error_expansion(&mut self, index: usize) {
@@ -5861,6 +5889,19 @@ impl App {
                         if sel.start.0 == usize::MAX || sel.end.0 == usize::MAX {
                             self.mark_dirty();
                             return;
+                        }
+                        // A plain click (no drag) on a link opens it in the
+                        // system browser — before the copy/error fallbacks.
+                        if sel.start == sel.end {
+                            if let Some(url) = self.link_at(sel.start.0, sel.start.1, sel.start.2) {
+                                self.control_send(crate::app::Control::OpenLink(url.clone()));
+                                self.toast(format!(
+                                    "opening {}",
+                                    crate::ui::text::truncate_head(&url, 48)
+                                ));
+                                self.mark_dirty();
+                                return;
+                            }
                         }
                         let text = self.get_selected_text(&sel);
                         if !text.trim().is_empty() {
