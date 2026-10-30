@@ -389,6 +389,73 @@ fn role_label(role: &str) -> &'static str {
     }
 }
 
+/// Renders the transcript as a standalone HTML page for `/export html`.
+pub fn to_html(session: &StoredSession) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out, "<!doctype html>");
+    let _ = writeln!(out, "<html lang=\"en\">");
+    let _ = writeln!(
+        out,
+        "<head><meta charset=\"utf-8\"><title>nanomite session</title>"
+    );
+    let _ = writeln!(out, "<style>{HTML_EXPORT_CSS}</style></head>");
+    let _ = writeln!(out, "<body>");
+    let _ = writeln!(
+        out,
+        "<header><h1>nanomite session</h1><p class=meta>provider <code>{}</code> · model <code>{}</code> · workspace <code>{}</code> · {} turns</p></header>",
+        html_escape(&session.provider),
+        html_escape(&session.model),
+        html_escape(&session.cwd),
+        session.turns()
+    );
+    for entry in &session.entries {
+        let class = match entry.role.as_str() {
+            "user" => "user",
+            "assistant" => "assistant",
+            _ => "system",
+        };
+        let _ = writeln!(
+            out,
+            "<section class=\"msg {class}\"><h2>{}</h2>",
+            role_label(&entry.role)
+        );
+        for tool in &entry.tools {
+            let _ = writeln!(out, "<div class=\"tool\">{}</div>", html_escape(tool));
+        }
+        let body = entry.text.trim();
+        if !body.is_empty() {
+            let _ = writeln!(out, "<pre>{}</pre>", html_escape(body));
+        }
+        let _ = writeln!(out, "</section>");
+    }
+    let _ = writeln!(out, "</body></html>");
+    out
+}
+
+/// Inline stylesheet for `to_html`: plain, printable, no external assets.
+const HTML_EXPORT_CSS: &str = "body{font-family:system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem;color:#1a1a1a;background:#fafafa}header p{color:#666}code{background:#eee;padding:.1em .35em;border-radius:4px}.msg{margin:1rem 0;padding:.75rem 1rem;border-radius:10px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08)}.msg h2{margin:0 0 .4rem;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#888}.msg.user{border-left:4px solid #3b82f6}.msg.assistant{border-left:4px solid #10b981}.msg.system{border-left:4px solid #9ca3af}.msg pre{white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,monospace;font-size:.9rem}.tool{font-family:ui-monospace,monospace;font-size:.75rem;color:#7c3aed;background:#f5f3ff;border-radius:4px;padding:.15rem .5rem;margin:.25rem 0;display:inline-block}";
+
+/// Escapes the five HTML specials so transcript text can never break the
+/// exported page's markup.
+fn html_escape(s: &str) -> String {
+    // Entity names are assembled with concat! because a literal named
+    // entity in this source does not survive the edit transport.
+    s.replace('&', concat!("&", "amp;"))
+        .replace('<', concat!("&", "lt;"))
+        .replace('>', concat!("&", "gt;"))
+        .replace('"', concat!("&", "quot;"))
+        .replace('\'', "&#39;")
+}
+
+/// Default HTML export location: `./nanomite-session-<stamp>.html`.
+pub fn export_html_path() -> PathBuf {
+    let stamp = now_secs();
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(format!("nanomite-session-{stamp}.html"))
+}
+
 /// Default export location: `./nanomite-session-<stamp>.md`.
 pub fn export_path() -> PathBuf {
     let stamp = now_secs();
@@ -477,6 +544,32 @@ mod tests {
         assert_eq!(restored[1].role, EntryRole::Assistant);
         assert_eq!(restored[1].tools[0].name, "list_files");
         assert!(restored[1].tools[0].ok);
+    }
+
+    #[test]
+    fn html_export_renders_roles_and_escapes_markup() {
+        let mut stored = sample();
+        stored.entries[0].text = "say <b>hi</b> & \"bye\"".into();
+        stored.entries[1]
+            .tools
+            .push("run_command cargo test".into());
+        let html = to_html(&stored);
+        assert!(html.starts_with("<!doctype html>"));
+        assert!(html.contains("<section class=\"msg user\"><h2>You</h2>"));
+        assert!(html.contains("<section class=\"msg assistant\"><h2>Assistant</h2>"));
+        assert!(html.contains(concat!(
+            "&", "lt;b", "&", "gt;hi", "&", "lt;/b", "&", "gt; &", "amp; &", "quot;bye", "&",
+            "quot;"
+        )));
+        assert!(html.contains("<div class=\"tool\">run_command cargo test</div>"));
+        assert!(html.ends_with("</body></html>\n"));
+        assert!(!html.contains("<b>"), "raw markup must be escaped");
+    }
+
+    #[test]
+    fn html_export_path_uses_html_suffix() {
+        let path = export_html_path();
+        assert!(path.to_string_lossy().ends_with(".html"));
     }
 
     #[test]

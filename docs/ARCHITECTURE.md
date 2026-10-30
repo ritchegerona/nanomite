@@ -71,9 +71,9 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
   under `~/.local/share/nanomite/board/` (`NANOMITE_BOARD_DIR`). Opened with
   `/panel <topic>`, streamed live into an overlay, `esc` cancels.
 - **Self-improvement (`src/improve/`)** — `proposal.rs` validates staged
-  proposals (size, extension, content-difference, root confinement) and
-  enforces the hard self-edit denylist (`src/memory/security.rs`,
-  `src/memory/policy.rs`, `src/main.rs`); `diff.rs` builds unified diff
+  proposals (size, extension, content-difference, root confinement); the hard
+  self-edit denylist (`src/memory/security.rs`, `src/memory/policy.rs`,
+  `src/main.rs`) was removed by owner decision 2026-10-30. `diff.rs` builds unified diff
   artifacts; `runner.rs` writes `.bak` backups, runs `cargo test --lib` and
   rolls back byte-exactly on failure; `audit.rs` appends every decision to a
   JSONL log. The agent can only stage (`propose_self_edit`); applying requires

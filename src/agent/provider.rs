@@ -22,6 +22,11 @@ pub enum Role {
 pub struct ChatMessage {
     pub role: Role,
     pub content: String,
+    /// Image attachments as `data:<mime>;base64,<payload>` URLs, carried by
+    /// *user* messages only. `None` keeps the wire format a plain string, so
+    /// text-only providers never see a multimodal content array.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -33,6 +38,19 @@ impl ChatMessage {
         Self {
             role: Role::User,
             content: content.into(),
+            images: None,
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    /// A user message carrying image attachments (`data:` URLs). An empty
+    /// list degrades to a plain text message.
+    pub fn user_with_images(content: impl Into<String>, images: Vec<String>) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            images: (!images.is_empty()).then_some(images),
             tool_calls: None,
             tool_call_id: None,
         }
@@ -42,6 +60,7 @@ impl ChatMessage {
         Self {
             role: Role::Assistant,
             content: content.into(),
+            images: None,
             tool_calls: None,
             tool_call_id: None,
         }
@@ -51,6 +70,7 @@ impl ChatMessage {
         Self {
             role: Role::System,
             content: content.into(),
+            images: None,
             tool_calls: None,
             tool_call_id: None,
         }
@@ -60,6 +80,7 @@ impl ChatMessage {
         Self {
             role: Role::Tool,
             content: content.into(),
+            images: None,
             tool_calls: None,
             tool_call_id: Some(id.into()),
         }

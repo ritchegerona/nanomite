@@ -84,6 +84,6 @@ output unless a caller explicitly opts in above the ceiling.
   tests (including negative tests), and a CHANGELOG entry.
 - Retrieval budgets (`max_inject_records/chars`) are ceilings, not targets;
   injection must pass `MemoryOp::Inject` authorization.
-- `src/memory/security.rs` and `src/memory/policy.rs` are on the self-edit
-  denylist (`docs/SECURITY.md`): the gate and the guards around it are never
-  editable by the agent, at any level.
+- `src/memory/security.rs` and `src/memory/policy.rs` were on the self-edit
+  denylist, which the owner removed on 2026-10-30 (`docs/SECURITY.md`); changes
+  to the gate still land only through the `/improve` human approval flow.

@@ -497,6 +497,11 @@ pub struct Config {
     /// Central tool authorization policy: auto (default) / plan / readonly.
     /// Persisted as a single keyword; `NANOMITE_TOOL_POLICY` overrides the file.
     pub tool_policy: crate::agent::policy::ToolPolicy,
+    /// Ask before External-risk tool calls (shell, SSH, destructive deletes)
+    /// run, even when the mode policy allows them: y allow, a always allow,
+    /// n deny, d always deny. Persisted; `NANOMITE_CONFIRM_EXTERNAL`
+    /// overrides the file.
+    pub confirm_external: bool,
     /// Token budget used for the context gauge in the status bar.
     pub context_limit: usize,
     pub max_steps: usize,
@@ -540,6 +545,7 @@ struct Stored {
     reduced_motion: Option<bool>,
     suggestions: Option<bool>,
     compact: Option<bool>,
+    confirm_external: Option<bool>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
@@ -659,6 +665,9 @@ fn stored_text(cfg: &Config) -> String {
     lines.push(format!("reduced_motion = {}", cfg.reduced_motion));
     lines.push(format!("suggestions = {}", cfg.followup_suggestions));
     lines.push(format!("compact = {}", cfg.compact));
+    if !cfg.confirm_external {
+        lines.push("confirm_external = false".to_string());
+    }
     lines.push(String::new());
     lines.join("\n")
 }
@@ -850,6 +859,19 @@ impl Config {
             crate::agent::policy::ToolPolicy::parse(&raw).unwrap_or_default()
         };
 
+        let confirm_external = {
+            let raw = if use_env {
+                first_env_one("NANOMITE_CONFIRM_EXTERNAL")
+            } else {
+                None
+            };
+            match raw.as_deref() {
+                Some("0") | Some("false") | Some("off") => false,
+                Some(_) => true,
+                None => stored.confirm_external.unwrap_or(true),
+            }
+        };
+
         // Custom prompt file: the environment wins over the persisted path, and the
         // default location is always resolved so callers can report it.
         let prompt_file = (if use_env {
@@ -872,6 +894,7 @@ impl Config {
             theme,
             disabled_tools,
             tool_policy,
+            confirm_external,
             context_limit: {
                 let raw = if use_env {
                     num_env("NANOMITE_CONTEXT_LIMIT", 200_000)

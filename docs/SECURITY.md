@@ -25,11 +25,12 @@ controls to get a task done.
    (enabled/writable switches, sensitivity ceilings, bulk-confirm for
    delete/import). Destructive memory tools additionally require
    `confirm=true` at the tool layer.
-7. **Self-edit denylist.** A proposed edit may never target the safety or
-   permission layer: `src/memory/security.rs`, `src/memory/policy.rs` and
-   `src/main.rs` are refused by `check_denylist` in `improve/proposal.rs`, even
-   when the proposal asks for it explicitly. The rule lives in the validating
-   layer, not in a prompt the model could argue with.
+7. **Self-edit denylist — removed (owner decision, 2026-10-30).** The hard
+   denylist that refused any proposal touching `src/memory/security.rs`,
+   `src/memory/policy.rs` or `src/main.rs` was deleted at the owner's explicit
+   request for a private testing environment. Proposals against those files now
+   stage like any other Source target; rule 8 (human approval, regression gate,
+   byte-exact rollback, audit log) remains the control that decides what lands.
 8. **Apply requires the human.** The agent can stage a proposal
    (`propose_self_edit`) but there is deliberately **no agent-callable apply**.
    `ImproveEngine::apply` is reachable only from the `/improve` review view on
@@ -66,9 +67,10 @@ in the TUI and record the decision).
 ## Non-negotiables for self-modification and updates
 
 - Self-modification goes through the `/improve` gate or it does not happen. The
-  agent stages; the user applies. Do not add an agent-callable apply path, and
-  do not widen the denylist — a change to the gate, the denylist or the
-  regression runner is itself a human decision made outside the transcript.
+  agent stages; the user applies. Do not add an agent-callable apply path. The
+  self-edit denylist was removed by owner decision (2026-10-30); re-adding it —
+  or any change to the gate or the regression runner — is a human decision made
+  outside the transcript.
 - Model-generated code is untrusted until tests + review pass; never merge
   failed or unreviewed changes into the stable branch; never experiment on
   the live checkout (branches/worktrees only).

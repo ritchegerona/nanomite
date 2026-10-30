@@ -13,14 +13,6 @@ use super::ImproveError;
 /// Hard cap on the size of a proposed replacement (`new_content`): 256 KiB.
 pub const MAX_PROPOSAL_BYTES: usize = 256 * 1024;
 
-/// Source files the agent must never edit, even when explicitly asked:
-/// the safety/permission layer is off limits to self-modification.
-const SOURCE_DENYLIST: &[&str] = &[
-    "src/memory/security.rs",
-    "src/memory/policy.rs",
-    "src/main.rs",
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Target {
@@ -99,12 +91,8 @@ impl Proposal {
     /// (b) `new_content` is capped at [`MAX_PROPOSAL_BYTES`];
     /// (c) the extension must match the target kind (Config → `.toml`,
     ///     Prompt → `.md`, Source → `.rs`/`.toml`/`.md`);
-    /// (d) Source proposals may never touch the safety/permission denylist
-    ///     (`src/memory/security.rs`, `src/memory/policy.rs`, `src/main.rs`,
-    ///     or any path under `src/memory/` whose components contain one of
-    ///     those two file names);
-    /// (e) the new content must differ from the current file content;
-    /// (f) Config/Prompt paths must be exactly the root-supplied anchor paths,
+    /// (d) the new content must differ from the current file content;
+    /// (e) Config/Prompt paths must be exactly the root-supplied anchor paths,
     ///     and Source paths must resolve inside `repo_root` (lexical check
     ///     plus canonicalization, mirroring `memory::security`).
     pub fn validate(&self, roots: &Roots) -> Result<(), ImproveError> {
@@ -127,9 +115,6 @@ impl Proposal {
                 self.path.display(),
                 self.target.as_str()
             )));
-        }
-        if self.target == Target::Source {
-            check_denylist(&self.path, &roots.repo_root)?;
         }
         match self.target {
             Target::Config | Target::Prompt => {
@@ -177,39 +162,6 @@ fn extension_allowed(target: Target, path: &Path) -> bool {
         Target::Prompt => ext == "md",
         Target::Source => matches!(ext.as_str(), "rs" | "toml" | "md"),
     }
-}
-
-/// Denylist enforcement for Source targets, purely lexical: exact repo-relative
-/// matches plus any `src/memory/**` path carrying a denylisted component.
-fn check_denylist(path: &Path, repo_root: &Path) -> Result<(), ImproveError> {
-    let joined = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        repo_root.join(path)
-    };
-    let norm = lexical_normalize(&joined);
-    let rel = norm
-        .strip_prefix(lexical_normalize(repo_root))
-        .unwrap_or(norm.as_path());
-    let rel_str = rel.to_string_lossy().replace('\\', "/");
-    for denied in SOURCE_DENYLIST {
-        if rel_str == *denied {
-            return Err(ImproveError::policy(format!(
-                "`{denied}` is on the self-edit denylist; the safety/permission layer is not editable"
-            )));
-        }
-    }
-    if rel_str.starts_with("src/memory/") {
-        for component in rel.components() {
-            let name = component.as_os_str().to_string_lossy();
-            if name == "security.rs" || name == "policy.rs" {
-                return Err(ImproveError::policy(format!(
-                    "`{rel_str}` lives under src/memory and carries a denylisted component (`{name}`)"
-                )));
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Confinement for Source targets: lexical containment first, then
@@ -388,21 +340,25 @@ mod tests {
     }
 
     #[test]
-    fn denylist_blocks_the_safety_layer() {
-        let temp = temp_dir("denylist");
+    fn safety_layer_paths_validate_for_source_targets() {
+        // The self-edit denylist was removed by owner decision (2026-10-30):
+        // proposals against the former safety-layer files validate like any
+        // other Source target and reach the /improve approval gate.
+        let temp = temp_dir("safety-stageable");
         let root = &temp.path;
         for rel in [
             "src/memory/security.rs",
             "src/memory/policy.rs",
             "src/main.rs",
-            // nested under src/memory → component rule
             "src/memory/nested/security.rs",
             "src/memory/deeper/policy.rs",
         ] {
             write(&root.join(rel), "pub fn never() {}\n");
-            let p = proposal(Target::Source, &root.join(rel), "pub fn hacked() {}\n");
-            let err = p.validate(&roots(root)).unwrap_err();
-            assert!(matches!(err, ImproveError::Policy(_)), "{rel}: {err:?}");
+            let p = proposal(Target::Source, &root.join(rel), "pub fn edited() {}\n");
+            assert!(
+                p.validate(&roots(root)).is_ok(),
+                "{rel} should validate without the denylist"
+            );
         }
     }
 

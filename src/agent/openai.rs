@@ -86,6 +86,26 @@ impl OpenAiProvider {
                         })
                         .collect();
                     obj.insert("tool_calls".into(), Value::Array(arr));
+                } else if m.role == Role::User {
+                    // Vision: a user message with attachments serializes as
+                    // OpenAI multimodal content parts. Text-only messages
+                    // (and every other role) stay a plain string so
+                    // non-vision endpoints see exactly what they saw before.
+                    match m.images.as_ref().filter(|i| !i.is_empty()) {
+                        Some(images) => {
+                            let mut parts: Vec<Value> = Vec::with_capacity(images.len() + 1);
+                            if !m.content.is_empty() {
+                                parts.push(json!({ "type": "text", "text": m.content }));
+                            }
+                            parts.extend(images.iter().map(
+                                |url| json!({ "type": "image_url", "image_url": { "url": url } }),
+                            ));
+                            obj.insert("content".into(), Value::Array(parts));
+                        }
+                        None => {
+                            obj.insert("content".into(), json!(m.content));
+                        }
+                    }
                 } else {
                     obj.insert("content".into(), json!(m.content));
                 }
@@ -782,5 +802,56 @@ mod tests {
             matches!(event, StreamEvent::Delta(ref d) if d == "ans"),
             "wrong event"
         );
+    }
+
+    #[test]
+    fn user_message_with_images_becomes_multimodal_parts() {
+        let msg = ChatMessage::user_with_images(
+            "look at this",
+            vec!["data:image/png;base64,aGVsbG8=".to_string()],
+        );
+        let wire = OpenAiProvider::message_to_wire(&msg);
+        let parts = wire["content"].as_array().expect("parts array");
+        assert_eq!(parts.len(), 2, "one text part + one image part: {wire}");
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[0]["text"], "look at this");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(
+            parts[1]["image_url"]["url"],
+            "data:image/png;base64,aGVsbG8="
+        );
+    }
+
+    #[test]
+    fn user_message_without_images_stays_a_plain_string() {
+        let wire = OpenAiProvider::message_to_wire(&ChatMessage::user("plain"));
+        assert_eq!(wire["content"], serde_json::json!("plain"));
+        // An empty attachment list degrades to plain text as well.
+        let wire = OpenAiProvider::message_to_wire(&ChatMessage::user_with_images("plain", vec![]));
+        assert_eq!(wire["content"], serde_json::json!("plain"));
+    }
+
+    #[test]
+    fn assistant_and_tool_messages_never_send_images() {
+        let mut msg = ChatMessage::assistant("hi");
+        msg.images = Some(vec!["data:image/png;base64,QQ==".to_string()]);
+        assert_eq!(
+            OpenAiProvider::message_to_wire(&msg)["content"],
+            serde_json::json!("hi")
+        );
+        let tool = ChatMessage::tool_result("call_0", "out");
+        assert_eq!(
+            OpenAiProvider::message_to_wire(&tool)["content"],
+            serde_json::json!("out")
+        );
+    }
+
+    #[test]
+    fn image_only_user_message_skips_the_text_part() {
+        let msg = ChatMessage::user_with_images("", vec!["data:image/png;base64,QQ==".to_string()]);
+        let wire = OpenAiProvider::message_to_wire(&msg);
+        let parts = wire["content"].as_array().expect("parts array");
+        assert_eq!(parts.len(), 1, "no empty text part: {parts:?}");
+        assert_eq!(parts[0]["type"], "image_url");
     }
 }

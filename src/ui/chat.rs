@@ -5,7 +5,7 @@ use crate::app::{Entry, EntryRole, Phase, Rendered, ToolDisplay};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation};
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 /// Width of the left gutter reserved for role badges.
@@ -259,25 +259,38 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     }
 
     if view.content_height > view_h {
-        let mut state = ratatui::widgets::ScrollbarState::new(view.content_height as usize)
-            .position(top as usize)
-            .viewport_content_length(view_h as usize);
-        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None)
-            .track_symbol(Some("│"))
-            .thumb_symbol("█")
-            .thumb_style(Style::default().fg(theme.accent()))
-            .track_style(Style::default().fg(theme.border()));
-        frame.render_stateful_widget(
-            sb,
+        // Custom proportional scrollbar. ratatui's `Scrollbar` positions the
+        // thumb as `position / (content - 1 + viewport)`, so even fully
+        // scrolled (`top == content - viewport`) the thumb stops well short of
+        // the track's bottom. Draw the geometry directly with the same
+        // full-track mapping `App::scrollbar_jump` assumes: the thumb travels
+        // 0..=track_len - thumb_len over 0..=max_scroll, flush at both ends.
+        let track_len = view_h as usize;
+        let content = view.content_height as usize;
+        let viewport = view_h as usize;
+        let max_scroll = (content - viewport).max(1);
+        let thumb_len = ((viewport * track_len + content / 2) / content).clamp(1, track_len);
+        let thumb_start = ((top as usize * (track_len - thumb_len) + max_scroll / 2) / max_scroll)
+            .min(track_len - thumb_len);
+        let lines: Vec<Line> = (0..track_len)
+            .map(|row| {
+                let in_thumb = row >= thumb_start && row < thumb_start + thumb_len;
+                let (sym, fg) = if in_thumb {
+                    ("█", theme.accent())
+                } else {
+                    ("│", theme.border())
+                };
+                Line::from(Span::styled(sym, Style::default().fg(fg)))
+            })
+            .collect();
+        frame.render_widget(
+            Paragraph::new(Text::from(lines)),
             Rect {
                 x: area.x + area.width.saturating_sub(1),
                 y: area.y,
                 width: 1,
                 height: view_h,
             },
-            &mut state,
         );
     }
 

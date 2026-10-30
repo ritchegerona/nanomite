@@ -262,6 +262,10 @@ fn run_control(
         app.on_fork_saved(path.clone());
         return Ok(());
     }
+    if let Control::ImageAttached(result) = &control {
+        app.on_image_attached(result.clone());
+        return Ok(());
+    }
 
     let (target, seed) = match &control {
         // Handled above; kept explicit so a new control variant cannot fall
@@ -273,6 +277,7 @@ fn run_control(
         Control::HistoryResults { .. } => return Ok(()),
         Control::ResumeHint(_) => return Ok(()),
         Control::ForkSaved { .. } => return Ok(()),
+        Control::ImageAttached(_) => return Ok(()),
         Control::EditComposer(text) => {
             let path =
                 std::env::temp_dir().join(format!("nanomite-prompt-{}.md", std::process::id()));
@@ -301,6 +306,7 @@ fn run_control(
         Control::HistoryResults { .. } => {}
         Control::ResumeHint(_) => {}
         Control::ForkSaved { .. } => {}
+        Control::ImageAttached(_) => {}
         Control::EditComposer(_) => {
             let text = std::fs::read_to_string(&target).unwrap_or_default();
             let _ = std::fs::remove_file(&target);

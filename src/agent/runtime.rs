@@ -1,4 +1,4 @@
-use crate::agent::policy::ToolPolicy;
+use crate::agent::policy::{Confirmer, Risk, ToolPolicy};
 use crate::agent::provider::{
     AgentProvider, ChatMessage, DynError, Role, StreamEvent, ToolCall, ToolCallAccumulator, Usage,
 };
@@ -154,6 +154,11 @@ pub struct AgentRuntime {
     /// (before dispatch), everything else fires after the fact. Empty by
     /// default: no hooks, zero overhead.
     hooks: Arc<Vec<HookConfig>>,
+    /// Optional interactive confirmation gate: consulted before dispatching
+    /// risk-External calls (shell, SSH, destructive deletes) when the mode
+    /// policy permits them. `None` runs without asking - headless and test
+    /// builds, or `confirm_external = false` in the config.
+    confirmer: Option<std::sync::Arc<dyn Confirmer>>,
 }
 
 impl AgentRuntime {
@@ -188,6 +193,7 @@ impl AgentRuntime {
             disabled_tools: Arc::new(Vec::new()),
             tool_policy: ToolPolicy::default(),
             hooks: Arc::new(Vec::new()),
+            confirmer: None,
         }
     }
 
@@ -280,6 +286,12 @@ impl AgentRuntime {
     /// This controls which risk classes of tools the agent may invoke.
     pub fn with_tool_policy(mut self, policy: ToolPolicy) -> Self {
         self.tool_policy = policy;
+        self
+    }
+
+    /// Attaches the interactive confirmation gate (see `Confirmer`).
+    pub fn with_confirmer(mut self, confirmer: std::sync::Arc<dyn Confirmer>) -> Self {
+        self.confirmer = Some(confirmer);
         self
     }
 
@@ -516,6 +528,7 @@ impl AgentRuntime {
             let assistant = ChatMessage {
                 role: Role::Assistant,
                 content: content.clone(),
+                images: None,
                 tool_calls: (!calls.is_empty()).then(|| calls.clone()),
                 tool_call_id: None,
             };
@@ -548,6 +561,31 @@ impl AgentRuntime {
                 }
                 let detail = describe_args(&call);
                 let preview = preview_args(&call);
+                // Interactive gate: risk-External calls ask the user first
+                // when a confirmer is attached. A denial is returned to the
+                // model as structured data it can route around, matching
+                // the policy and hook refusal paths.
+                if Risk::of(&call.name) == Risk::External {
+                    if let Some(confirmer) = &self.confirmer {
+                        let allowed = tokio::select! {
+                            ok = confirmer.confirm(&call.name, preview.clone()) => ok,
+                            _ = cancel.cancelled() => false,
+                        };
+                        if !allowed {
+                            let declined = format!(
+                                "{{\"error\":\"user declined to run {} this session\",\"code\":\"user_declined\"}}",
+                                call.name
+                            );
+                            let _ = tx.send(AgentEvent::ToolEnd {
+                                name: call.name.clone(),
+                                detail: declined.clone(),
+                                ok: false,
+                            });
+                            messages.push(ChatMessage::tool_result(call.id.clone(), declined));
+                            continue;
+                        }
+                    }
+                }
                 if tx
                     .send(AgentEvent::ToolStart {
                         name: call.name.clone(),
@@ -1633,6 +1671,121 @@ mod tests {
             )
             .await;
         while rx.try_recv().is_ok() {}
+    }
+
+    /// Emits exactly one External tool call, then ends the turn: the minimal
+    /// harness for the interactive confirm gate.
+    struct RunCommandProvider {
+        done: std::sync::Mutex<bool>,
+    }
+
+    impl RunCommandProvider {
+        fn new() -> Self {
+            Self {
+                done: std::sync::Mutex::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentProvider for RunCommandProvider {
+        async fn list_models(&self) -> Result<Vec<String>, DynError> {
+            Ok(vec!["m".into()])
+        }
+
+        async fn stream_chat(
+            &self,
+            _messages: Vec<ChatMessage>,
+            _tools: Option<Vec<Tool>>,
+        ) -> Result<BoxStream, DynError> {
+            let first = {
+                let mut done = self.done.lock().unwrap();
+                let was = !*done;
+                *done = true;
+                was
+            };
+            let events = if first {
+                vec![Ok(StreamEvent::ToolCall(ToolCall {
+                    id: "confirm-call-1".into(),
+                    name: "run_command".into(),
+                    arguments: serde_json::json!({ "command": "echo confirm-gate" }).to_string(),
+                    index: 0,
+                }))]
+            } else {
+                vec![
+                    Ok(StreamEvent::Delta("all done".into())),
+                    Ok(StreamEvent::Done),
+                ]
+            };
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+
+    struct FixedConfirmer {
+        allow: bool,
+    }
+
+    impl crate::agent::policy::Confirmer for FixedConfirmer {
+        fn confirm(
+            &self,
+            _tool: &str,
+            _preview: Option<String>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
+            let allow = self.allow;
+            Box::pin(async move { allow })
+        }
+    }
+
+    async fn collect_turn(runtime: &AgentRuntime) -> Vec<AgentEvent> {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        runtime
+            .run("run something".into(), &[], Cancel::new(), tx)
+            .await;
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn a_denied_external_call_returns_user_declined_to_the_model() {
+        let runtime = runtime_with(Arc::new(RunCommandProvider::new()), None)
+            .with_tool_policy(ToolPolicy::Hacker)
+            .with_confirmer(Arc::new(FixedConfirmer { allow: false }));
+        let events = collect_turn(&runtime).await;
+        let denied = events.iter().any(|e| {
+            matches!(
+                e,
+                AgentEvent::ToolEnd { ok: false, detail, .. } if detail.contains("user_declined")
+            )
+        });
+        assert!(
+            denied,
+            "the denial must surface as a failed tool row: {events:?}"
+        );
+        // The turn still completes: the refusal is data, not a crash.
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Finished { .. })));
+    }
+
+    #[tokio::test]
+    async fn an_allowed_external_call_dispatches_normally() {
+        let runtime = runtime_with(Arc::new(RunCommandProvider::new()), None)
+            .with_tool_policy(ToolPolicy::Hacker)
+            .with_confirmer(Arc::new(FixedConfirmer { allow: true }));
+        let events = collect_turn(&runtime).await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ToolEnd { ok: true, .. })),
+            "allowed run_command must dispatch: {events:?}"
+        );
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            AgentEvent::ToolEnd { detail, .. } if detail.contains("user_declined")
+        )));
     }
 
     #[tokio::test]

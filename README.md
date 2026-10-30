@@ -41,7 +41,7 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
 | **Cost** | MIT-licensed, works with any OpenAI-compatible endpoint — local Ollama, NVIDIA NIM, OpenRouter, Groq | subscription or metered tokens on their stack |
 | **Speed** | One Rust binary; 500+ offline tests; render pipeline measured at ~0.1ms/frame, 30fps streaming | heavier stacks, slower startup |
 | **Transparency** | Every tool call, thought token and byte budget visible in the UI; char-exact text selection | truncated, lossy activity views |
-| **Control** | 4 tool modes with policy gates, self-edit proposals behind a human-in-the-loop gate + hard denylist | all-or-nothing permissions |
+| **Control** | 4 tool modes with policy gates, self-edit proposals behind a human-in-the-loop gate | all-or-nothing permissions |
 
 And the parts you only appreciate once you have used them: visible reasoning
 streams (long thinking phases never look like a hang), a workspace time
@@ -329,8 +329,9 @@ dispatch, so it cannot be reached by guessing a call.
 - Memory tools authorize inside the engine; `memory_delete` needs an explicit
   confirmation, and credential-shaped content is refused on the way in
 - `propose_self_edit` **cannot apply anything**: it only stages a proposal, and
-  the safety-critical sources (`src/memory/security.rs`, `src/memory/policy.rs`,
-  `src/main.rs`) are on a hard denylist. You approve in `/improve` or not at all
+  you approve in `/improve` or not at all. (The hard denylist on the
+  safety-critical sources was removed by owner decision, 2026-10-30, for
+  private testing.)
 
 ## Persistent memory
 
@@ -550,7 +551,7 @@ src/
 │   ├── engine.rs    convene(): parallel discussion rounds, then synthesis
 │   └── store.rs     SQLite board_messages (untrusted content, verbatim)
 ├── improve/
-│   ├── proposal.rs  proposals + validation, including the self-edit denylist
+│   ├── proposal.rs  proposals + validation (self-edit denylist removed 2026-10-30)
 │   ├── diff.rs      unified diff artifacts
 │   ├── runner.rs    .bak backup, regression check, byte-exact rollback
 │   └── audit.rs     append-only JSONL decision log

@@ -29,7 +29,8 @@ suite.
   from the schema list and refused at dispatch) (L3).
 - Self-improvement `/improve`: propose → review diff → approve (with `.bak`,
   `cargo test --lib` gate and byte-exact rollback) or reject; append-only JSONL
-  audit log; hard self-edit denylist (L3) — see `docs/SECURITY.md`.
+  audit log (the hard self-edit denylist was removed by owner decision
+  2026-10-30) — see `docs/SECURITY.md`.
 - File-intelligence extractors + the `read_document` tool; library-crate split
   (`src/lib.rs`) and the `benches/perf` harness (L3).
 - **Central policy engine** (`agent/policy.rs`): `ToolPolicy` (Auto/Plan/Readonly)

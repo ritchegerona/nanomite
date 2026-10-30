@@ -8,7 +8,7 @@ carries its own status line.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Module map, layers, data flow, invariants |
 | [TOOLS.md](TOOLS.md) | All 33 tools: categories, limits, contracts |
 | [MEMORY.md](MEMORY.md) | Persistent memory: store, policy, capture, security |
-| [SECURITY.md](SECURITY.md) | Trust boundaries, authz, denylists, secrets |
+| [SECURITY.md](SECURITY.md) | Trust boundaries, authz, tool policy, secrets |
 | [MODES.md](MODES.md) | The four tool modes (plan/coder/build/hacker), Shift+Tab, risk classes |
 | [EXTENDING.md](EXTENDING.md) | Hooks, external tool SDK, tool library |
 | [FEATURES.md](FEATURES.md) | Honest capability inventory with maturity levels |

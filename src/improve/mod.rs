@@ -44,7 +44,7 @@ pub enum ImproveError {
     /// The proposal itself is not acceptable (missing file, size cap, extension,
     /// unchanged content).
     Invalid(String),
-    /// A safety rule refused the operation (denylist, path binding, confinement).
+    /// A safety rule refused the operation (path binding, confinement).
     Policy(String),
     /// No such proposal (or a malformed proposal id).
     NotFound(String),
@@ -837,27 +837,28 @@ mod tests {
     }
 
     #[test]
-    fn denylist_proposals_never_persist() {
-        let (temp, roots, engine, _file) = setup("denylist");
+    fn safety_layer_proposals_stage_and_await_approval() {
+        // The self-edit denylist was removed by owner decision (2026-10-30):
+        // staging a proposal against the former safety-layer files now works,
+        // and the change only lands through the /improve approval gate.
+        let (_temp, roots, engine, _file) = setup("safety-stage");
         fs::create_dir_all(roots.repo_root.join("src/memory")).unwrap();
         let guarded = roots.repo_root.join("src/memory/security.rs");
         fs::write(&guarded, "pub fn never() {}\n").unwrap();
 
-        let err = engine
+        let proposal = engine
             .propose(
                 Actor::Agent,
                 Target::Source,
                 guarded,
-                "pub fn hacked() {}\n".to_string(),
-                "nope".to_string(),
+                "pub fn edited() {}\n".to_string(),
+                "owner-approved policy change".to_string(),
                 &roots,
             )
-            .unwrap_err();
-        assert!(matches!(err, ImproveError::Policy(_)), "{err:?}");
+            .unwrap();
 
-        // Nothing was staged and nothing was audited.
-        assert!(engine.list(None).unwrap().is_empty());
-        assert!(audit_events(&temp).is_empty());
+        assert_eq!(proposal.status, Status::Pending);
+        assert_eq!(engine.list(None).unwrap().len(), 1);
     }
 
     #[test]

@@ -1,33 +1,22 @@
----
-title: Wiki Index
-tags: [meta, index]
-sourceRefs: []
-lastReviewed: 2026-10-16
----
+# NANOMITE Wiki
 
-# nanomite Wiki — Index
+Persistent knowledge base for the nanomite Rust terminal coding agent.
+Maintained incrementally; every page cross-references its sources.
 
-A persistent, interlinked knowledge wiki for the **nanomite** agent (Rust TUI,
-OpenAI-compatible chat + tools + memory + board + self-improvement).
+## Pages
 
-Source of truth lives in `docs/` (repo) and `src/`; this wiki synthesizes it.
+### Entities
+- [App state machine](entities/app.md) — `src/app.rs`: keys, overlays, submit flow, Control channel, confirm modal
+- [Agent layer](entities/agent.md) — provider, runtime, wire format, ToolPolicy and the Confirmer gate
+- [Commands](entities/commands.md) — slash-command table, aliases, keybinding registry rules
 
-## Concepts
+### Concepts
+- [Tool confirmation gate](concepts/confirm-gate.md) — interactive y/n/a/d approval for Risk::External tools (`confirm_external`)
+- [Tool policy modes](concepts/tool-policy.md) — Plan/Coder/Build/Hacker authorization matrix in `src/agent/policy.rs`
+- [Vision input](concepts/vision-input.md) — `/image` attachment pipeline and multimodal wire format
+- [Session export & history](concepts/session-features.md) — `/export` (md/html), `/history`, `/fork`, `/edit` edit-and-resend
+- [Scroll model](concepts/scroll-model.md) — bottom-anchored scrolling and the custom proportional scrollbar
 
-- [[concepts/capability-gaps-l0]] — the four L0 capability gaps (reasoning
-  modes, central tool authorization, offline mode, token/context management),
-  their real state, and whether to build them.
-- [[concepts/reasoning-and-context-controls]] — what *is* implemented:
-  `/reasoning` (`reasoning_effort`), the context meter, and `/compact`.
-
-## Implementation Notes
-
-- [[implementation-summary]] — detailed Phase 1 implementation of the central tool authorization engine.
-
-## Entities
-
-- (pending) subsystems: agent runtime, memory, board, improve, tools catalog.
-
-## Sources
-
-- (pending) external references and specs.
+## Working notes
+- Verify with `cargo test --lib` (offline, no services) + `cargo clippy --all-targets -- -D warnings` + `cargo fmt --check`.
+- The `| tail` idiom masks exit codes — assert via `&&` chain plus a sentinel echo.

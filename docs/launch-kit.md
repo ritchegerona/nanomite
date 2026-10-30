@@ -37,7 +37,7 @@ hang again.
 
 **5/**
 Safety you can audit: 4 tool modes with policy gates, self-edit proposals
-behind a human-in-the-loop gate with a hard denylist, a workspace time
+behind a human-in-the-loop gate, a workspace time
 machine (`/revert` restores files to their pre-turn state), and crash
 forensics written to disk before abort.
 

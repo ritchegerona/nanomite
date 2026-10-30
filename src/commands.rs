@@ -15,6 +15,7 @@ pub enum Command {
     Exit,
     Export,
     Help,
+    Image,
     Init,
     Models,
     New,
@@ -40,6 +41,7 @@ pub enum Command {
     Hud,
     Revert,
     Fork,
+    EditTurn,
     History,
     Doctor,
     Ab,
@@ -129,6 +131,12 @@ pub const COMMANDS: &[Entry] = &[
         kind: Command::Fork,
     },
     Entry {
+        command: "/edit",
+        aliases: &[],
+        hint: "rewind to turn <n>, load its prompt for editing and resend (alt+w)",
+        kind: Command::EditTurn,
+    },
+    Entry {
         command: "/compact",
         aliases: &["/summarize"],
         hint: "summarise the session to free up context (alt+g)",
@@ -176,6 +184,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "compose the prompt in $EDITOR (alt+e)",
         kind: Command::Editor,
+    },
+    Entry {
+        command: "/image",
+        aliases: &["/img"],
+        hint: "attach an image to the next message - /image <path> (alt+v)",
+        kind: Command::Image,
     },
     // -- agent features --------------------------------------------------------
     Entry {
@@ -255,7 +269,7 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/export",
         aliases: &[],
-        hint: "write the session to markdown (alt+j)",
+        hint: "write the session to markdown - /export html for a web page (alt+j)",
         kind: Command::Export,
     },
     Entry {

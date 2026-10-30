@@ -1,24 +1,32 @@
-# Wiki Log
+# Wiki log
 
-Append-only timeline of wiki activity.
+## [2026-10-30] seed | initial wiki
+Seeded from the 2026-10-30 session: scrollbar fix, vision input, edit-and-resend,
+HTML export, tool confirmation gate. Pages: index, app, agent, commands,
+confirm-gate, tool-policy, vision-input, session-features, scroll-model.
 
-## [2026-10-16] seed | initial wiki created
-Seeded the wiki from `docs/AUDIT-2026-10-14.md`, `docs/FEATURES.md`,
-`docs/OFFLINE_MODE.md`, `docs/SECURITY.md`, `AGENTS.md`, and `src/`.
-Created `concepts/capability-gaps-l0` and
-`concepts/reasoning-and-context-controls`.
+## [2026-10-30] ingest | concepts/confirm-gate
+Interactive y/n/a/d approval for Risk::External tools; Confirmer trait, SessionGrants
+fast-path, footer with request preview; `confirm_external` config default true.
 
-## [2026-10-16] query | are the four L0 gaps features to add?
-Answered: all four are real but two are only half-true. Reasoning effort
-(`/reasoning`) and `/compact` exist; central tool authorization and the
-offline indicator do not. Filed the analysis into
-`concepts/capability-gaps-l0`.
+## [2026-10-30] ingest | concepts/session-features
+/export html variant, /edit <n> edit-and-resend, /fork, /history — plus the
+HTML-entity transport gotcha and its escape strategy.
 
-## [2026-10-16] ingest | Phase 1 implementation of central tool authorization engine
-Implemented `ToolPolicy` (auto/plan/readonly) with risk classification,
-central enforcement in `run_tool`, config integration, `/policy` command
-and UI indicator. All 376 tests pass.
+## [2026-10-30] ingest | concepts/tool-policy
+Documented the pre-existing ToolPolicy modes and Risk classification; noted the
+owner-removal of the self-edit SOURCE_DENYLIST (2026-10-30).
 
-## [2026-10-16] ingest | Phase 1 implementation summary
-Created `implementation-summary.md` documenting the complete Phase 1
-implementation of the central tool authorization engine.
+## [2026-10-30] ingest | concepts/vision-input
+/image pipeline, 4-image/10 MB limits, multimodal wire format, provider-support
+caveat.
+
+## [2026-10-30] ingest | concepts/scroll-model
+Bottom-anchored scroll offsets and the custom flush-at-both-ends chat scrollbar.
+
+## [2026-10-30] lint | pending
+- AGENTS.md still says "no central authorization engine" — now partially stale:
+  ToolPolicy (static) + Confirmer gate (interactive) exist; per-call authorization
+  for core tools is covered for External calls, Write calls still rely on mode
+  posture. Update when AGENTS.md is next touched by the owner.
+- docs/SECURITY.md / docs/TOOLS.md predate all of this; trust code over docs.

@@ -42,6 +42,20 @@ impl Risk {
     }
 }
 
+/// Asks the user before a risky tool call runs. The UI layer implements
+/// this over its event loop; builds without one (headless runs, tests, or
+/// `confirm_external = false`) fall back to the mode policy alone, exactly
+/// as before this gate existed.
+pub trait Confirmer: Send + Sync {
+    /// `true` allows the call; `false` refuses it with a user-declined
+    /// error the model can read and route around.
+    fn confirm(
+        &self,
+        tool: &str,
+        preview: Option<String>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+}
+
 /// Which tools each mode permits. Word-exact matches on the trimmed name.
 fn is_plan_tool(name: &str) -> bool {
     matches!(

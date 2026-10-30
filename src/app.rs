@@ -710,6 +710,162 @@ pub struct SearchState {
     pub current: usize,
 }
 
+/// An image attachment queued by `/image` and consumed by the next turn.
+#[derive(Debug, Clone)]
+pub struct PendingImage {
+    /// Base file name, shown in the transcript badge.
+    pub name: String,
+    /// `data:<mime>;base64,<payload>` — sent as an `image_url` content part.
+    pub data_url: String,
+    /// Raw byte size, for the badge.
+    pub bytes: usize,
+}
+
+/// Extensions `/image` accepts, with their wire MIME types.
+const IMAGE_MIME: &[(&str, &str)] = &[
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+];
+
+/// Hard cap on one image attachment so a stray ISO cannot blow up the
+/// request body (raw bytes, before base64).
+const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+/// At most this many images may sit queued for one message.
+const MAX_PENDING_IMAGES: usize = 4;
+
+/// Resolves and validates an `/image <path>` argument without touching the
+/// UI thread: extension allow-list, size cap, then read + base64. All I/O
+/// happens on the blocking pool; the result travels back over the control
+/// channel.
+fn build_image_attachment(arg: &str, cwd: &std::path::Path) -> Result<PendingImage, String> {
+    let path = arg.trim();
+    if path.is_empty() {
+        return Err("usage: /image <path-to-image>".into());
+    }
+    let p = std::path::Path::new(path);
+    let mime = IMAGE_MIME
+        .iter()
+        .find(|(ext, _)| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+        })
+        .map(|(_, mime)| *mime)
+        .ok_or_else(|| "only png, jpg, jpeg, gif or webp can be attached".to_string())?;
+    let full = if p.is_absolute() {
+        std::path::PathBuf::from(path)
+    } else {
+        cwd.join(path)
+    };
+    let meta = full
+        .metadata()
+        .map_err(|e| format!("cannot read {}: {e}", full.display()))?;
+    if meta.len() as usize > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "{} is over the {} MB limit",
+            full.display(),
+            MAX_IMAGE_BYTES / (1024 * 1024)
+        ));
+    }
+    let bytes = std::fs::read(&full).map_err(|e| format!("cannot read {}: {e}", full.display()))?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "{} is over the {} MB limit",
+            full.display(),
+            MAX_IMAGE_BYTES / (1024 * 1024)
+        ));
+    }
+    let name = full
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "image".into());
+    Ok(PendingImage {
+        name,
+        data_url: format!("data:{mime};base64,{}", base64_encode(&bytes)),
+        bytes: bytes.len(),
+    })
+}
+
+/// Human label for the transcript badge: KB below 1 MB, MB above.
+fn image_size_label(bytes: usize) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{} KB", bytes.div_ceil(1024))
+    }
+}
+
+/// Badge line prepended to a user entry carrying `image`.
+fn image_badge(image: &PendingImage) -> String {
+    format!(
+        "[image: {} · {}]",
+        image.name,
+        image_size_label(image.bytes)
+    )
+}
+
+/// One interactive tool-confirmation request waiting on the user.
+pub struct ConfirmRequest {
+    pub(crate) tool: String,
+    pub(crate) preview: Option<String>,
+    pub(crate) respond: tokio::sync::oneshot::Sender<bool>,
+}
+
+/// Session-scoped answers from the confirm prompt ("always allow/deny this
+/// tool"), consulted before any new request reaches the user.
+#[derive(Default)]
+struct SessionGrants {
+    allow: std::collections::HashSet<String>,
+    deny: std::collections::HashSet<String>,
+}
+
+/// The UI side of `agent::policy::Confirmer`: granted tools fast-path,
+/// everything else queues a `ConfirmRequest` for the y/n/a/d prompt.
+pub(crate) struct UiConfirmer {
+    tx: tokio::sync::mpsc::UnboundedSender<ConfirmRequest>,
+    grants: Arc<std::sync::Mutex<SessionGrants>>,
+}
+
+impl crate::agent::policy::Confirmer for UiConfirmer {
+    fn confirm(
+        &self,
+        tool: &str,
+        preview: Option<String>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
+        let granted = {
+            let grants = self.grants.lock().expect("confirm grants");
+            if grants.allow.contains(tool) {
+                Some(true)
+            } else if grants.deny.contains(tool) {
+                Some(false)
+            } else {
+                None
+            }
+        };
+        if let Some(ok) = granted {
+            return Box::pin(async move { ok });
+        }
+        let tx = self.tx.clone();
+        let tool = tool.to_string();
+        Box::pin(async move {
+            let (respond, reply) = tokio::sync::oneshot::channel();
+            let sent = tx.send(ConfirmRequest {
+                tool,
+                preview,
+                respond,
+            });
+            if sent.is_err() {
+                return false; // UI gone: refuse rather than run unasked.
+            }
+            reply.await.unwrap_or(false)
+        })
+    }
+}
+
 /// Work the main loop must do on the UI thread (it owns the terminal).
 #[derive(Debug, Clone)]
 pub enum Control {
@@ -738,6 +894,9 @@ pub enum Control {
     ResumeHint(String),
     /// `/fork` finished writing the original session to disk.
     ForkSaved { path: Option<std::path::PathBuf> },
+    /// `/image` finished reading + encoding an attachment on the blocking
+    /// pool; `Err` carries the refusal reason for the toast.
+    ImageAttached(Result<PendingImage, String>),
 }
 
 enum ModelsResult {
@@ -821,6 +980,15 @@ pub struct App {
     /// Queued user prompts submitted while the agent is busy. Processed FIFO
     /// after each turn completes.
     prompt_queue: VecDeque<String>,
+    /// Interactive tool-confirmation gate (see `UiConfirmer`); `None` when
+    /// `confirm_external = false` - risky calls then run as before.
+    confirm_rx: Option<tokio::sync::mpsc::UnboundedReceiver<ConfirmRequest>>,
+    confirmer: Option<Arc<dyn crate::agent::policy::Confirmer>>,
+    pub(crate) pending_confirm: Option<ConfirmRequest>,
+    confirm_grants: Arc<std::sync::Mutex<SessionGrants>>,
+    /// Images queued by `/image`, attached to the next user turn and then
+    /// cleared. Bounded by `MAX_PENDING_IMAGES`.
+    pending_images: Vec<PendingImage>,
     /// Self-improvement engine. Opening it only creates a data directory, so it
     /// is always attached in production.
     improve: Option<Arc<ImproveEngine>>,
@@ -921,7 +1089,28 @@ impl App {
             ProviderKind::Scripted => Arc::new(ScriptedProvider::default()),
         };
 
-        let runtime = Self::build_runtime(provider, &cfg, &cwd);
+        // Interactive tool confirmations: on by default; test presets and
+        // `confirm_external = false` keep the old always-allow behavior.
+        let (confirmer, confirm_rx, confirm_grants) = if cfg.confirm_external {
+            let grants = Arc::new(std::sync::Mutex::new(SessionGrants::default()));
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ConfirmRequest>();
+            (
+                Some(Arc::new(UiConfirmer {
+                    tx,
+                    grants: Arc::clone(&grants),
+                })
+                    as Arc<dyn crate::agent::policy::Confirmer>),
+                Some(rx),
+                grants,
+            )
+        } else {
+            (
+                None,
+                None,
+                Arc::new(std::sync::Mutex::new(SessionGrants::default())),
+            )
+        };
+        let runtime = Self::build_runtime(provider, &cfg, &cwd, confirmer.clone());
 
         let (tx, rx) = unbounded_channel();
         let (models_tx, models_rx) = unbounded_channel();
@@ -973,6 +1162,11 @@ impl App {
             memory_hint,
             prompt_hint,
             prompt_queue: VecDeque::new(),
+            confirm_rx,
+            confirmer,
+            pending_confirm: None,
+            confirm_grants,
+            pending_images: Vec::new(),
             improve: Some(improve),
             improve_dir,
             improve_roots,
@@ -1314,6 +1508,13 @@ impl App {
             changed = true;
             self.apply_suggest_result(result);
         }
+        while let Some(request) = self.confirm_rx.as_mut().and_then(|rx| rx.try_recv().ok()) {
+            changed = true;
+            // Tool calls are sequential per turn, so at most one request is
+            // in flight; a replaced one (interrupted turn) fails its reply
+            // channel and the call is refused.
+            self.pending_confirm = Some(request);
+        }
         if changed {
             self.mark_dirty();
         }
@@ -1323,8 +1524,9 @@ impl App {
         provider: Arc<dyn AgentProvider>,
         cfg: &Config,
         cwd: &std::path::Path,
+        confirmer: Option<Arc<dyn crate::agent::policy::Confirmer>>,
     ) -> AgentRuntime {
-        AgentRuntime::new(
+        let runtime = AgentRuntime::new(
             provider,
             cwd.to_path_buf(),
             cfg.max_file_bytes,
@@ -1350,7 +1552,11 @@ impl App {
         // (NANOMITE_TOOLS_DIR overrides ~/.config/nanomite/tools).
         .with_external_tools(Arc::new(crate::tools::external_tools::ExternalTools::load(
             &crate::tools::external_tools::tools_dir(),
-        )))
+        )));
+        match confirmer {
+            Some(confirmer) => runtime.with_confirmer(confirmer),
+            None => runtime,
+        }
     }
 
     fn rebuild_runtime(&mut self) -> Result<(), String> {
@@ -1365,9 +1571,10 @@ impl App {
         // memory tools, retrieval and capture on every model or tool switch.
         self.runtime = match &self.memory {
             Some(engine) => {
-                Self::build_runtime(provider, &self.cfg, &self.cwd).with_memory(Arc::clone(engine))
+                Self::build_runtime(provider, &self.cfg, &self.cwd, self.confirmer.clone())
+                    .with_memory(Arc::clone(engine))
             }
-            None => Self::build_runtime(provider, &self.cfg, &self.cwd),
+            None => Self::build_runtime(provider, &self.cfg, &self.cwd, self.confirmer.clone()),
         };
         Ok(())
     }
@@ -1813,9 +2020,25 @@ impl App {
     fn start_turn(&mut self, prompt: String) {
         // A new turn invalidates whatever the previous turn suggested.
         self.dismiss_suggestions();
+        // Consume any `/image` attachments: they ride on this turn's user
+        // message (wire format gets the multimodal parts), and the transcript
+        // entry shows a badge line per image.
+        let images = std::mem::take(&mut self.pending_images);
+        let mut display = prompt.clone();
+        for image in &images {
+            display = format!("{}\n{display}", image_badge(image));
+        }
         self.entries
-            .push(Entry::new(EntryRole::User, prompt.clone()));
-        self.history.push(ChatMessage::user(prompt.clone()));
+            .push(Entry::new(EntryRole::User, display.clone()));
+        let message = if images.is_empty() {
+            ChatMessage::user(prompt.clone())
+        } else {
+            ChatMessage::user_with_images(
+                prompt.clone(),
+                images.into_iter().map(|image| image.data_url).collect(),
+            )
+        };
+        self.history.push(message);
         // This turn starts here; every message the engine appends for it is
         // counted onto this turn, so `/undo` cuts at the exact boundary.
         self.turn_history.push(1);
@@ -1857,6 +2080,7 @@ impl App {
             Command::Density => self.toggle_compact(),
             Command::Revert => self.revert_turn(parse_turn_arg(args)),
             Command::Fork => self.fork_session_at(parse_turn_arg(args).unwrap_or(0)),
+            Command::EditTurn => self.edit_turn(parse_turn_arg(args).unwrap_or(0)),
             Command::History => self.search_history(args),
             Command::Doctor => self.run_doctor(),
             Command::Ab => self.run_ab_test(args),
@@ -1864,7 +2088,7 @@ impl App {
             Command::Focus => self.toggle_focus(),
             Command::Editor => self.edit_composer(),
             Command::Exit => self.quit = true,
-            Command::Export => self.export_session(),
+            Command::Export => self.export_session(args),
             Command::Help => self.open_help(),
             Command::Init => self.run_init(),
             Command::Models => self.open_model_picker(),
@@ -1873,6 +2097,7 @@ impl App {
             Command::Panel => self.open_board(args),
             Command::Reasoning => self.cycle_reasoning(),
             Command::Copy => self.copy_selection(),
+            Command::Image => self.attach_image(args),
             Command::Redo => self.redo(),
             Command::Sessions => self.open_sessions(),
             Command::Share => self.share_session(),
@@ -2184,8 +2409,14 @@ impl App {
 
     // -- /export, /share ---------------------------------------------------
 
-    fn export_session(&mut self) {
-        match self.write_export() {
+    fn export_session(&mut self, arg: &str) {
+        let html = matches!(arg.trim().to_ascii_lowercase().as_str(), "html" | "web");
+        let result = if html {
+            self.write_export_html()
+        } else {
+            self.write_export()
+        };
+        match result {
             Ok(path) => {
                 self.open_in_editor_if_any(&path);
                 self.toast(format!("exported {}", path.display()));
@@ -2210,10 +2441,67 @@ impl App {
         Ok(path)
     }
 
+    fn write_export_html(&self) -> std::io::Result<std::path::PathBuf> {
+        let path = session::export_html_path();
+        std::fs::write(&path, session::to_html(&self.stored_session()))?;
+        Ok(path)
+    }
+
     fn open_in_editor_if_any(&mut self, path: &std::path::Path) {
         if editor_available() {
             self.control_send(Control::EditFile(path.to_path_buf()));
         }
+    }
+
+    // -- /image -------------------------------------------------------------
+
+    /// Queues an image attachment for the next message (`/image <path>`).
+    /// Reading and encoding run on the blocking pool; the result returns via
+    /// `Control::ImageAttached`. Test builds have no control channel, so the
+    /// result is computed inline and applied directly.
+    fn attach_image(&mut self, arg: &str) {
+        if arg.trim().is_empty() {
+            self.toast("usage: /image <path-to-image>");
+            self.mark_dirty();
+            return;
+        }
+        if self.pending_images.len() >= MAX_PENDING_IMAGES {
+            self.toast("too many queued images - send the message first");
+            self.mark_dirty();
+            return;
+        }
+        if self.control_tx.is_some() {
+            let arg = arg.to_string();
+            let cwd = self.cwd.clone();
+            let control = self.control_tx.clone();
+            self.handle.spawn_blocking(move || {
+                let built = build_image_attachment(&arg, &cwd);
+                if let Some(control) = control {
+                    let _ = control.send(Control::ImageAttached(built));
+                }
+            });
+            self.toast("reading image…");
+        } else {
+            // Headless/test path: no control channel means nobody would
+            // deliver the result, so compute and apply it right here.
+            self.on_image_attached(build_image_attachment(arg.trim(), &self.cwd));
+        }
+        self.mark_dirty();
+    }
+
+    /// Consumes the finished `/image` read: queues the attachment or shows
+    /// the refusal.
+    pub fn on_image_attached(&mut self, result: Result<PendingImage, String>) {
+        match result {
+            Ok(image) => {
+                let label = image_size_label(image.bytes);
+                let name = image.name.clone();
+                self.pending_images.push(image);
+                self.toast(format!("attached {name} ({label}) - send the message"));
+            }
+            Err(reason) => self.toast(reason),
+        }
+        self.mark_dirty();
     }
 
     // -- /sessions ----------------------------------------------------------
@@ -3230,6 +3518,7 @@ impl App {
         self.entries.clear();
         self.history.clear();
         self.turn_history.clear();
+        self.pending_images.clear();
         self.usage = Usage::default();
         self.session_started = Instant::now();
         self.undo_stack.clear();
@@ -4070,6 +4359,106 @@ impl App {
         self.toast(format!("forked at turn {turn} - original session saved"));
     }
 
+    /// ChatGPT-style edit & resend: rewind to turn `n`, drop it and everything
+    /// after it, and load its prompt into the composer for editing. The full
+    /// session is saved first, exactly like `/fork`, so nothing is ever lost —
+    /// `/fork` keeps turn `n` in place, `/edit` hands its text back instead.
+    pub(crate) fn edit_turn(&mut self, turn: usize) {
+        if self.is_busy() {
+            self.toast("wait for the turn to finish before editing");
+            self.mark_dirty();
+            return;
+        }
+        let turns = self.turn_count();
+        if turns == 0 {
+            self.toast("nothing to edit yet");
+            self.mark_dirty();
+            return;
+        }
+        if turn == 0 || turn > turns {
+            self.toast(format!("turns run 1..{turns} - /edit <n>"));
+            self.mark_dirty();
+            return;
+        }
+        let user_idxs: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.role == EntryRole::User)
+            .map(|(i, _)| i)
+            .collect();
+        let idx = user_idxs[turn - 1];
+        // The composer gets the plain prompt back: image badge lines are
+        // display scaffolding, not text the user typed.
+        let had_images = self.entries[idx]
+            .text
+            .lines()
+            .any(|l| l.trim_start().starts_with("[image: "));
+        let prompt: String = self.entries[idx]
+            .text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("[image: "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Nothing is ever lost: the full session is written out first.
+        let full = self.stored_session();
+        let control = self.control_tx.clone();
+        self.handle.spawn_blocking(move || {
+            if let Some(control) = control {
+                let _ = control.send(Control::ForkSaved {
+                    path: session::save(&full).ok(),
+                });
+            }
+        });
+        // Rewind to just before the turn's user message.
+        self.entries.truncate(idx);
+        let keep: usize = self.turn_history.iter().take(turn - 1).sum();
+        self.history.truncate(keep.min(self.history.len()));
+        self.turn_history.truncate(turn - 1);
+        self.trim_history();
+        self.active = None;
+        self.turn_started = None;
+        self.view.scroll_to_bottom();
+        self.composer.clear();
+        self.composer.insert_str(&prompt);
+        self.mark_dirty();
+        let mut msg = format!("editing turn {turn} - send to resend");
+        if had_images {
+            msg.push_str(" (images not re-attached)");
+        }
+        self.toast(msg);
+    }
+
+    /// Answers (or dismisses) the pending tool confirmation: y allow,
+    /// a always allow, n/Esc deny, d always deny. Other keys keep waiting.
+    fn on_key_confirm(&mut self, key: crossterm::event::KeyEvent) {
+        let Some(request) = self.pending_confirm.take() else {
+            return;
+        };
+        let (allow, grant) = match key.code {
+            crossterm::event::KeyCode::Char('y' | 'Y') => (true, None),
+            crossterm::event::KeyCode::Char('a' | 'A') => (true, Some(true)),
+            crossterm::event::KeyCode::Char('n' | 'N') | crossterm::event::KeyCode::Esc => {
+                (false, None)
+            }
+            crossterm::event::KeyCode::Char('d' | 'D') => (false, Some(false)),
+            _ => {
+                self.pending_confirm = Some(request);
+                return;
+            }
+        };
+        if let Some(grant_allow) = grant {
+            let mut grants = self.confirm_grants.lock().expect("confirm grants");
+            if grant_allow {
+                grants.allow.insert(request.tool.clone());
+            } else {
+                grants.deny.insert(request.tool.clone());
+            }
+        }
+        let _ = request.respond.send(allow);
+        self.mark_dirty();
+    }
+
     // -- cross-session search (/history) -----------------------------------------
 
     /// Scans every saved session for `query` on the blocking pool and opens
@@ -4581,6 +4970,13 @@ impl App {
             return;
         }
 
+        // A pending tool confirmation is modal: y allow, a always allow,
+        // n/Esc deny, d always deny. Any other key waits.
+        if self.pending_confirm.is_some() {
+            self.on_key_confirm(key);
+            return;
+        }
+
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -4687,6 +5083,7 @@ impl App {
             KeyCode::Char('n') if alt => self.run_command(Command::Memory, ""),
             KeyCode::Char('h') if alt => self.run_command(Command::History, ""),
             KeyCode::Char('f') if alt => self.run_command(Command::Fork, ""),
+            KeyCode::Char('w') if alt => self.edit_turn(self.turn_count()),
             KeyCode::Char('r') if alt => self.run_command(Command::Revert, ""),
             KeyCode::Char('g') if alt => self.run_command(Command::Compact, ""),
             KeyCode::Char('u') if alt => self.run_command(Command::Undo, ""),
@@ -4695,6 +5092,7 @@ impl App {
             KeyCode::Char('.') if alt => self.run_command(Command::Next, ""),
             KeyCode::Char('y') if alt => self.run_command(Command::Copy, ""),
             KeyCode::Char('e') if alt => self.run_command(Command::Editor, ""),
+            KeyCode::Char('v') if alt => self.run_command(Command::Image, ""),
             KeyCode::Char('b') if alt => self.run_command(Command::Panel, ""),
             KeyCode::Char('x') if alt => self.run_command(Command::Ab, ""),
             KeyCode::Char('T') if alt => self.run_command(Command::Team, ""),
@@ -5865,6 +6263,9 @@ mod tests {
         let mut cfg = Config::from_env();
         cfg.apply_preset("scripted");
         cfg.notice = None;
+        // Confirmations are interactive: the offline test app must never
+        // wait on the user, so the gate stays off unless a test opts in.
+        cfg.confirm_external = false;
         cfg
     }
 
@@ -5886,6 +6287,229 @@ mod tests {
     #[test]
     fn osc52_wraps_the_payload_in_the_terminal_sequence() {
         assert_eq!(osc52("foo"), "\x1b]52;c;Zm9v\x07");
+    }
+
+    #[test]
+    fn image_attachment_rejects_unknown_extensions_and_missing_files() {
+        assert!(build_image_attachment("", std::path::Path::new("/tmp"))
+            .unwrap_err()
+            .contains("usage"));
+        assert!(
+            build_image_attachment("notes.txt", std::path::Path::new("/tmp"))
+                .unwrap_err()
+                .contains("png, jpg, jpeg, gif or webp")
+        );
+        assert!(build_image_attachment(
+            "/nonexistent/definitely/missing.png",
+            std::path::Path::new("/tmp")
+        )
+        .unwrap_err()
+        .contains("cannot read"));
+    }
+
+    #[test]
+    fn image_attachment_encodes_a_data_url() {
+        let dir = crate::improve::testing::temp_dir("image-encode");
+        let path = dir.path.join("shot.png");
+        std::fs::write(&path, b"\x89PNG-bytes").expect("write fixture");
+        let image =
+            build_image_attachment(path.to_str().unwrap(), &dir.path).expect("attachment builds");
+        assert_eq!(image.name, "shot.png");
+        assert_eq!(image.bytes, 10);
+        assert!(
+            image.data_url.starts_with("data:image/png;base64,"),
+            "data url: {}",
+            image.data_url
+        );
+        // RFC 4648 of the exact payload.
+        assert!(image.data_url.ends_with(&base64_encode(b"\x89PNG-bytes")));
+    }
+
+    #[test]
+    fn image_size_label_and_badge_read_cleanly() {
+        assert_eq!(image_size_label(512), "1 KB");
+        assert_eq!(image_size_label(2048), "2 KB");
+        assert_eq!(image_size_label(3 * 1024 * 1024 + 262_144), "3.2 MB");
+        let image = PendingImage {
+            name: "shot.png".into(),
+            data_url: "data:image/png;base64,QQ==".into(),
+            bytes: 2048,
+        };
+        assert_eq!(image_badge(&image), "[image: shot.png · 2 KB]");
+    }
+
+    #[tokio::test]
+    async fn image_attachment_flows_into_the_next_turn() {
+        let mut app = test_app().await;
+        let dir = crate::improve::testing::temp_dir("image-turn");
+        let path = dir.path.join("shot.png");
+        std::fs::write(&path, b"\x89PNG-bytes").expect("write fixture");
+        // A wrong-extension file must be refused outright.
+        let bad = dir.path.join("notes.txt");
+        std::fs::write(&bad, b"nope").expect("write fixture");
+
+        app.run_command(Command::Image, bad.to_str().unwrap());
+        assert!(app.pending_images.is_empty(), "txt must be refused");
+
+        app.run_command(Command::Image, path.to_str().unwrap());
+        assert_eq!(app.pending_images.len(), 1, "png queues");
+
+        app.composer.insert_str("what is this");
+        app.submit();
+        let last = app
+            .history
+            .iter()
+            .rfind(|m| m.role == crate::agent::provider::Role::User)
+            .expect("user message");
+        assert_eq!(
+            last.images.as_ref().map(|v| v.len()),
+            Some(1),
+            "image rides on the user message"
+        );
+        assert!(
+            app.entries
+                .iter()
+                .any(|e| e.role == EntryRole::User && e.text.contains("[image: shot.png")),
+            "entry shows the badge"
+        );
+        assert!(app.pending_images.is_empty(), "queue drains on send");
+    }
+
+    #[tokio::test]
+    async fn image_queue_clears_on_new_session() {
+        let mut app = test_app().await;
+        let dir = crate::improve::testing::temp_dir("image-new");
+        let path = dir.path.join("shot.png");
+        std::fs::write(&path, b"\x89PNG-bytes").expect("write fixture");
+        app.run_command(Command::Image, path.to_str().unwrap());
+        assert_eq!(app.pending_images.len(), 1);
+        app.run_command(Command::New, "");
+        assert!(app.pending_images.is_empty(), "/new drops queued images");
+    }
+
+    #[tokio::test]
+    async fn edit_turn_rewinds_and_loads_the_prompt() {
+        let mut app = test_app().await;
+        app.entries = vec![
+            Entry::new(EntryRole::User, "first prompt"),
+            Entry::new(EntryRole::Assistant, "first answer"),
+            Entry::new(EntryRole::User, "second prompt"),
+            Entry::new(EntryRole::Assistant, "second answer"),
+        ];
+        app.history = vec![
+            ChatMessage::user("first prompt"),
+            ChatMessage::assistant("first answer"),
+            ChatMessage::user("second prompt"),
+            ChatMessage::assistant("second answer"),
+        ];
+        app.turn_history = vec![2, 2];
+        app.edit_turn(2);
+        assert_eq!(app.composer.value(), "second prompt");
+        assert_eq!(app.entries.len(), 2, "later entries are dropped");
+        assert_eq!(app.history.len(), 2);
+        assert_eq!(app.turn_history, vec![2]);
+    }
+
+    #[tokio::test]
+    async fn edit_turn_first_turn_clears_the_transcript() {
+        let mut app = test_app().await;
+        app.entries = vec![
+            Entry::new(EntryRole::User, "only prompt"),
+            Entry::new(EntryRole::Assistant, "only answer"),
+        ];
+        app.history = vec![
+            ChatMessage::user("only prompt"),
+            ChatMessage::assistant("only answer"),
+        ];
+        app.turn_history = vec![2];
+        app.edit_turn(1);
+        assert_eq!(app.composer.value(), "only prompt");
+        assert!(app.entries.is_empty());
+        assert!(app.history.is_empty());
+        assert!(app.turn_history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn edit_turn_rejects_out_of_range_turns() {
+        let mut app = test_app().await;
+        app.entries = vec![Entry::new(EntryRole::User, "only prompt")];
+        app.turn_history = vec![1];
+        app.edit_turn(0);
+        assert!(app.composer.value().is_empty());
+        assert_eq!(app.entries.len(), 1);
+        app.edit_turn(5);
+        assert_eq!(app.entries.len(), 1);
+        assert!(app.composer.value().is_empty());
+    }
+
+    #[tokio::test]
+    async fn edit_turn_strips_image_badges_from_the_prompt() {
+        let mut app = test_app().await;
+        app.entries = vec![Entry::new(
+            EntryRole::User,
+            "[image: shot.png · 1 KB]\nwhat is this",
+        )];
+        app.turn_history = vec![1];
+        app.edit_turn(1);
+        assert_eq!(app.composer.value(), "what is this");
+        let (toast, _) = app.toast.clone().expect("toast");
+        assert!(toast.contains("images not re-attached"), "{toast}");
+    }
+
+    fn confirm_key(c: char) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(c),
+            crossterm::event::KeyModifiers::NONE,
+        )
+    }
+
+    #[tokio::test]
+    async fn confirm_prompt_round_trips_and_session_grants_answer_fast() {
+        let mut cfg = test_config();
+        cfg.confirm_external = true;
+        let mut app = App::new(cfg, tokio::runtime::Handle::current()).expect("app");
+        let confirmer = app.confirmer.clone().expect("confirmer attached");
+
+        // First ask: the request parks on the app until the user answers.
+        let pending = {
+            let c = Arc::clone(&confirmer);
+            tokio::spawn(async move { c.confirm("run_command", Some("ls".into())).await })
+        };
+        for _ in 0..1000 {
+            app.pump_engine();
+            if app.pending_confirm.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        let request = app.pending_confirm.take().expect("pending request");
+        assert_eq!(request.tool, "run_command");
+        assert_eq!(request.preview.as_deref(), Some("ls"));
+        app.pending_confirm = Some(request);
+        app.on_key_confirm(confirm_key('a'));
+        assert!(pending.await.expect("join"), "always-allow answers true");
+
+        // The grant fast-paths future calls without queueing anything.
+        assert!(confirmer.confirm("run_command", None).await);
+        app.pump_engine();
+        assert!(app.pending_confirm.is_none(), "a grant must not re-prompt");
+
+        // Deny + always-deny answers false and remembers it for the session.
+        let denied = {
+            let c = Arc::clone(&confirmer);
+            tokio::spawn(async move { c.confirm("ssh_run", None).await })
+        };
+        for _ in 0..1000 {
+            app.pump_engine();
+            if app.pending_confirm.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        assert!(app.pending_confirm.is_some(), "ungranted tool asks again");
+        app.on_key_confirm(confirm_key('d'));
+        assert!(!denied.await.expect("join"), "always-deny answers false");
+        assert!(!confirmer.confirm("ssh_run", None).await);
     }
 
     #[test]

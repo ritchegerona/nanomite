@@ -4,6 +4,35 @@ Every entry describes a verified change. Labels: implemented+tested,
 implemented unverified, planned, experimental, unsupported. Planned work is
 never listed as released.
 
+## [Unreleased]
+
+### Added
+
+- **Vision input** `/image <path>` (`/img`, alt+v): attach up to 4 images
+  (png/jpg/jpeg/gif/webp, 10 MB cap) to the next message; sent as OpenAI
+  multimodal `image_url` parts with `[image: name · size]` entry badges;
+  `/new` clears the queue. implemented+tested (wire format verified offline).
+- **Edit & resend** `/edit <n>` (alt+w): saves the full session, rewinds the
+  transcript to turn N and preloads its prompt into the composer for resend.
+  implemented+tested.
+- **HTML export** `/export html` (alt+j): standalone styled HTML page of the
+  session with entity-escaped markup. implemented+tested.
+- **Interactive tool confirmation gate** (`confirm_external`, default on):
+  Risk::External tools (`run_command`, `ssh_run`, `memory_delete`) ask y/a/n/d
+  before running; `a`/`d` remember the answer for the session; a denial is fed
+  back to the model as `user_declined` and the turn continues.
+  `NANOMITE_CONFIRM_EXTERNAL=0` disables. implemented+tested.
+- Custom proportional chat scrollbar whose thumb reaches both track ends;
+  bottom-anchored scroll offsets documented in tests. implemented+tested.
+
+### Changed
+
+- **Self-edit denylist removed** (owner decision, private testing
+  environment): `propose_self_edit` can now stage proposals against
+  `src/memory/security.rs`, `src/memory/policy.rs` and `src/main.rs`.
+  Applying is unchanged: human approval in `/improve`, `.bak` backup,
+  `cargo test --lib` regression gate, byte-exact rollback, JSONL audit log.
+
 ## [0.7.0] — 2026-10-28
 
 ### Added

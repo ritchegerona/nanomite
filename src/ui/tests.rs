@@ -415,6 +415,39 @@ async fn scrollbar_click_jumps_and_bottom_follows() {
 }
 
 #[tokio::test]
+async fn scrollbar_thumb_reaches_track_ends() {
+    let mut app = test_app().await;
+    for i in 0..40 {
+        app.entries
+            .push(Entry::new(EntryRole::User, format!("question {i}")));
+    }
+
+    let sb_column = |app: &mut App| -> Vec<char> {
+        let mut terminal = Terminal::new(TestBackend::new(92, 24)).expect("terminal");
+        terminal.draw(|f| render(f, app)).expect("draw");
+        let buffer = terminal.backend().buffer().clone();
+        let rect = app.view.cached_chat_rect().expect("chat rect cached");
+        let col = rect.x + rect.width - 1;
+        (rect.y..rect.y + rect.height)
+            .map(|y| buffer[(col, y)].symbol().chars().next().unwrap_or(' '))
+            .collect()
+    };
+
+    // Fully scrolled to the live tail: the thumb sits flush against the
+    // bottom of the track (regression: it used to stop near the middle).
+    let at_bottom = sb_column(&mut app);
+    assert_eq!(at_bottom[at_bottom.len() - 1], '█', "bottom: {at_bottom:?}");
+    assert_eq!(at_bottom[0], '│', "bottom: {at_bottom:?}");
+
+    // Scrolled to the top (positive = away from the tail): the thumb starts
+    // at the very top of the track.
+    app.scroll_by(10_000);
+    let at_top = sb_column(&mut app);
+    assert_eq!(at_top[0], '█', "top: {at_top:?}");
+    assert_eq!(at_top[at_top.len() - 1], '│', "top: {at_top:?}");
+}
+
+#[tokio::test]
 async fn scrolled_up_pill_counts_new_lines() {
     let mut app = test_app().await;
     for i in 0..40 {
@@ -3100,12 +3133,15 @@ async fn an_empty_queue_says_so() {
 }
 
 #[tokio::test]
-async fn the_denylist_is_enforced_before_anything_is_staged() {
+async fn safety_layer_targets_stage_after_denylist_removal() {
+    // Owner decision 2026-10-30: the self-edit denylist is gone. Staging a
+    // proposal against the former safety layer succeeds; the change still
+    // only lands via the /improve approval gate.
     let mut app = test_app().await;
-    let (_temp, roots) = improve_fixture("ui-improve-denylist");
+    let (_temp, roots) = improve_fixture("ui-improve-safety-stage");
     let engine = std::sync::Arc::new(ImproveEngine::new(roots.repo_root.join(".improve-data")));
     app.attach_improve_for_test(
-        engine,
+        engine.clone(),
         roots.clone(),
         FakeRunner {
             passed: true,
@@ -3119,19 +3155,18 @@ async fn the_denylist_is_enforced_before_anything_is_staged() {
     )
     .unwrap();
 
-    let err = dispatch(
+    let _out = dispatch(
         &app,
         "propose_self_edit",
         serde_json::json!({
             "target": "source",
             "path": "src/memory/policy.rs",
-            "new_content": "pub fn unsafe() {}\n",
-            "rationale": "loosen a rule",
+            "new_content": "pub fn edited() {}\n",
+            "rationale": "owner-approved policy change",
         }),
     )
-    .expect_err("the safety layer must stay off limits");
-    assert!(err.contains("improve_policy"), "{err}");
-    assert!(app.improve_pending_rows().is_empty());
+    .unwrap_or_else(|e| panic!("staging must succeed now: {e}"));
+    assert_eq!(engine.list(None).unwrap().len(), 1);
 }
 
 #[tokio::test]

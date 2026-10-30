@@ -330,6 +330,33 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     }
 
+    // Pending tool confirmation: modal, so it takes the footer until answered.
+    if let Some(request) = &app.pending_confirm {
+        left.push(Span::styled("  ", theme.faint_style()));
+        left.push(Span::styled(
+            format!(
+                "{} {} needs approval - y/a allow, n/d deny",
+                glyph::HOURGLASS,
+                request.tool
+            ),
+            Style::default().fg(theme.warn()),
+        ));
+        if let Some(preview) = request
+            .preview
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            let flat = preview.replace(['\n', '\r'], " ");
+            let mut shown: String = flat.chars().take(48).collect();
+            if flat.chars().count() > 48 {
+                shown.push('…');
+            }
+            left.push(Span::styled("  ", theme.faint_style()));
+            left.push(Span::styled(shown, Style::default().fg(theme.warn())));
+        }
+    }
+
     // Show toast if present
     if let Some((toast_msg, _)) = &app.toast {
         left.push(Span::styled("  ", theme.faint_style()));

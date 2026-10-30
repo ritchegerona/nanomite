@@ -3,8 +3,8 @@
 //! Two tools, deliberately not three: `propose_self_edit` stages a change and
 //! `list_self_edits` reports what is staged. There is **no** agent-callable
 //! apply — approval is a human action in the `/improve` overlay, and the engine
-//! refuses to apply anything the user has not seen. Argument parsing, the
-//! denylist, path confinement and the size cap live in the engine; this module
+//! refuses to apply anything the user has not seen. Argument parsing, path
+//! confinement and the size cap live in the engine; this module
 //! only adapts JSON in and bounded JSON out.
 //!
 //! Sync by design: the runtime dispatches every tool call through
@@ -359,24 +359,26 @@ mod tests {
     }
 
     #[test]
-    fn denylisted_targets_are_refused_with_the_engines_message() {
-        let temp = temp_dir("propose-denylist");
+    fn safety_layer_targets_stage_after_denylist_removal() {
+        // Owner decision 2026-10-30: the self-edit denylist is gone. The tool
+        // stages the proposal; applying still requires the /improve gate.
+        let temp = temp_dir("propose-safety-stage");
         let root = &temp.path;
         fs::create_dir_all(root.join("src/memory")).unwrap();
         fs::write(root.join("src/memory/policy.rs"), "pub fn safe() {}\n").unwrap();
         let engine = ImproveEngine::new(root.join(".improve"));
-        let err = propose(
+        let _staged = propose(
             &engine,
             ProposeSelfEditArgs {
                 target: "source".into(),
                 path: "src/memory/policy.rs".into(),
-                new_content: "pub fn unsafe() {}\n".into(),
-                rationale: "loosen a rule".into(),
+                new_content: "pub fn edited() {}\n".into(),
+                rationale: "owner-approved policy change".into(),
             },
             &roots(root),
         )
-        .unwrap_err();
-        assert!(matches!(err, ImproveError::Policy(_)), "{err:?}");
+        .unwrap();
+        assert_eq!(list_pending(&engine).unwrap().proposals.len(), 1);
     }
 
     #[test]
