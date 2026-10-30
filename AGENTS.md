@@ -140,13 +140,18 @@ broken.
 9. Preserve existing behavior and public interfaces unless the change
    explicitly requires otherwise.
 
-**There is still no central authorization engine.** `runtime.rs::run_tool`
-dispatches directly to tools; nothing between the model and the tool layer
-confirms a core-tool call. What exists today is per-subsystem gating: memory
-gates itself (`MemoryPolicy::authorize` + `confirm=true` on destructive ops),
-`disabled_tools` filters the schema list and refuses dispatch, and the
-self-improvement engine has a proposal gate. Anything needing *general*
-authorization for core tools is still new design work, not an integration.
+**Central tool authorization exists: `src/agent/policy.rs`.** Every tool call
+funnels through `runtime.rs::run_tool`, where `ToolPolicy::authorize`
+gates by mode — **Plan ⊂ Coder ⊂ Build ⊂ Hacker**, cycled with Shift+Tab, default
+Build — and refusals go back to the model as readable JSON errors (`plan_mode`,
+`coder_mode`, `build_mode`). The `Confirmer` interactive gate on top of the mode
+ladder landed 2026-10-30: `Risk::External` calls
+(`run_command`, `ssh_run`, `memory_delete`) pass a `Confirmer` interactive gate
+(y/a/n/d; `confirm_external`, default on; session grants fast-path; denial returns
+`user_declined`). Per-subsystem gating remains: memory gates itself
+(`MemoryPolicy::authorize` + `confirm=true` on destructive ops), `disabled_tools`
+filters the schema list and refuses dispatch, and the self-improvement engine
+keeps its user-approval gate.
 
 ## Docs: partially current, some still verified-stale
 

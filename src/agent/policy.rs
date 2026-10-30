@@ -33,10 +33,11 @@ impl Risk {
     /// still rejects names it does not know.
     pub fn of(name: &str) -> Risk {
         match name.trim() {
-            "run_command" | "ssh_run" | "memory_delete" => Risk::External,
+            "run_command" | "ssh_run" | "memory_delete" | "browse" | "browse_screenshot"
+            | "run_tests" => Risk::External,
             "write_file" | "edit_file" | "memory_save" | "memory_update" | "propose_self_edit"
             | "git_commit" | "git_branch" | "index_symbols" | "create_plan" | "update_task"
-            | "delete_plan" => Risk::Write,
+            | "delete_plan" | "read_document" => Risk::Write,
             _ => Risk::Safe,
         }
     }
@@ -67,13 +68,12 @@ fn is_plan_tool(name: &str) -> bool {
 /// The mode ladder: Plan ⊂ Coder ⊂ Build ⊂ Hacker.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ToolPolicy {
-    /// Research and plan; mutations refused.
+    /// Research and plan; mutations refused. Default: safest starting point.
+    #[default]
     Plan,
     /// + file edits and self-edit staging; no command execution or git history.
     Coder,
-    /// + local command execution and git commits/branches. Default: full
-    ///   local power for everyday building and testing.
-    #[default]
+    /// + local command execution and git commits/branches.
     Build,
     /// Everything, including SSH to remote hosts. No guardrails.
     Hacker,
@@ -205,6 +205,13 @@ mod tests {
         assert_eq!(Risk::of("run_command"), Risk::External);
         assert_eq!(Risk::of("ssh_run"), Risk::External);
         assert_eq!(Risk::of("memory_delete"), Risk::External);
+        // Browser tools execute external processes (headless Chromium).
+        assert_eq!(Risk::of("browse"), Risk::External);
+        assert_eq!(Risk::of("browse_screenshot"), Risk::External);
+        // run_tests executes cargo test (subprocess, mutates target/).
+        assert_eq!(Risk::of("run_tests"), Risk::External);
+        // read_document reads arbitrary files via extractors.
+        assert_eq!(Risk::of("read_document"), Risk::Write);
         // Git: inspection is safe, history mutation is a write.
         assert_eq!(Risk::of("git_status"), Risk::Safe);
         assert_eq!(Risk::of("git_diff"), Risk::Safe);
@@ -361,8 +368,8 @@ mod tests {
     }
 
     #[test]
-    fn default_is_build() {
-        assert_eq!(ToolPolicy::default(), ToolPolicy::Build);
+    fn default_is_plan() {
+        assert_eq!(ToolPolicy::default(), ToolPolicy::Plan);
     }
 
     #[test]

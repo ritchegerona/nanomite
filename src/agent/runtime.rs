@@ -1466,6 +1466,20 @@ fn preview_args(call: &ToolCall) -> Option<String> {
             }
             Some(shorten(cmd, 120))
         }
+        "browse" => {
+            let url = args.get("url").and_then(|v| v.as_str())?;
+            if url.trim().is_empty() {
+                return None;
+            }
+            Some(shorten(&format!("browse {url}"), 120))
+        }
+        "browse_screenshot" => {
+            let url = args.get("url").and_then(|v| v.as_str())?;
+            if url.trim().is_empty() {
+                return None;
+            }
+            Some(shorten(&format!("browse_screenshot {url}"), 120))
+        }
         // read_document previews from arguments alone (no IO here - the loop
         // runs previews on the async thread): the target format comes from the
         // extension, the section titles only exist after extraction.

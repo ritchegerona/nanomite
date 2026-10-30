@@ -904,6 +904,8 @@ pub enum Control {
     ImageAttached(Result<PendingImage, String>),
     /// A clicked chat link; the main loop hands it to the system browser.
     OpenLink(String),
+    /// `/export` (markdown or HTML) finished writing on the blocking pool.
+    ExportDone(Result<std::path::PathBuf, String>),
 }
 
 enum ModelsResult {
@@ -2426,11 +2428,74 @@ impl App {
 
     fn export_session(&mut self, arg: &str) {
         let html = matches!(arg.trim().to_ascii_lowercase().as_str(), "html" | "web");
-        let result = if html {
-            self.write_export_html()
+        let stored = self.stored_session();
+        if self.control_tx.is_some() {
+            let control = self.control_tx.clone();
+            self.handle.spawn_blocking(move || {
+                let path = if html {
+                    session::export_html_path()
+                } else {
+                    session::export_path()
+                };
+                let content = if html {
+                    session::to_html(&stored)
+                } else {
+                    session::to_markdown(&stored)
+                };
+                let result = std::fs::write(&path, content).map(|_| path);
+                if let Some(control) = control {
+                    let _ = control.send(Control::ExportDone(result.map_err(|e| e.to_string())));
+                }
+            });
+            self.toast("writing export…");
         } else {
-            self.write_export()
-        };
+            // Headless/test path: no control channel, compute inline.
+            let path = if html {
+                session::export_html_path()
+            } else {
+                session::export_path()
+            };
+            let content = if html {
+                session::to_html(&stored)
+            } else {
+                session::to_markdown(&stored)
+            };
+            self.on_export_done(
+                std::fs::write(&path, content)
+                    .map(|_| path)
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        self.mark_dirty();
+    }
+
+    fn share_session(&mut self) {
+        let stored = self.stored_session();
+        if self.control_tx.is_some() {
+            let control = self.control_tx.clone();
+            self.handle.spawn_blocking(move || {
+                let path = session::export_path();
+                let result = std::fs::write(&path, session::to_markdown(&stored))
+                    .map(|_| path)
+                    .map_err(|e| e.to_string());
+                if let Some(control) = control {
+                    let _ = control.send(Control::ExportDone(result));
+                }
+            });
+            self.toast("writing export…");
+        } else {
+            let path = session::export_path();
+            self.on_export_done(
+                std::fs::write(&path, session::to_markdown(&stored))
+                    .map(|_| path)
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        self.mark_dirty();
+    }
+
+    /// Consumes the finished `/export` or `/share` write.
+    pub fn on_export_done(&mut self, result: Result<std::path::PathBuf, String>) {
         match result {
             Ok(path) => {
                 self.open_in_editor_if_any(&path);
@@ -2438,24 +2503,17 @@ impl App {
             }
             Err(e) => self.toast(format!("export failed: {e}")),
         }
+        self.mark_dirty();
     }
 
-    fn share_session(&mut self) {
-        match self.write_export() {
-            Ok(path) => {
-                self.open_in_editor_if_any(&path);
-                self.toast(format!("local share: {}", path.display()));
-            }
-            Err(e) => self.toast(format!("share failed: {e}")),
-        }
-    }
-
+    #[allow(dead_code)]
     fn write_export(&self) -> std::io::Result<std::path::PathBuf> {
         let path = session::export_path();
         std::fs::write(&path, session::to_markdown(&self.stored_session()))?;
         Ok(path)
     }
 
+    #[allow(dead_code)]
     fn write_export_html(&self) -> std::io::Result<std::path::PathBuf> {
         let path = session::export_html_path();
         std::fs::write(&path, session::to_html(&self.stored_session()))?;

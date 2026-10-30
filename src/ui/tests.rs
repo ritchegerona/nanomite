@@ -248,7 +248,7 @@ async fn assistant_footer_shows_mode_duration_and_rate() {
 
     let text = frame_text(&mut app, 92, 24);
     // opencode's message footer: agent/mode name, then duration and tok/s.
-    assert!(text.contains("Build"), "mode label missing:\n{text}");
+    assert!(text.contains("Plan"), "mode label missing:\n{text}");
     assert!(text.contains("5.0s"), "duration missing:\n{text}");
     assert!(text.contains("10.0 tok/s"), "token rate missing:\n{text}");
 }
@@ -815,7 +815,7 @@ async fn compact_density_shows_single_row_prompts() {
     );
     // The assistant footer is dropped in compact.
     assert!(
-        !text.lines().any(|l| l.contains("Build ·")),
+        !text.lines().any(|l| l.contains("Plan ·")),
         "footer must hide in compact:\n{text}"
     );
     assert!(text.contains("done"), "response missing:\n{text}");
@@ -826,7 +826,7 @@ async fn compact_density_shows_single_row_prompts() {
     app.entries[1].touch();
     let text = frame_text(&mut app, 92, 24);
     assert!(text.contains("▌"), "cozy block missing:\n{text}");
-    assert!(text.contains("Build"), "cozy footer missing:\n{text}");
+    assert!(text.contains("Plan"), "cozy footer missing:\n{text}");
 }
 
 #[tokio::test]
@@ -2270,8 +2270,8 @@ async fn sudo_password_modal_shows_error_and_empty_hint() {
 async fn shift_tab_cycles_all_four_modes() {
     use crate::agent::policy::ToolPolicy;
     let mut app = test_app().await;
-    // Default is build.
-    assert_eq!(app.cfg.tool_policy, ToolPolicy::Build);
+    // Default is plan.
+    assert_eq!(app.cfg.tool_policy, ToolPolicy::Plan);
 
     // Real terminals send Shift+Tab as backtab (CSI Z) with NO shift
     // modifier - crossterm reports KeyCode::BackTab. That is the press that
@@ -2281,7 +2281,7 @@ async fn shift_tab_cycles_all_four_modes() {
         ratatui::crossterm::event::KeyCode::BackTab,
         ratatui::crossterm::event::KeyModifiers::NONE,
     );
-    assert_eq!(app.cfg.tool_policy, ToolPolicy::Hacker);
+    assert_eq!(app.cfg.tool_policy, ToolPolicy::Coder);
 
     // Terminals with modifier reporting (Kitty protocol) send Tab + SHIFT.
     press(
@@ -2289,22 +2289,22 @@ async fn shift_tab_cycles_all_four_modes() {
         ratatui::crossterm::event::KeyCode::Tab,
         ratatui::crossterm::event::KeyModifiers::SHIFT,
     );
-    assert_eq!(app.cfg.tool_policy, ToolPolicy::Plan);
+    assert_eq!(app.cfg.tool_policy, ToolPolicy::Build);
 
     // And the rest of the cycle via the real-terminal BackTab press:
-    // plan -> coder -> build, wrapping to the start.
+    // coder -> build -> hacker -> plan, wrapping to the start.
     press(
         &mut app,
         ratatui::crossterm::event::KeyCode::BackTab,
         ratatui::crossterm::event::KeyModifiers::NONE,
     );
-    assert_eq!(app.cfg.tool_policy, ToolPolicy::Coder);
+    assert_eq!(app.cfg.tool_policy, ToolPolicy::Hacker);
     press(
         &mut app,
         ratatui::crossterm::event::KeyCode::BackTab,
         ratatui::crossterm::event::KeyModifiers::NONE,
     );
-    assert_eq!(app.cfg.tool_policy, ToolPolicy::Build);
+    assert_eq!(app.cfg.tool_policy, ToolPolicy::Plan);
 
     // The setting persists with the config.
     let path =

@@ -266,6 +266,10 @@ fn run_control(
         app.on_image_attached(result.clone());
         return Ok(());
     }
+    if let Control::ExportDone(result) = &control {
+        app.on_export_done(result.clone());
+        return Ok(());
+    }
     if let Control::OpenLink(url) = &control {
         open_in_browser(url, app);
         return Ok(());
@@ -282,6 +286,7 @@ fn run_control(
         Control::ResumeHint(_) => return Ok(()),
         Control::ForkSaved { .. } => return Ok(()),
         Control::ImageAttached(_) => return Ok(()),
+        Control::ExportDone(_) => return Ok(()),
         Control::OpenLink(_) => return Ok(()),
         Control::EditComposer(text) => {
             let path =
@@ -312,6 +317,7 @@ fn run_control(
         Control::ResumeHint(_) => {}
         Control::ForkSaved { .. } => {}
         Control::ImageAttached(_) => {}
+        Control::ExportDone(_) => {}
         Control::OpenLink(_) => {}
         Control::EditComposer(_) => {
             let text = std::fs::read_to_string(&target).unwrap_or_default();
