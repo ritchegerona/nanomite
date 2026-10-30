@@ -1,5 +1,6 @@
 use nanomite::app::{App, Control};
 use nanomite::ui;
+use ratatui::crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -176,6 +177,13 @@ async fn main() -> io::Result<()> {
                         app.on_resize();
                         interactive = true;
                     }
+                    Event::Paste(text) => {
+                        // Dropped files arrive as bracketed paste: usually
+                        // one or more paths (optionally file:// URIs). Route
+                        // through the app so images attach and paths insert.
+                        app.on_paste(&text);
+                        interactive = true;
+                    }
                     _ => {}
                 }
                 // Drain the rest of an input burst (a drag can queue dozens
@@ -188,6 +196,7 @@ async fn main() -> io::Result<()> {
                         }
                         Ok(Event::Mouse(m)) => app.on_mouse(m),
                         Ok(Event::Resize(_, _)) => app.on_resize(),
+                        Ok(Event::Paste(text)) => app.on_paste(&text),
                         Ok(_) => {}
                         Err(_) => break, // queue drained
                     }
@@ -372,6 +381,7 @@ fn suspend(terminal: &mut Terminal<Backend>) -> io::Result<()> {
     ratatui::crossterm::execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
+        DisableBracketedPaste,
         LeaveAlternateScreen,
         ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
     )?;
@@ -388,6 +398,7 @@ fn resume(terminal: &mut Terminal<Backend>) -> io::Result<()> {
         terminal.backend_mut(),
         EnterAlternateScreen,
         EnableMouseCapture,
+        EnableBracketedPaste,
         ratatui::crossterm::cursor::SetCursorStyle::BlinkingBlock
     )?;
     terminal.hide_cursor()?;
@@ -472,6 +483,10 @@ fn setup_terminal() -> io::Result<Terminal<Backend>> {
         // screen there is no scrollback, and terminals fall back to arrow-key
         // emulation. OpenCode's TUI enables mouse reporting for the same reason.
         EnableMouseCapture,
+        // Bracketed paste: dropped files and multi-line pastes arrive as one
+        // `Event::Paste` instead of a storm of keystrokes the composer would
+        // mangle (enter-per-line would send the message mid-paste).
+        EnableBracketedPaste,
         // A blinking block caret in the composer: unambiguous over text,
         // impossible to lose. Terminals without DECSCUSR ignore this.
         ratatui::crossterm::cursor::SetCursorStyle::BlinkingBlock
@@ -489,6 +504,7 @@ fn restore_terminal(terminal: &mut Terminal<Backend>) -> io::Result<()> {
         terminal.backend_mut(),
         DisableMouseCapture,
         LeaveAlternateScreen,
+        DisableBracketedPaste,
         ratatui::crossterm::cursor::SetCursorStyle::DefaultUserShape,
         ratatui::crossterm::terminal::Clear(ratatui::crossterm::terminal::ClearType::All)
     )?;

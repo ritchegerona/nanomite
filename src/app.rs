@@ -746,6 +746,93 @@ const MAX_PENDING_IMAGES: usize = 4;
 /// UI thread: extension allow-list, size cap, then read + base64. All I/O
 /// happens on the blocking pool; the result travels back over the control
 /// channel.
+/// Splits a bracketed paste into candidate file paths. Terminals drop files
+/// as pasted paths — usually quoted (paths contain spaces), sometimes as
+/// `file://` URIs with %20 escapes. Quotes are honored while tokenizing so
+/// `'/tmp/a b/shot.png'` stays one token. A token counts as path-like only
+/// when it contains a `/` or ends in a dotted extension; if any token fails
+/// the check the whole paste is prose and returns empty (verbatim insert).
+fn paste_paths(text: &str) -> Vec<String> {
+    fn normalize(tok: &str) -> String {
+        let tok = match tok.strip_prefix("file://") {
+            Some(rest) => percent_decode(rest),
+            None => tok.to_string(),
+        };
+        tok.trim_end_matches('/').to_string()
+    }
+    fn is_path_like(tok: &str) -> bool {
+        tok.contains('/')
+            || std::path::Path::new(tok)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(|f| f.contains('.'))
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let flush = |cur: &mut String, out: &mut Vec<String>| {
+        if !cur.is_empty() {
+            let tok = normalize(cur);
+            if !tok.is_empty() {
+                out.push(tok);
+            }
+            cur.clear();
+        }
+    };
+    for c in text.chars() {
+        match quote {
+            Some(q) if c == q => flush(&mut cur, &mut out), // closing quote
+            Some(_) => cur.push(c),
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None if c.is_whitespace() => flush(&mut cur, &mut out),
+            None => cur.push(c),
+        }
+    }
+    flush(&mut cur, &mut out);
+    if !out.is_empty() && out.iter().all(|t| is_path_like(t)) {
+        out
+    } else {
+        Vec::new() // prose (or mixed) → the paste is text, not paths
+    }
+}
+
+/// Minimal percent-decoding for `file://` URIs (%20 and friends); invalid
+/// escapes pass through untouched.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 3 <= bytes.len() {
+            let hex = s
+                .get(i + 1..i + 3)
+                .and_then(|h| u8::from_str_radix(h, 16).ok());
+            if let Some(b) = hex {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// True when the path's extension matches the attachable image list
+/// (`IMAGE_MIME`), so a drop routes through the `/image` pipeline.
+fn is_image_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| {
+            IMAGE_MIME
+                .iter()
+                .any(|(ext, _)| e.eq_ignore_ascii_case(ext))
+        })
+}
+
 fn build_image_attachment(arg: &str, cwd: &std::path::Path) -> Result<PendingImage, String> {
     let path = arg.trim();
     if path.is_empty() {
@@ -2558,6 +2645,53 @@ impl App {
             // Headless/test path: no control channel means nobody would
             // deliver the result, so compute and apply it right here.
             self.on_image_attached(build_image_attachment(arg.trim(), &self.cwd));
+        }
+        self.mark_dirty();
+    }
+
+    /// A bracketed paste landed. Dragging a file (or several) into the
+    /// terminal drops the paths as pasted text — often quoted, often
+    /// `file://` URIs. Each path-like token is routed: images join the
+    /// attachment queue exactly like `/image`, other files insert their path
+    /// into the composer so the agent can read them. Anything that does not
+    /// look like paths pastes verbatim into the composer.
+    pub fn on_paste(&mut self, text: &str) {
+        let tokens = paste_paths(text);
+        if tokens.is_empty() {
+            // Plain text (multi-line pastes included): verbatim into the
+            // composer. Bracketed paste means no enter-per-line, so nothing
+            // is sent mid-paste.
+            self.composer.insert_str(text);
+            self.mark_dirty();
+            return;
+        }
+        let mut images = 0usize;
+        let mut files = 0usize;
+        for path in tokens {
+            if is_image_path(&path) {
+                self.attach_image(&path);
+                images += 1;
+            } else {
+                if !self.composer.is_empty() && !self.composer.value().ends_with(' ') {
+                    self.composer.insert(' ');
+                }
+                self.composer.insert_str(&path);
+                self.composer.insert(' ');
+                files += 1;
+            }
+        }
+        let mut msg = String::new();
+        if images > 0 {
+            msg.push_str(&format!("{images} image(s) queued"));
+        }
+        if files > 0 {
+            if !msg.is_empty() {
+                msg.push_str(" · ");
+            }
+            msg.push_str(&format!("{files} file path(s) added to prompt"));
+        }
+        if !msg.is_empty() {
+            self.toast(msg);
         }
         self.mark_dirty();
     }
@@ -6435,6 +6569,74 @@ mod tests {
             bytes: 2048,
         };
         assert_eq!(image_badge(&image), "[image: shot.png · 2 KB]");
+    }
+
+    #[tokio::test]
+    async fn paste_routes_dropped_image_into_attachment_queue() {
+        let mut app = test_app().await;
+        let dir = crate::improve::testing::temp_dir("paste-image");
+        let path = dir.path.join("dropped.png");
+        std::fs::write(&path, b"\x89PNG-bytes").expect("write fixture");
+        // Terminals drop files as a quoted pasted path.
+        let pasted = format!("'{}'", path.display());
+        app.on_paste(&pasted);
+        assert_eq!(app.pending_images.len(), 1, "dropped png queues");
+    }
+
+    #[tokio::test]
+    async fn paste_inserts_non_image_file_path_into_composer() {
+        let mut app = test_app().await;
+        app.on_paste("/tmp/reports/notes.txt");
+        assert_eq!(app.composer.value(), "/tmp/reports/notes.txt ");
+        // A second drop appends next to the first.
+        app.on_paste("~/src/main.rs");
+        assert_eq!(
+            app.composer.value(),
+            "/tmp/reports/notes.txt ~/src/main.rs "
+        );
+    }
+
+    #[tokio::test]
+    async fn paste_plain_text_goes_into_composer_verbatim() {
+        let mut app = test_app().await;
+        let text = "hello world\nsecond line";
+        app.on_paste(text);
+        assert_eq!(app.composer.value(), text, "prose pastes verbatim");
+        assert!(app.pending_images.is_empty());
+    }
+
+    #[test]
+    fn paste_paths_parses_quotes_uris_and_rejects_prose() {
+        assert_eq!(paste_paths("hello world"), Vec::<String>::new());
+        assert_eq!(
+            paste_paths("'/tmp/a b/shot.png'"),
+            vec!["/tmp/a b/shot.png".to_string()]
+        );
+        assert_eq!(
+            paste_paths("file:///tmp/a%20b/shot.png"),
+            vec!["/tmp/a b/shot.png".to_string()]
+        );
+        assert_eq!(
+            paste_paths("/tmp/a.png /tmp/b.rs"),
+            vec!["/tmp/a.png".to_string(), "/tmp/b.rs".to_string()]
+        );
+        // Extension-only relative names are path-like too.
+        assert_eq!(paste_paths("notes.md"), vec!["notes.md".to_string()]);
+    }
+
+    #[test]
+    fn percent_decode_handles_escapes_and_passes_garbage() {
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("%zz"), "%zz", "invalid hex survives");
+        assert_eq!(percent_decode("plain"), "plain");
+    }
+
+    #[test]
+    fn is_image_path_matches_the_attachable_extensions() {
+        assert!(is_image_path("/tmp/a.PNG"));
+        assert!(is_image_path("shot.jpeg"));
+        assert!(!is_image_path("/tmp/notes.txt"));
+        assert!(!is_image_path("/tmp/archive.tar.gz"));
     }
 
     #[tokio::test]
