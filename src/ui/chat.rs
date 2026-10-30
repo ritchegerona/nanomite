@@ -755,16 +755,18 @@ impl Entry {
                     for raw in preview.split('\n') {
                         diff.push_diff(raw.to_string());
                     }
-                    for line in diff.styled_lines() {
-                        let content: String =
-                            line.spans.iter().map(|s| s.content.as_ref()).collect();
-                        let style = line.spans.first().map(|s| s.style).unwrap_or_default();
-                        let shown = text::truncate(&content, inner.saturating_sub(5));
-                        if shown.is_empty() {
-                            lines.push(Line::from(Span::raw("     ")));
-                        } else {
-                            lines.push(Line::from(Span::styled(format!("     {shown}"), style)));
-                        }
+                    // Side-by-side: old left / new right with line numbers;
+                    // degrades to unified inside `styled_split_lines` when
+                    // the column is too narrow for two readable panels.
+                    let width = inner.saturating_sub(5);
+                    for line in diff.styled_split_lines(width) {
+                        let mut spans: Vec<Span> = vec![Span::raw("     ".to_string())];
+                        spans.extend(
+                            line.spans
+                                .into_iter()
+                                .map(|s| Span::styled(s.content.to_string(), s.style)),
+                        );
+                        lines.push(Line::from(spans));
                     }
                 } else {
                     for raw in preview.split('\n') {

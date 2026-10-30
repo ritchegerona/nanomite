@@ -1754,7 +1754,7 @@ fn improve_review(
     let theme = &app.theme;
     let inner_w = area.width.saturating_sub(4) as usize;
 
-    let diff_view = DiffView::with_theme(*theme);
+    let mut diff_view = DiffView::with_theme(*theme);
     let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
         Span::styled(
             format!(" {} ", glyph::PROMPT),
@@ -1775,14 +1775,14 @@ fn improve_review(
         theme.dim(),
     )));
     lines.push(Line::default());
-    // The diff is styled by `DiffView` itself, so `+`/`-`/`@@` read exactly as
-    // they do in a transcript; the text is owned because the view is dropped.
-    lines.extend(
-        review
-            .lines
-            .iter()
-            .map(|line| Line::from(Span::styled(line.clone(), diff_view.style_for(line)))),
-    );
+    // Side-by-side diff (old left / new right, line numbers on both panels);
+    // `styled_split_lines` degrades to the unified rendering when `inner_w`
+    // is too narrow for two readable columns. Text is owned because the view
+    // is dropped.
+    for line in &review.lines {
+        diff_view.push_diff(line.clone());
+    }
+    lines.extend(diff_view.styled_split_lines(inner_w));
 
     // `offset` hides rows from the top, so Up moves down the diff.
     let offset = state.offset.min(lines.len().saturating_sub(1));
