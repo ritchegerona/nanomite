@@ -32,6 +32,28 @@ Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
 
 ---
 
+## Install
+
+**Linux / macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.ps1 | iex
+```
+
+The installer handles everything: Rust toolchain, system build dependencies
+(gcc, pkg-config, OpenSSL, Chromium), builds the release binary from `master`,
+and places it on your `PATH`. Already have Rust? `cargo install --git
+https://github.com/ritchegerona/nanomite` works too — see
+[Installation](#installation) for the manual route and platform specifics.
+
+---
+
 ## Why nanomite
 
 | | nanomite | cloud-first agents |
