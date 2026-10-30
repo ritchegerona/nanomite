@@ -119,23 +119,31 @@ pages, and `nanomite update` to move to the next version in one command.
 
 ## Installation
 
-Prerequisites on every platform: [Rust](https://rustup.rs) 1.75+ (via
-`rustup`), which bundles its own toolchain bootstrap.
+**Quickest (one-liner, all deps handled):**
 
-### Linux
+| Platform | Command |
+|---|---|
+| **Linux / macOS** | `curl -fsSL https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.sh \| bash` |
+| **Windows (PowerShell)** | `irm https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.ps1 \| iex` |
 
+These scripts install Rust (via rustup), system build dependencies (gcc, pkg-config, openssl, Chromium/Edge), build the release binary from `master`, and place it in `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.cargo\bin` (Windows).
+
+---
+
+### Manual build from source
+
+Prerequisites: [Rust](https://rustup.rs) 1.75+ (via `rustup`), plus platform build tools.
+
+**Linux:**
 ```bash
 git clone https://github.com/ritchegerona/nanomite.git
 cd nanomite
 cargo build --release
 ln -sf "$(pwd)/target/release/nanomite" ~/.local/bin/nanomite
 ```
+`~/.local/bin` is usually on your `PATH` already — if not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
 
-`~/.local/bin` is usually on your `PATH` already — if not, add
-`export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
-
-### macOS
-
+**macOS:**
 ```bash
 git clone https://github.com/ritchegerona/nanomite.git
 cd nanomite
@@ -143,25 +151,19 @@ cargo build --release
 mkdir -p /usr/local/bin 2>/dev/null
 ln -sf "$(pwd)/target/release/nanomite" /usr/local/bin/nanomite
 ```
-
 On Apple Silicon the user-writable prefix is `/opt/homebrew/bin` instead:
-
 ```bash
 ln -sf "$(pwd)/target/release/nanomite" /opt/homebrew/bin/nanomite
 ```
-
 The first build may prompt for the Xcode Command Line Tools — accept it.
 
-### Windows (PowerShell)
-
+**Windows (PowerShell):**
 ```powershell
 git clone https://github.com/ritchegerona/nanomite.git
 cd nanomite
 cargo build --release
 ```
-
 Then add the binary to your `PATH` for the current user:
-
 ```powershell
 [Environment]::SetEnvironmentVariable(
   "Path",
@@ -178,15 +180,31 @@ Notes for Windows:
 - Windows support is functional but newer than Linux — report anything that
   misbehaves
 
-### The shortcut for every platform
+### One-line install (recommended)
 
-With Rust installed, one command builds and installs the binary into
-`~/.cargo/bin` (or `%USERPROFILE%\.cargo\bin` on Windows) — no symlink
-step:
+**Linux / macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.ps1 | iex
+```
+
+These scripts install everything: Rust toolchain, system build dependencies (gcc/pkg-config/openssl/Chromium), build the release binary from source, and place it in `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.cargo\bin` (Windows).
+
+---
+
+### Alternative: cargo install
+
+If you already have Rust and build tools:
 
 ```bash
 cargo install --git https://github.com/ritchegerona/nanomite
 ```
+
+> **Note:** `cargo install` does not support `nanomite update` (git-checkout installs only).
 
 ### Keeping up to date
 
