@@ -16,7 +16,7 @@ siblings are not part of the project:
   `memory.json`, `test.*`, `smoke.txt` — scratch, ignore.
 - `nanomite/target/` is ~5.5 GB; build scratch copies before full rebuilds.
 
-## Build state — READ FIRST (verified 2026-11-02, v0.7.0 wave + HACKER MODE Phase 3: opencode-style UI, reasoning streaming, browser tools, Kali bridge, findings store, time machine, /team, density, ETA, update command)
+## Build state — READ FIRST (verified 2026-11-02, v0.8.0 + HACKER MODE Phase 3: opencode-style UI, reasoning streaming, browser tools, Kali bridge, findings store, time machine, /team, density, ETA, update command)
 
 `cargo check` (lib + bins) **passes clean**. `cargo test --lib` is
 **655 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets

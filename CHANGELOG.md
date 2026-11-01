@@ -6,6 +6,8 @@ never listed as released.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-02
+
 ### Added
 
 - **HACKER MODE — Phase 2 authorized operations**: `/hacker run <module> <op>
