@@ -48,6 +48,7 @@ pub enum Command {
     Focus,
     Team,
     Density,
+    Hacker,
 }
 
 pub struct Entry {
@@ -227,6 +228,13 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "stage the board's synthesis as a proposal (alt+shift+i)",
         kind: Command::ImproveFromBoard,
+    },
+    // -- security -------------------------------------------------------------
+    Entry {
+        command: "/hacker",
+        aliases: &["/sec"],
+        hint: "HACKER MODE workspace - /hacker [status|modules|scope|audit|run|exit] (alt+shift+h)",
+        kind: Command::Hacker,
     },
     // -- appearance ------------------------------------------------------------
     Entry {

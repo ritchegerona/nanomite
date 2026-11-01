@@ -113,6 +113,20 @@ impl Composer {
         }
     }
 
+    /// Removes the last `chars` characters, but only when the caret sits at the
+    /// very end (a fast typed burst always leaves it there). Returns false and
+    /// leaves the buffer untouched otherwise, so a mid-line caret never loses
+    /// the wrong text.
+    pub fn strip_suffix(&mut self, chars: usize) -> bool {
+        if self.cursor != self.chars_len() || chars == 0 || chars > self.chars_len() {
+            return false;
+        }
+        for _ in 0..chars {
+            self.backspace();
+        }
+        true
+    }
+
     /// Like `ctrl+w`: trailing whitespace first, then the word behind the cursor.
     pub fn delete_word_back(&mut self) {
         let whitespace_first = self.before_cursor().is_some_and(|c| c.is_whitespace());

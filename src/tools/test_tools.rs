@@ -602,13 +602,14 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn init_cargo_project() -> (PathBuf, TestTools) {
-        let dir = std::env::temp_dir().join(format!("nanomite-test-tools-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let test_tools = TestTools::new(&dir);
+    fn init_cargo_project() -> (crate::improve::testing::TempDir, TestTools) {
+        // Unique per call: tests run in parallel inside one process, and a
+        // shared fixed path let one test's cleanup delete another's project.
+        let dir = crate::improve::testing::temp_dir("test-tools-cargo");
+        let test_tools = TestTools::new(&dir.path);
         // Initialize a minimal cargo project
         fs::write(
-            dir.join("Cargo.toml"),
+            dir.path.join("Cargo.toml"),
             r#"
 [package]
 name = "test_proj"
@@ -617,9 +618,9 @@ edition = "2021"
 "#,
         )
         .unwrap();
-        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::create_dir_all(dir.path.join("src")).unwrap();
         fs::write(
-            dir.join("src/lib.rs"),
+            dir.path.join("src/lib.rs"),
             r#"
 #[cfg(test)]
 mod tests {
@@ -660,14 +661,13 @@ mod tests {
                 eprintln!("cargo test skipped: {e}");
             }
         }
-        let _ = fs::remove_dir_all(&dir);
+        let _ = dir;
     }
 
     #[test]
     fn unknown_runner_is_refused() {
-        let dir = std::env::temp_dir().join(format!("nanomite-test-tools-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let tools = TestTools::new(&dir);
+        let dir = crate::improve::testing::temp_dir("test-tools-unknown");
+        let tools = TestTools::new(&dir.path);
         let err = tools
             .run_tests(RunTestsArgs {
                 runner: "unknown".into(),
@@ -678,14 +678,12 @@ mod tests {
             })
             .unwrap_err();
         assert!(err.contains("unknown test runner"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn custom_runner_requires_command() {
-        let dir = std::env::temp_dir().join(format!("nanomite-test-tools-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let tools = TestTools::new(&dir);
+        let dir = crate::improve::testing::temp_dir("test-tools-custom");
+        let tools = TestTools::new(&dir.path);
         let err = tools
             .run_tests(RunTestsArgs {
                 runner: "custom".into(),
@@ -696,14 +694,12 @@ mod tests {
             })
             .unwrap_err();
         assert!(err.contains("custom runner requires"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn path_escape_is_refused() {
-        let dir = std::env::temp_dir().join(format!("nanomite-test-tools-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let tools = TestTools::new(&dir);
+        let dir = crate::improve::testing::temp_dir("test-tools-escape");
+        let tools = TestTools::new(&dir.path);
         let err = tools
             .run_tests(RunTestsArgs {
                 runner: "cargo".into(),
@@ -714,7 +710,6 @@ mod tests {
             })
             .unwrap_err();
         assert!(err.contains("escapes the workspace"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

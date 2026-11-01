@@ -41,7 +41,8 @@ pub fn branch_slug(branch: &str) -> String {
 
 /// The managed worktrees root for a repo: `.nanomite/worktrees`.
 pub fn worktrees_root(repo: &Path) -> PathBuf {
-    repo.join(".nanomite").join("worktrees")
+    let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    canonical.join(".nanomite").join("worktrees")
 }
 
 /// Runs git in `repo`; spawn failures surface as code -1 (callers check the
@@ -71,7 +72,11 @@ pub fn list(repo: &Path) -> Result<Vec<WorktreeInfo>, String> {
         return Err("not a git repository".into());
     }
 
-    let (out, code) = run_git(repo, &["worktree", "list", "--porcelain"]);
+    let repo_path = match repo.canonicalize() {
+        Ok(p) => p,
+        Err(_) => repo.to_path_buf(),
+    };
+    let (out, code) = run_git(&repo_path, &["worktree", "list", "--porcelain"]);
     if code != 0 {
         return Err("git worktree list failed".into());
     }

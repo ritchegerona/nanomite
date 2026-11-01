@@ -32,6 +32,10 @@ chrono = { version = "0.4", features = ["serde"] }
 # Authoritative structured-memory store. `bundled` keeps the SQLite build
 # self-contained (no system libsqlite3 needed) and enables FTS5 full-text search.
 rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
+# Evidence integrity hashing for the HACKER MODE findings store. Already in the
+# dependency graph (via the optional pdf-extract feature); a direct dep makes
+# the hash explicit and survives `--no-default-features` builds.
+sha2 = "0.10"
 
 # --- file intelligence (extract layer) -------------------------------------
 # Every parser dependency is optional and pulled in by the matching

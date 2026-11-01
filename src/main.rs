@@ -2,14 +2,91 @@ use nanomite::app::{App, Control};
 use nanomite::ui;
 use ratatui::crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Frame interval: only used to animate the spinner; the loop is otherwise idle.
 const ANIMATION_TICK: Duration = Duration::from_millis(90);
+
+/// A printable-char pause longer than this ends a typed burst. Human typing is
+/// far slower than this; a terminal that *types* a dropped path is far faster.
+const BURST_GAP: Duration = Duration::from_millis(25);
+
+/// Groups the printable characters of a fast keystroke burst so a drop that
+/// arrives as typed text (rather than a bracketed paste) can be recognised.
+/// Ordinary typing produces one-character bursts and is passed straight
+/// through.
+struct TypedBurst {
+    buf: String,
+    last: Option<Instant>,
+}
+
+impl TypedBurst {
+    fn new() -> Self {
+        Self {
+            buf: String::new(),
+            last: None,
+        }
+    }
+
+    /// Registers a printable character. Returns the burst that just closed
+    /// (the characters before a gap) so the caller can test it for a path.
+    fn push(&mut self, ch: char, now: Instant) -> Option<String> {
+        let closed = match self.last {
+            Some(t) if now.duration_since(t) > BURST_GAP && !self.buf.is_empty() => {
+                Some(std::mem::take(&mut self.buf))
+            }
+            _ => None,
+        };
+        self.buf.push(ch);
+        self.last = Some(now);
+        closed
+    }
+
+    /// Ends the open burst (a non-char key arrived, or the animation tick
+    /// fired). Returns its contents when non-empty.
+    fn flush(&mut self) -> Option<String> {
+        self.last = None;
+        if self.buf.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.buf))
+        }
+    }
+}
+
+/// Whether a key event contributes a plain printable character to a burst.
+fn is_printable(key: &KeyEvent) -> Option<char> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) || key.modifiers.contains(KeyModifiers::ALT) {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char(c) if !c.is_control() => Some(c),
+        _ => None,
+    }
+}
+
+/// Feeds one key event to the app, first closing any typed burst so a dropped
+/// path is re-routed instead of living as raw text in the composer.
+fn feed_key(app: &mut App, burst: &mut TypedBurst, key: KeyEvent) {
+    match is_printable(&key) {
+        Some(ch) => {
+            if let Some(closed) = burst.push(ch, Instant::now()) {
+                app.reroute_drop_burst(&closed);
+            }
+        }
+        None => {
+            if let Some(closed) = burst.flush() {
+                app.reroute_drop_burst(&closed);
+            }
+        }
+    }
+    app.on_key(key);
+}
 
 type Backend = CrosstermBackend<Stdout>;
 
@@ -138,6 +215,7 @@ async fn main() -> io::Result<()> {
     const STREAM_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
     let mut last_draw = std::time::Instant::now() - STREAM_FRAME;
     let mut user_input = false;
+    let mut burst = TypedBurst::new();
 
     let result = loop {
         // Drain queued engine events (streaming deltas, tool calls, board
@@ -166,7 +244,7 @@ async fn main() -> io::Result<()> {
                 let mut interactive = false;
                 match event {
                     Event::Key(key) if key.kind != KeyEventKind::Release => {
-                        app.on_key(key);
+                        feed_key(&mut app, &mut burst, key);
                         interactive = true;
                     }
                     Event::Mouse(m) => {
@@ -181,6 +259,10 @@ async fn main() -> io::Result<()> {
                         // Dropped files arrive as bracketed paste: usually
                         // one or more paths (optionally file:// URIs). Route
                         // through the app so images attach and paths insert.
+                        // Any open typed burst is unrelated; close it first.
+                        if let Some(closed) = burst.flush() {
+                            app.reroute_drop_burst(&closed);
+                        }
                         app.on_paste(&text);
                         interactive = true;
                     }
@@ -192,7 +274,7 @@ async fn main() -> io::Result<()> {
                 loop {
                     match event_rx.try_recv() {
                         Ok(Event::Key(key)) if key.kind != KeyEventKind::Release => {
-                            app.on_key(key)
+                            feed_key(&mut app, &mut burst, key)
                         }
                         Ok(Event::Mouse(m)) => app.on_mouse(m),
                         Ok(Event::Resize(_, _)) => app.on_resize(),
@@ -214,6 +296,11 @@ async fn main() -> io::Result<()> {
                 continue;
             }
             _ = ticker.tick() => {
+                // A typed burst that ended without another event still needs
+                // closing so a dropped path can be re-routed.
+                if let Some(closed) = burst.flush() {
+                    app.reroute_drop_burst(&closed);
+                }
                 app.on_tick();
             }
             else => break Ok(()),

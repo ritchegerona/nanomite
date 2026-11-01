@@ -289,6 +289,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             );
             panels::sudo_password(frame, rect, app);
         }
+        Some(Overlay::Hacker(_)) => {
+            let rect =
+                panels::overlay_rect(area, OverlayKind::Hacker, panels::hacker_row_count(app));
+            panels::hacker(frame, rect, app);
+        }
         None => {}
     }
 

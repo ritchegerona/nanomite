@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::{
-    App, Entry, EntryRole, Overlay, OverlayKind, Phase, PickerMode, SudoPasswordState,
+    App, Entry, EntryRole, HackerState, Overlay, OverlayKind, Phase, PickerMode, SudoPasswordState,
     SuggestionStrip, ToolDisplay, ToolRow,
 };
 use crate::commands;
@@ -3301,4 +3301,25 @@ async fn no_suggestions_no_strip_rows() {
     let with = frame_text(&mut app, 80, 24);
     assert!(with.contains("next steps"));
     assert!(with.contains("one"));
+}
+
+#[tokio::test]
+async fn hacker_workspace_overlay_lists_modules() {
+    let mut app = test_app().await;
+    app.overlay = Some(Overlay::Hacker(HackerState::default()));
+    let text = frame_text(&mut app, 100, 30);
+    assert_frame_well_formed(&text, 100, 30);
+    assert!(text.contains("HACKER MODE"), "title missing:\n{text}");
+    assert!(text.contains("modules"), "module header missing:\n{text}");
+    assert!(text.contains("recon"), "module row missing:\n{text}");
+    assert!(text.contains("reporting"), "module list truncated:\n{text}");
+}
+
+#[tokio::test]
+async fn hacker_workspace_renders_cleanly_when_narrow() {
+    let mut app = test_app().await;
+    app.overlay = Some(Overlay::Hacker(HackerState::default()));
+    let text = frame_text(&mut app, 30, 12);
+    assert_frame_well_formed(&text, 30, 12);
+    assert!(text.contains("HACKER MODE"), "title missing:\n{text}");
 }

@@ -149,14 +149,19 @@ pub fn run_hooks(
             continue;
         };
         let started = Instant::now();
-        use std::os::unix::process::CommandExt;
         let mut cmd = Command::new(program);
         cmd.args(parts)
-            .process_group(0) // grandchildren die with the group on timeout
             .current_dir(workspace)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Unix: own process group so grandchildren die with the group on
+        // timeout. Windows has no POSIX process group here.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         // Hooks must not inherit the terminal: no /dev/tty races, no echo.
         cmd.env("NANOMITE_HOOK_EVENT", event.kind());
 

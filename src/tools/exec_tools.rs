@@ -369,11 +369,20 @@ fn strip_leading_sudo(command: &str) -> &str {
 /// Kills a child's whole process group: a killed parent otherwise leaves
 /// grandchildren (e.g. `sleep 30` from a hook script) running and holding the
 /// pipe write-ends, which keeps the output readers blocked until they exit.
+#[cfg(unix)]
 pub(crate) fn kill_process_group(child: &std::process::Child) {
     unsafe {
         // SIGKILL to the negative pid = every process in the group.
         libc::kill(-(child.id() as i32), libc::SIGKILL);
     }
+}
+
+/// Windows has no process groups in the POSIX sense: kill the direct child.
+/// Grandchildren are not guaranteed to die, so callers should keep timeouts
+/// short and outputs bounded.
+#[cfg(not(unix))]
+pub(crate) fn kill_process_group(child: &std::process::Child) {
+    let _ = child.kill();
 }
 
 /// Spawns `cmd` in its own process group, drains both pipes on helper threads,
@@ -385,8 +394,13 @@ pub(crate) fn run_with_timeout(
     timeout: Duration,
     label: &str,
 ) -> Result<(String, String, i32, bool), String> {
-    use std::os::unix::process::CommandExt;
-    cmd.process_group(0);
+    // Unix: own process group so a timeout kill reaps grandchildren too.
+    // Windows: no equivalent here; the direct-process kill still applies.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("{what} failed to spawn: {e}"))?;

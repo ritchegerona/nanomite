@@ -564,8 +564,16 @@ impl AgentRuntime {
                 // Interactive gate: risk-External calls ask the user first
                 // when a confirmer is attached. A denial is returned to the
                 // model as structured data it can route around, matching
-                // the policy and hook refusal paths.
-                if Risk::of(&call.name) == Risk::External {
+                // the policy and hook refusal paths. External tools carry
+                // their own declared risk (safe default: External) rather
+                // than being assumed harmless by name.
+                let call_risk = self
+                    .tools
+                    .external
+                    .get(&call.name)
+                    .map(|t| t.risk())
+                    .unwrap_or_else(|| Risk::of(&call.name));
+                if call_risk == Risk::External {
                     if let Some(confirmer) = &self.confirmer {
                         let allowed = tokio::select! {
                             ok = confirmer.confirm(&call.name, preview.clone()) => ok,
@@ -765,6 +773,17 @@ pub(crate) fn run_tool(
     }
     // Central tool policy gate: authorize before dispatch.
     tool_policy.authorize(&requested)?;
+    // External tools are user-installed commands. Their name is unknown to the
+    // built-in risk table, so a name-only policy check would treat them as
+    // Safe and run them in Plan mode. Enforce their declared risk instead: an
+    // External-class tool needs Build or Hacker mode, exactly like run_command.
+    if let Some(tool) = tools.external.get(&requested) {
+        if tool.risk() == Risk::External && !tool_policy.allows_external() {
+            return Err(format!(
+                "{{\"error\":\"external tool `{requested}` runs a local command and requires build or hacker mode\",\"code\":\"external_tool_mode\"}}"
+            ));
+        }
+    }
     // Pre-tool-call hooks: a deny hook's non-zero exit refuses the call.
     if !hooks.is_empty() {
         let event = HookEvent::PreToolCall {
@@ -2111,6 +2130,61 @@ mod tests {
         )
         .expect("plan tools run in plan mode");
         assert!(payload.contains("\"plans\""), "{payload}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_tools_default_to_external_risk_and_need_build_mode() {
+        use std::path::Path;
+        let dir = std::env::temp_dir().join(format!("nanomite-ext-risk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // No `risk` key: must be treated as External, not Safe.
+        std::fs::write(
+            dir.join("probe.toml"),
+            "name = \"ext_probe\"\ndescription = \"probe\"\ncommand = \"/bin/echo\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("harmless.toml"),
+            "name = \"ext_safe\"\ndescription = \"safe probe\"\ncommand = \"/bin/echo\"\nrisk = \"safe\"\n",
+        )
+        .unwrap();
+
+        let mut tools = ToolSet::new(
+            std::env::temp_dir().join("nanomite-runtime-test-workspace"),
+            64 * 1024,
+        );
+        tools.external = Arc::new(crate::tools::external_tools::ExternalTools::load(&dir));
+        assert!(tools.external.get("ext_probe").is_some());
+
+        let probe = ToolCall {
+            id: "e1".into(),
+            name: "ext_probe".into(),
+            arguments: "{}".into(),
+            index: 0,
+        };
+        // Plan mode refuses an External-risk external tool.
+        let err = run_tool(&tools, &[], ToolPolicy::Plan, &[], Path::new("."), &probe).unwrap_err();
+        assert!(err.contains("external_tool_mode"), "{err}");
+        // Build mode runs it.
+        assert!(
+            run_tool(&tools, &[], ToolPolicy::Build, &[], Path::new("."), &probe).is_ok(),
+            "build mode must run an external tool"
+        );
+
+        // A tool that explicitly declares `risk = "safe"` is allowed in Plan.
+        let safe = ToolCall {
+            id: "e2".into(),
+            name: "ext_safe".into(),
+            arguments: "{}".into(),
+            index: 0,
+        };
+        assert!(
+            run_tool(&tools, &[], ToolPolicy::Plan, &[], Path::new("."), &safe).is_ok(),
+            "a safe-class external tool may run in plan mode"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

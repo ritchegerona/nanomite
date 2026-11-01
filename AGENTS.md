@@ -16,14 +16,14 @@ siblings are not part of the project:
   `memory.json`, `test.*`, `smoke.txt` — scratch, ignore.
 - `nanomite/target/` is ~5.5 GB; build scratch copies before full rebuilds.
 
-## Build state — READ FIRST (verified 2026-10-28, v0.7.0 wave: opencode-style UI, reasoning streaming, browser tools, time machine, /team, density, ETA, update command)
+## Build state — READ FIRST (verified 2026-11-02, v0.7.0 wave + HACKER MODE Phase 3: opencode-style UI, reasoning streaming, browser tools, Kali bridge, findings store, time machine, /team, density, ETA, update command)
 
 `cargo check` (lib + bins) **passes clean**. `cargo test --lib` is
-**508 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
+**655 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
 -- -D warnings` is clean. `cargo fmt --check` is clean.
 
 `tests/production_attach.rs` is a separate **integration** target (1 test, green)
-that exercises the real startup attach path. It is *not* part of the 508; quote
+that exercises the real startup attach path. It is *not* part of the 655; quote
 the two numbers separately.
 
 `benches/perf.rs` is a stable, zero-dep harness (median of 7 batches) and
@@ -34,15 +34,15 @@ compiles on the stable toolchain: `cargo bench` works, and `cargo test`
 
 ```bash
 cargo check            # clean
-cargo test --lib       # 508 passed, 0 failed, ~5 s, fully offline (verified)
-cargo test --test production_attach   # 1 passed (integration; not in the 508)
+cargo test --lib       # 655 passed, 0 failed, ~5 s, fully offline (verified)
+cargo test --test production_attach   # 1 passed (integration; not in the 655)
 cargo bench            # benches/perf.rs harness; bench profile inherits release
 cargo clippy --all-targets -- -D warnings   # clean (no clippy.toml / CI in the repo)
 cargo fmt
 ```
 
 Do not "fix" the suite by deleting tests or by claiming a count from
-README/docs without running it. Test counts in README (508) are correct for
+README/docs without running it. Test counts in README may be stale; 655 is correct for
 `--lib`; the integration target is counted separately.
 
 Release profile sets `panic = "abort"`, so the panic hook in `src/main.rs:141`
@@ -77,6 +77,29 @@ broken.
   CLI, discovered from `NANOMITE_BROWSER` or PATH),
   `memory_tools`, `improve_tools` (`propose_self_edit`, `list_self_edits` —
   stage only, never apply). Dispatch is a `match` in `runtime.rs::run_tool`.
+- `src/hacker/` — **HACKER MODE** (Phase 2: authorized module execution): a
+  cybersecurity operations environment *separate* from `ToolPolicy::Hacker`.
+  `mod.rs` (`HackerSession`: enabled/active, assessment, gated auto-approve
+  bypass flag), `context.rs` (`AssessmentContext`), `scope.rs` (IPv4/IPv6 CIDR
+  + domain matching, resolved-address and metadata guards),
+  `authorization.rs` (`authorize` gate), `risk.rs` (levels + category floors),
+  `audit.rs` (append-only JSONL, secret-scrubbed), `registry.rs` (`HackerModule`
+  trait + 12 built-in descriptors), `coordinator.rs` (the single operation path:
+  authorize → resolve/re-check → execute → persist → audit), `modules/`
+  (`recon`, `network`, `web`, `vuln`, `exploitation`, `kali`; pure logic +
+  injected resolver/connector/fetcher/probe/process traits), `findings.rs`
+  (typed `Finding`/`Confidence`/`FindingStatus`; severity reuses `RiskLevel`),
+  `store.rs` (SQLite findings + evidence + assessments, `FindingSink` trait,
+  `NullSink`; SHA-256 evidence digests; `spawn_blocking`-driven).
+  `exploitation` is **plan-only** — no payloads or exploit code. `kali` is a
+  curated bridge to installed Kali assessment tools (`kali/available`,
+  `kali/run`) using fixed argv templates via the shared bounded executor;
+  credential/wireless/exploitation-framework tools are excluded. UI: `/hacker`
+  workspace overlay; `/hacker run <module> <op> [target] [arg]`,
+  `/hacker kali <tool> <target>`, `/hacker findings`, `/hacker report`. Config:
+  `[hacker]` section (`hacker_enabled` default false, `store` default true).
+  Docs: `docs/HACKER_MODE.md`, `docs/HACKER_SECURITY.md`. Do not confuse with
+  `ToolPolicy::Hacker`.
 - `src/board/` — the multi-agent board: `personas.rs` (Architect, Engineer,
   Scientist, Critic + Chair), `engine.rs` (`BoardEngine::convene` = 2 parallel
   discussion rounds then chair synthesis, cancel-aware), `store.rs` (SQLite
@@ -108,7 +131,7 @@ broken.
   `read_document` is the agent-facing door to it.
 - `tests/production_attach.rs` — integration target proving the real production
   attach path (memory + config) works from the outside. 1 test, separate from
-  the 508.
+  the 655.
 
 ## Invariants (do not break)
 

@@ -75,8 +75,16 @@ impl BrowserTools {
 
     /// Renders `url` headless and returns the page's readable text.
     pub fn browse(&self, args: BrowseArgs) -> Result<BrowseResult, String> {
+        // Validate URL scheme first, before requiring browser.
+        let url = Self::validate_url(&args.url)?;
         let browser = Self::require_browser()?;
-        self.browse_with(browser, args)
+        self.browse_with(
+            browser,
+            BrowseArgs {
+                url,
+                wait_ms: args.wait_ms,
+            },
+        )
     }
 
     /// Core of [`Self::browse`] with an explicit browser binary (tests).

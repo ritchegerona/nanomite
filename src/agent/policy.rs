@@ -29,6 +29,25 @@ pub enum Risk {
 }
 
 impl Risk {
+    pub fn label(self) -> &'static str {
+        match self {
+            Risk::Safe => "safe",
+            Risk::Write => "write",
+            Risk::External => "external",
+        }
+    }
+
+    /// Parses a manifest/config value. Unknown values return `None` so a typo
+    /// never silently downgrades an external tool to a harmless class.
+    pub fn parse(raw: &str) -> Option<Risk> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "safe" | "read" | "informational" | "low" => Some(Risk::Safe),
+            "write" | "mutating" | "medium" => Some(Risk::Write),
+            "external" | "high" | "critical" | "intrusive" => Some(Risk::External),
+            _ => None,
+        }
+    }
+
     /// Risk class of a tool name. Unknown names are `Safe`; the dispatcher
     /// still rejects names it does not know.
     pub fn of(name: &str) -> Risk {
@@ -106,6 +125,12 @@ impl ToolPolicy {
             "readonly" | "read-only" | "read_only" => Some(Self::Plan),
             _ => None,
         }
+    }
+
+    /// Whether this mode permits external-risk calls (shell, SSH, remote
+    /// processes, and external tools classified `External`).
+    pub fn allows_external(self) -> bool {
+        matches!(self, Self::Build | Self::Hacker)
     }
 
     /// Cycles Plan -> Coder -> Build -> Hacker -> Plan: every press of

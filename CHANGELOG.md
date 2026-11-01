@@ -8,6 +8,50 @@ never listed as released.
 
 ### Added
 
+- **HACKER MODE — Phase 2 authorized operations**: `/hacker run <module> <op>
+  [target] [arg]` (plus `recon`, `ports`, `web`, `vuln`, `plan` aliases and
+  `/hacker help`). These execute through a single coordinator that
+  authorizes before I/O, resolves and re-checks every address for anything that
+  connects (DNS-rebinding/SSRF guard), bounds all work, and audits allow/deny/
+  error with a duration: `recon/dns` (passive), `network/ports`
+  (active, ≤8 addresses × 32 ports), `web/headers` (one no-redirect fetch,
+  header/cookie analysis), `vuln/correlate` (version→CVE, never confirmed),
+  and `exploitation/plan` (guidance only — no payloads or exploit code).
+  Results render into the transcript. implemented+tested.
+- **HACKER MODE — Kali bridge**: `/hacker kali <tool> <target>` and `/hacker
+  kali list` run installed Kali assessment tools through a curated catalogue
+  (nmap, masscan, naabu, rustscan, nikto, whatweb, httpx, wpscan, nuclei, sslyze,
+  sslscan, testssl.sh, wafw00f, subfinder, assetfinder, amass, dnsrecon, whois,
+  dig, host, nbtscan, enum4linux). Fixed argv templates only (no shell, no
+  arbitrary flags), a `safe_target` guard against flag/argument injection, the
+  shared bounded executor (180 s, capped output), and audit with the tool's
+  declared risk. Credential-attack, wireless-attack and exploitation-framework
+  tools are deliberately excluded and rejected. implemented+tested.
+- **HACKER MODE — Phase 3 findings & evidence store**: successful operations
+  persist structured findings (severity, confidence, status, target) to a
+  SQLite store at `<hacker dir>/findings.db`, each with a secret-scrubbed,
+  bounded evidence row carrying a SHA-256. `web/headers` and `vuln/correlate`
+  emit findings; confidence is `Suspected` by construction (a version match is
+  never `Confirmed`). New `/hacker findings [list|show <id>]` and
+  `/hacker report` (markdown export to `<hacker dir>/reports/`), driven from
+  `spawn_blocking`. Config `[hacker] store` / `NANOMITE_HACKER_STORE` (default
+  on). implemented+tested.
+- **HACKER MODE — vulnerability database**: `vuln/correlate` reads an optional
+  JSON database from `NANOMITE_HACKER_VULNDB` or `<hacker dir>/vulndb.json`;
+  an absent database reports "no vulnerability database configured" instead of
+  implying no vulnerabilities. implemented+tested.
+- **HACKER MODE — Phase 1 foundation** (`/hacker`, `/sec`, alt+shift+h): an
+  opt-in cybersecurity operations environment layered on the existing runtime.
+  Ships a typed assessment context, IPv4/IPv6 CIDR + domain scope validation
+  (with resolved-address and metadata-endpoint guards), an independent
+  `HackerAuthorization` gate, a severity/operation-category risk model, an
+  append-only JSONL audit log with secret scrubbing, a 12-module descriptor
+  registry, a read-only workspace overlay, and `[hacker]` config with
+  `NANOMITE_HACKER*` overrides. Disabled by default. implemented+tested.
+- **Gated HACKER MODE auto-approve** (owner decision): while an authorized,
+  unexpired, scope-validated assessment is active, the `Risk::External`
+  confirmation prompt is skipped and permissions widen to `ToolPolicy::Hacker`;
+  both fall back on expiry or `/hacker exit`. Still audited.
 - **Vision input** `/image <path>` (`/img`, alt+v): attach up to 4 images
   (png/jpg/jpeg/gif/webp, 10 MB cap) to the next message; sent as OpenAI
   multimodal `image_url` parts with `[image: name · size]` entry badges;

@@ -10,6 +10,7 @@ pub mod board;
 pub mod commands;
 pub mod config;
 pub mod extract;
+pub mod hacker;
 pub mod hooks;
 pub mod improve;
 // The memory engine exposes a deliberate API superset of what the TUI consumes

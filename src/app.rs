@@ -22,7 +22,7 @@ use crate::ui::theme::ThemeId;
 use crate::ui::View;
 use ratatui::text::Line;
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -493,6 +493,7 @@ pub enum OverlayKind {
     Memory,
     Improve,
     SudoPassword,
+    Hacker,
 }
 
 impl Overlay {
@@ -508,8 +509,15 @@ impl Overlay {
             Overlay::Memory(_) => OverlayKind::Memory,
             Overlay::Improve(_) => OverlayKind::Improve,
             Overlay::SudoPassword(_) => OverlayKind::SudoPassword,
+            Overlay::Hacker(_) => OverlayKind::Hacker,
         }
     }
+}
+
+/// Cursor for the read-only HACKER MODE workspace overlay.
+#[derive(Debug, Clone, Default)]
+pub struct HackerState {
+    pub cursor: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -526,6 +534,8 @@ pub enum Overlay {
     Improve(ImproveState),
     /// Modal for entering sudo password when a command requires elevation.
     SudoPassword(SudoPasswordState),
+    /// `/hacker`: the read-only HACKER MODE workspace (asssessment, modules).
+    Hacker(HackerState),
 }
 
 /// One staged proposal as the `/improve` list shows it.
@@ -747,54 +757,152 @@ const MAX_PENDING_IMAGES: usize = 4;
 /// happens on the blocking pool; the result travels back over the control
 /// channel.
 /// Splits a bracketed paste into candidate file paths. Terminals drop files
-/// as pasted paths — usually quoted (paths contain spaces), sometimes as
-/// `file://` URIs with %20 escapes. Quotes are honored while tokenizing so
-/// `'/tmp/a b/shot.png'` stays one token. A token counts as path-like only
-/// when it contains a `/` or ends in a dotted extension; if any token fails
-/// the check the whole paste is prose and returns empty (verbatim insert).
-fn paste_paths(text: &str) -> Vec<String> {
-    fn normalize(tok: &str) -> String {
-        let tok = match tok.strip_prefix("file://") {
-            Some(rest) => percent_decode(rest),
-            None => tok.to_string(),
-        };
-        tok.trim_end_matches('/').to_string()
-    }
-    fn is_path_like(tok: &str) -> bool {
-        tok.contains('/')
-            || std::path::Path::new(tok)
-                .file_name()
-                .and_then(|f| f.to_str())
-                .is_some_and(|f| f.contains('.'))
+/// as pasted paths in several shapes: single-quoted (`'/a b.png'`), backslash-
+/// escaped (`/a\ b.png`, kitty/WezTerm), double-quoted, backtick-wrapped,
+/// `file://` URIs with %20 escapes, or one path per line. A shell-style
+/// tokenizer keeps quoted and escaped whitespace inside a token.
+///
+/// A token counts as path-like only when it contains a `/` or ends in a dotted
+/// extension; if any token fails the check the whole paste is prose and returns
+/// empty (verbatim insert). Before tokenizing we try the payload as a single
+/// path: an unquoted filename containing spaces (`/a b.png`, which no tokenizer
+/// can split correctly) resolves on disk and is kept whole.
+fn paste_paths(text: &str, cwd: &Path) -> Vec<String> {
+    // Fast path: the entire payload (unescaped/unquoted) is one existing path.
+    let whole = normalize_token(text.trim());
+    if !whole.is_empty() && resolve_against(&whole, cwd).exists() {
+        return vec![whole];
     }
 
-    let mut out: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let mut quote: Option<char> = None;
-    let flush = |cur: &mut String, out: &mut Vec<String>| {
-        if !cur.is_empty() {
-            let tok = normalize(cur);
-            if !tok.is_empty() {
-                out.push(tok);
-            }
-            cur.clear();
-        }
-    };
-    for c in text.chars() {
-        match quote {
-            Some(q) if c == q => flush(&mut cur, &mut out), // closing quote
-            Some(_) => cur.push(c),
-            None if c == '\'' || c == '"' => quote = Some(c),
-            None if c.is_whitespace() => flush(&mut cur, &mut out),
-            None => cur.push(c),
-        }
-    }
-    flush(&mut cur, &mut out);
-    if !out.is_empty() && out.iter().all(|t| is_path_like(t)) {
-        out
+    let tokens: Vec<String> = shell_tokens(text)
+        .into_iter()
+        .map(|t| normalize_token(&t))
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !tokens.is_empty() && tokens.iter().all(|t| is_path_like(t)) {
+        tokens
     } else {
         Vec::new() // prose (or mixed) → the paste is text, not paths
     }
+}
+
+/// Shell-style word splitting: whitespace separates tokens, but `'…'`, `"…"`
+/// and `` `…` `` quotes group, and a backslash escapes the next character
+/// (`\ ` keeps the space inside the token). Quotes are stripped by
+/// [`normalize_token`], so the returned tokens are still wrapped here.
+fn shell_tokens(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut has = false;
+    let mut quote: Option<char> = None;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else if c == '\\' && q != '\'' {
+                    // Inside double/backtick quotes a backslash escapes the next
+                    // char; inside single quotes it is literal.
+                    if let Some(next) = chars.next() {
+                        cur.push(next);
+                    }
+                } else {
+                    cur.push(c);
+                }
+                has = true;
+            }
+            None => match c {
+                '\'' | '"' | '`' => {
+                    quote = Some(c);
+                    has = true;
+                }
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        cur.push(next);
+                        has = true;
+                    }
+                }
+                c if c.is_whitespace() => {
+                    if has {
+                        out.push(std::mem::take(&mut cur));
+                        has = false;
+                    }
+                }
+                _ => {
+                    cur.push(c);
+                    has = true;
+                }
+            },
+        }
+    }
+    if has {
+        out.push(cur);
+    }
+    out
+}
+
+/// Strips one layer of matching wrapper quotes, decodes a `file://` URI and
+/// trims trailing separators so a token is a clean filesystem path.
+fn normalize_token(tok: &str) -> String {
+    let mut t = tok.trim();
+    for q in ['\'', '"', '`'] {
+        if t.len() >= 2 && t.starts_with(q) && t.ends_with(q) {
+            t = &t[1..t.len() - 1];
+            break;
+        }
+    }
+    let decoded = match t.strip_prefix("file://") {
+        Some(rest) => percent_decode(rest),
+        None => t.to_string(),
+    };
+    decoded.trim_end_matches('/').to_string()
+}
+
+/// Resolves a token against the workspace: `~` expands to home, relative paths
+/// join `cwd`. Used only for the on-disk existence check.
+fn resolve_against(tok: &str, cwd: &Path) -> PathBuf {
+    let expanded = expand_tilde(tok);
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        cwd.join(expanded)
+    }
+}
+
+fn expand_tilde(tok: &str) -> PathBuf {
+    if tok == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    } else if let Some(rest) = tok.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(tok)
+}
+
+fn is_path_like(tok: &str) -> bool {
+    tok.contains('/')
+        || std::path::Path::new(tok)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .is_some_and(|f| f.contains('.'))
+}
+
+/// True when a fast burst of typed characters is a file dropped onto the
+/// terminal. Terminals that do not wrap a drop in a bracketed paste type the
+/// path out as ordinary keystrokes; this recovers it. Deliberately
+/// conservative: the burst must be an absolute or `~` path that resolves on
+/// disk, so ordinary typing is never mistaken for a drop.
+pub fn is_dropped_path_burst(burst: &str) -> bool {
+    let b = burst.trim();
+    if b.len() < 4 || !(b.starts_with('/') || b.starts_with("~/")) {
+        return false;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    resolve_against(b, &cwd).exists()
 }
 
 /// Minimal percent-decoding for `file://` URIs (%20 and friends); invalid
@@ -920,6 +1028,11 @@ struct SessionGrants {
 pub(crate) struct UiConfirmer {
     tx: tokio::sync::mpsc::UnboundedSender<ConfirmRequest>,
     grants: Arc<std::sync::Mutex<SessionGrants>>,
+    /// HACKER MODE bypass: set exactly while an authorized, unexpired,
+    /// scope-validated assessment is active (see `HackerSession`). When set,
+    /// risky calls are auto-approved. The model can never set this flag - only
+    /// the user entering HACKER MODE with a configured scope can.
+    bypass: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl crate::agent::policy::Confirmer for UiConfirmer {
@@ -928,6 +1041,9 @@ impl crate::agent::policy::Confirmer for UiConfirmer {
         tool: &str,
         preview: Option<String>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
+        if self.bypass.load(std::sync::atomic::Ordering::SeqCst) {
+            return Box::pin(async move { true });
+        }
         let granted = {
             let grants = self.grants.lock().expect("confirm grants");
             if grants.allow.contains(tool) {
@@ -1034,6 +1150,78 @@ enum ImproveEvent {
     Review(ImproveReview),
 }
 
+/// Formats findings for the transcript. Pure formatting around the store, run
+/// on the blocking pool. All text is display-only (never fed back to a tool).
+fn render_hacker_findings(path: &Path, show: Option<i64>) -> String {
+    let store = match crate::hacker::store::FindingsStore::open(path) {
+        Ok(store) => store,
+        Err(err) => return format!("findings store unavailable: {err}"),
+    };
+    match show {
+        Some(id) => match store.finding(id) {
+            Err(err) => format!("findings failed: {err}"),
+            Ok(None) => format!("no finding #{id}"),
+            Ok(Some(f)) => {
+                let mut out = format!(
+                    "#{} [{}] {}\n  assessment: {}\n  module: {}/{}\n  target: {}\n  confidence: {} · status: {}\n  at: {}\n",
+                    f.id,
+                    f.severity,
+                    f.title,
+                    f.assessment_id,
+                    f.module,
+                    f.operation,
+                    f.target,
+                    f.confidence,
+                    f.status,
+                    f.created_at
+                );
+                if !f.detail.is_empty() {
+                    out.push_str(&format!("  detail: {}\n", f.detail));
+                }
+                match store.evidence(f.id) {
+                    Err(err) => out.push_str(&format!("  evidence error: {err}\n")),
+                    Ok(rows) => {
+                        for e in rows {
+                            let digest: String = e.sha256.chars().take(12).collect();
+                            out.push_str(&format!(
+                                "  evidence[{}] {} · {} bytes · sha256 {digest}…\n    {}\n",
+                                e.id, e.kind, e.bytes, e.excerpt
+                            ));
+                        }
+                    }
+                }
+                out
+            }
+        },
+        None => match store.findings(None, 100) {
+            Err(err) => format!("findings failed: {err}"),
+            Ok(rows) if rows.is_empty() => "no findings recorded yet".to_string(),
+            Ok(rows) => {
+                let mut out = format!("{} finding(s):\n", rows.len());
+                for f in rows {
+                    out.push_str(&format!(
+                        "#{:<4} [{}] {} · {} · {}/{}\n",
+                        f.id, f.severity, f.title, f.target, f.module, f.operation
+                    ));
+                }
+                out
+            }
+        },
+    }
+}
+
+/// A finished `/hacker` background job, delivered on `hacker_rx`.
+enum HackerEvent {
+    /// A finished module operation.
+    Report {
+        /// `module/op target` as typed, for the transcript header.
+        request: String,
+        result: Result<crate::hacker::modules::ModuleReport, String>,
+    },
+    /// Pre-rendered transcript text from a findings/report query.
+    Lines { request: String, text: String },
+}
+
 /// opencode-style follow-up suggestions: after a turn finishes, a tiny
 /// side-call asks the model for a few short prompts the user would most
 /// plausibly send next. The strip above the composer shows them; `Tab`
@@ -1048,6 +1236,9 @@ pub struct SuggestionStrip {
 
 pub struct App {
     pub cfg: Config,
+    /// HACKER MODE session: registry, assessment, audit and the gated
+    /// auto-approve bypass. Disabled unless configured.
+    pub hacker: crate::hacker::HackerSession,
     pub theme: Theme,
     pub cwd: PathBuf,
     pub entries: Vec<Entry>,
@@ -1111,6 +1302,9 @@ pub struct App {
     memory_gen: u64,
     board_rx: UnboundedReceiver<(u64, BoardEvent)>,
     board_tx: UnboundedSender<(u64, BoardEvent)>,
+    /// Results of `/hacker run` operations, executed on the blocking pool.
+    hacker_rx: UnboundedReceiver<HackerEvent>,
+    hacker_tx: UnboundedSender<HackerEvent>,
     /// Bumped on every `/panel`: stale events from an older convene are dropped.
     board_gen: u64,
     /// Shared with the in-flight convene task so `esc` can stop the engine.
@@ -1185,6 +1379,21 @@ impl App {
             ProviderKind::Scripted => Arc::new(ScriptedProvider::default()),
         };
 
+        // HACKER MODE session: built from configuration, disabled by default.
+        // Its bypass flag is shared with the confirmer so an active, authorized
+        // assessment auto-approves risky calls (owner decision) without the
+        // model ever being able to set it.
+        let hacker = crate::hacker::HackerSession::new(
+            cfg.hacker.enabled,
+            cfg.hacker.scope.clone(),
+            cfg.hacker.assessment_id.clone(),
+            "Configured assessment".to_string(),
+            cfg.hacker.session_minutes,
+            cfg.hacker.auto_approve,
+            cfg.hacker.audit,
+        );
+        let hacker_bypass = hacker.bypass_flag();
+
         // Interactive tool confirmations: on by default; test presets and
         // `confirm_external = false` keep the old always-allow behavior.
         let (confirmer, confirm_rx, confirm_grants) = if cfg.confirm_external {
@@ -1194,6 +1403,7 @@ impl App {
                 Some(Arc::new(UiConfirmer {
                     tx,
                     grants: Arc::clone(&grants),
+                    bypass: Arc::clone(&hacker_bypass),
                 })
                     as Arc<dyn crate::agent::policy::Confirmer>),
                 Some(rx),
@@ -1206,11 +1416,12 @@ impl App {
                 Arc::new(std::sync::Mutex::new(SessionGrants::default())),
             )
         };
-        let runtime = Self::build_runtime(provider, &cfg, &cwd, confirmer.clone());
+        let runtime = Self::build_runtime(provider, &cfg, &cwd, confirmer.clone(), cfg.tool_policy);
 
         let (tx, rx) = unbounded_channel();
         let (models_tx, models_rx) = unbounded_channel();
         let (board_tx, board_rx) = unbounded_channel();
+        let (hacker_tx, hacker_rx) = unbounded_channel();
         let (memory_tx, memory_rx) = unbounded_channel();
         let (improve_tx, improve_rx) = unbounded_channel();
         let (suggest_tx, suggest_rx) = unbounded_channel();
@@ -1280,6 +1491,8 @@ impl App {
             memory_gen: 0,
             board_rx,
             board_tx,
+            hacker_rx,
+            hacker_tx,
             board_gen: 0,
             board_cancel: None,
             handle,
@@ -1311,6 +1524,7 @@ impl App {
             suggest_gen: 0,
             suggest_rx,
             suggest_tx,
+            hacker,
             cfg,
         };
 
@@ -1608,6 +1822,10 @@ impl App {
                 self.apply_improve_event(event);
             }
         }
+        while let Ok(event) = self.hacker_rx.try_recv() {
+            changed = true;
+            self.apply_hacker_event(event);
+        }
         while let Ok(result) = self.suggest_rx.try_recv() {
             changed = true;
             self.apply_suggest_result(result);
@@ -1629,6 +1847,7 @@ impl App {
         cfg: &Config,
         cwd: &std::path::Path,
         confirmer: Option<Arc<dyn crate::agent::policy::Confirmer>>,
+        tool_policy: crate::agent::policy::ToolPolicy,
     ) -> AgentRuntime {
         let runtime = AgentRuntime::new(
             provider,
@@ -1647,8 +1866,9 @@ impl App {
         // at startup: the schemas the model sees and the dispatch filter both
         // honor them.
         .with_disabled_tools(cfg.disabled_tools.clone())
-        // Tool authorization policy (auto/plan/readonly).
-        .with_tool_policy(cfg.tool_policy)
+        // Tool authorization policy (plan/coder/build/hacker). HACKER MODE
+        // overrides this to Hacker while an authorized assessment is active.
+        .with_tool_policy(tool_policy)
         // User-defined lifecycle hooks (loaded once here; NANOMITE_HOOKS=0
         // disables the whole subsystem).
         .with_hooks(Arc::new(crate::hooks::load(&crate::hooks::resolve_dir())))
@@ -1673,12 +1893,23 @@ impl App {
         };
         // Re-attach memory: a rebuilt runtime would otherwise silently drop the
         // memory tools, retrieval and capture on every model or tool switch.
+        let policy = self.effective_tool_policy();
         self.runtime = match &self.memory {
-            Some(engine) => {
-                Self::build_runtime(provider, &self.cfg, &self.cwd, self.confirmer.clone())
-                    .with_memory(Arc::clone(engine))
-            }
-            None => Self::build_runtime(provider, &self.cfg, &self.cwd, self.confirmer.clone()),
+            Some(engine) => Self::build_runtime(
+                provider,
+                &self.cfg,
+                &self.cwd,
+                self.confirmer.clone(),
+                policy,
+            )
+            .with_memory(Arc::clone(engine)),
+            None => Self::build_runtime(
+                provider,
+                &self.cfg,
+                &self.cwd,
+                self.confirmer.clone(),
+                policy,
+            ),
         };
         Ok(())
     }
@@ -2057,6 +2288,11 @@ impl App {
         if self.is_busy() {
             self.mark_dirty();
         }
+        // HACKER MODE: an assessment that expires mid-session must drop the
+        // auto-approve bypass (and the Hacker tool policy) on the next tick.
+        if self.hacker.active {
+            self.hacker.sync_bypass(SystemTime::now());
+        }
         self.maybe_query_resume();
         if let Some((_, at)) = &self.toast {
             if at.elapsed() > TOAST_TTL {
@@ -2212,6 +2448,7 @@ impl App {
                 let _ = self.stage_board_proposal();
             }
             Command::Policy => self.cycle_tool_policy(),
+            Command::Hacker => self.handle_hacker(args),
             Command::Worktrees => self.open_worktrees(),
             Command::Thinking => {
                 self.show_thinking = !self.show_thinking;
@@ -2649,6 +2886,53 @@ impl App {
         self.mark_dirty();
     }
 
+    /// Delivers pasted text to the focused overlay's text field, if it has
+    /// one. Returns true when the paste was consumed there (the chat composer
+    /// stays untouched). The overlay is taken out and put back so the borrow
+    /// of `self` can end between mutating and re-deriving dependent state.
+    fn paste_into_overlay(&mut self, text: &str) -> bool {
+        let Some(overlay) = self.overlay.take() else {
+            return false;
+        };
+        let single = || {
+            text.lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let (overlay, consumed) = match overlay {
+            Overlay::Connect(mut form) => {
+                // Keys and URLs are single-line: keep the first non-empty line
+                // so a trailing newline from the terminal is dropped.
+                form.field_mut(form.focus).insert_str(&single());
+                (Overlay::Connect(form), true)
+            }
+            Overlay::Picker(mut picker) => {
+                picker.filter.insert_str(text);
+                picker.apply_filter();
+                (Overlay::Picker(picker), true)
+            }
+            Overlay::Providers(mut state) => {
+                state.filter.insert_str(text);
+                let len = self.provider_menu_rows(state.filter.value()).len();
+                state.cursor = state.cursor.min(len.saturating_sub(1));
+                (Overlay::Providers(state), true)
+            }
+            Overlay::SudoPassword(mut state) => {
+                state.password.push_str(text.trim());
+                state.error = None;
+                (Overlay::SudoPassword(state), true)
+            }
+            other => (other, false),
+        };
+        self.overlay = Some(overlay);
+        if consumed {
+            self.mark_dirty();
+        }
+        consumed
+    }
+
     /// A bracketed paste landed. Dragging a file (or several) into the
     /// terminal drops the paths as pasted text — often quoted, often
     /// `file://` URIs. Each path-like token is routed: images join the
@@ -2656,7 +2940,29 @@ impl App {
     /// into the composer so the agent can read them. Anything that does not
     /// look like paths pastes verbatim into the composer.
     pub fn on_paste(&mut self, text: &str) {
-        let tokens = paste_paths(text);
+        // A focused input (transcript-search bar, /connect form, picker filter,
+        // sudo prompt) takes the paste before the chat composer, so ctrl+V
+        // lands wherever the caret is.
+        if self.search.is_some() {
+            if let Some(state) = &mut self.search {
+                // The bar is one footer row; bound the query like typed input.
+                for ch in text.chars() {
+                    if state.query.chars().count() >= 128 {
+                        break;
+                    }
+                    if !ch.is_control() {
+                        state.query.push(ch);
+                    }
+                }
+            }
+            self.refresh_search();
+            self.mark_dirty();
+            return;
+        }
+        if self.paste_into_overlay(text) {
+            return;
+        }
+        let tokens = paste_paths(text, &self.cwd);
         if tokens.is_empty() {
             // Plain text (multi-line pastes included): verbatim into the
             // composer. Bracketed paste means no enter-per-line, so nothing
@@ -2694,6 +3000,24 @@ impl App {
             self.toast(msg);
         }
         self.mark_dirty();
+    }
+
+    /// Re-routes a fast typed burst that turned out to be a dropped file path.
+    /// Terminals without bracketed paste for drag-and-drop type the path out;
+    /// the caller detects the burst and hands it here. The characters were
+    /// already typed into the composer, so strip the matching tail before
+    /// routing it through [`App::on_paste`] (which attaches images and inserts
+    /// other paths). No-op when the burst is not a real path or is not the
+    /// composer's tail.
+    pub fn reroute_drop_burst(&mut self, burst: &str) -> bool {
+        if !is_dropped_path_burst(burst) || !self.composer.value().ends_with(burst) {
+            return false;
+        }
+        if !self.composer.strip_suffix(burst.chars().count()) {
+            return false;
+        }
+        self.on_paste(burst);
+        true
     }
 
     /// Consumes the finished `/image` read: queues the attachment or shows
@@ -3855,6 +4179,322 @@ impl App {
         self.fire_hook(crate::hooks::HookEvent::PolicyChange {
             policy: next.label().to_string(),
         });
+        self.mark_dirty();
+    }
+
+    // -- HACKER MODE --------------------------------------------------------
+
+    /// The tool policy that should be in force right now: `Hacker` while an
+    /// authorized, unexpired assessment is active, otherwise the configured
+    /// mode. Gated on a valid assessment so an expired session falls back.
+    fn effective_tool_policy(&self) -> crate::agent::policy::ToolPolicy {
+        let now = SystemTime::now();
+        let valid = self
+            .hacker
+            .assessment
+            .as_ref()
+            .is_some_and(|ctx| ctx.validate().is_ok() && ctx.is_active(now));
+        if self.hacker.active && valid {
+            crate::agent::policy::ToolPolicy::Hacker
+        } else {
+            self.cfg.tool_policy
+        }
+    }
+
+    /// `/hacker` and friends. Activates the environment (if configured) and
+    /// shows the read-only workspace, or runs one authorized operation.
+    fn handle_hacker(&mut self, args: &str) {
+        let trimmed = args.trim();
+        let mut head = trimmed.splitn(2, char::is_whitespace);
+        let cmd = head.next().unwrap_or("").to_ascii_lowercase();
+        let rest = head.next().unwrap_or("").trim();
+        match cmd.as_str() {
+            "" | "workspace" | "modules" | "scope" | "audit" => self.open_hacker(),
+            "exit" | "off" | "stop" => self.exit_hacker(),
+            "status" => {
+                self.hacker.sync_bypass(SystemTime::now());
+                self.toast(self.hacker.status_line(SystemTime::now()));
+                self.mark_dirty();
+            }
+            "help" => {
+                let mut text = vec!["hacker operations:".to_string()];
+                for line in crate::hacker::coordinator::operations_text() {
+                    text.push(format!("  /hacker run {line}"));
+                }
+                text.push(
+                    "kali tools: /hacker kali <tool> <target> · list with /hacker kali list"
+                        .to_string(),
+                );
+                text.push(
+                    "findings: /hacker findings [list|show <id>] · report: /hacker report"
+                        .to_string(),
+                );
+                self.entries
+                    .push(Entry::new(EntryRole::System, text.join("\n")));
+                self.mark_dirty();
+            }
+            "run" => {
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                if parts.len() < 2 {
+                    self.toast("usage: /hacker run <module> <op> [target] [arg]");
+                    self.mark_dirty();
+                    return;
+                }
+                let target = parts.get(2).copied().unwrap_or("");
+                let arg = parts.get(3).copied().unwrap_or("");
+                self.run_hacker_operation(parts[0], parts[1], target, arg);
+            }
+            // Convenience aliases for the four common operations.
+            "recon" => self.run_hacker_operation("recon", "dns", rest, ""),
+            "ports" => self.run_hacker_operation("network", "ports", rest, ""),
+            "web" => self.run_hacker_operation("web", "headers", rest, ""),
+            "plan" => {
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                if parts.len() < 2 {
+                    self.toast("usage: /hacker plan <target> <weakness-class>");
+                    self.mark_dirty();
+                    return;
+                }
+                self.run_hacker_operation("exploitation", "plan", parts[0], parts[1]);
+            }
+            "vuln" => {
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                if parts.len() < 2 {
+                    self.toast("usage: /hacker vuln <component> <version>");
+                    self.mark_dirty();
+                    return;
+                }
+                self.run_hacker_operation("vuln", "correlate", parts[0], parts[1]);
+            }
+            // Curated bridge to installed Kali assessment tools.
+            "kali" => {
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                match parts.as_slice() {
+                    [] | ["list"] | ["available"] => {
+                        self.run_hacker_operation("kali", "available", "", "");
+                    }
+                    [tool, target, ..] => self.run_hacker_operation("kali", "run", target, tool),
+                    [tool] => {
+                        self.toast(format!(
+                            "usage: /hacker kali {tool} <target>  (or /hacker kali list)"
+                        ));
+                        self.mark_dirty();
+                    }
+                }
+            }
+            "findings" | "finding" => self.run_hacker_findings(rest),
+            "report" => self.run_hacker_report(),
+            other => {
+                self.toast(format!(
+                    "unknown /hacker subcommand `{other}` - try help, run, kali, findings, report, status, modules, scope, audit, exit"
+                ));
+            }
+        }
+    }
+
+    /// Runs one operation on the blocking pool through the coordinator (which
+    /// authorizes, resolves/re-checks scope, executes and audits). Results come
+    /// back on `hacker_rx` and are appended to the transcript.
+    fn run_hacker_operation(&mut self, module: &str, op: &str, target: &str, arg: &str) {
+        if !self.cfg.hacker.enabled {
+            self.toast("HACKER MODE is disabled - set `hacker_enabled = true` to enable it");
+            self.mark_dirty();
+            return;
+        }
+        if !self.hacker.active {
+            if let Err(e) = self.hacker.activate(SystemTime::now()) {
+                self.toast(format!("hacker mode: {e}"));
+                self.mark_dirty();
+                return;
+            }
+            if let Err(err) = self.rebuild_runtime() {
+                self.toast(format!("policy switch failed: {err}"));
+            }
+        }
+        let Some(spec) = crate::hacker::coordinator::operation_spec(module, op) else {
+            self.toast(format!(
+                "unknown hacker operation `{module}/{op}` - try /hacker help"
+            ));
+            self.mark_dirty();
+            return;
+        };
+
+        let module = spec.module.to_string();
+        let op = spec.op.to_string();
+        let target = target.trim().to_string();
+        let arg = arg.trim().to_string();
+        let request = format!(
+            "{module}/{op}{}{}",
+            if target.is_empty() {
+                String::new()
+            } else {
+                format!(" {target}")
+            },
+            if arg.is_empty() {
+                String::new()
+            } else {
+                format!(" {arg}")
+            }
+        );
+
+        let ctx = self.hacker.assessment.clone();
+        let audit = self.hacker.audit.clone();
+        let store_path = self.hacker_store_path();
+        let tx = self.hacker_tx.clone();
+        let request_for_task = request.clone();
+        self.handle.spawn_blocking(move || {
+            let deps = crate::hacker::coordinator::OwnedDeps::production(store_path);
+            let result = crate::hacker::coordinator::run(
+                ctx.as_ref(),
+                &audit,
+                &deps.deps(),
+                &module,
+                &op,
+                &target,
+                &arg,
+                SystemTime::now(),
+            );
+            let _ = tx.send(HackerEvent::Report {
+                request: request_for_task,
+                result,
+            });
+        });
+        self.toast(format!("running hacker {request} ..."));
+        self.mark_dirty();
+    }
+
+    /// The findings-database path when persistence is enabled, else `None`.
+    fn hacker_store_path(&self) -> Option<PathBuf> {
+        self.cfg
+            .hacker
+            .store
+            .then(crate::hacker::store::FindingsStore::default_path)
+    }
+
+    /// `/hacker findings [list|show <id>]`: reads the findings store on the
+    /// blocking pool (the event loop never touches SQLite directly).
+    fn run_hacker_findings(&mut self, args: &str) {
+        if !self.cfg.hacker.store {
+            self.toast("findings store is disabled - set `[hacker] store = true`");
+            self.mark_dirty();
+            return;
+        }
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        let show = match parts.as_slice() {
+            [] | ["list"] => None,
+            ["show", id] => match id.parse::<i64>() {
+                Ok(id) => Some(id),
+                Err(_) => {
+                    self.toast("usage: /hacker findings show <id>");
+                    self.mark_dirty();
+                    return;
+                }
+            },
+            _ => {
+                self.toast("usage: /hacker findings [list|show <id>]");
+                self.mark_dirty();
+                return;
+            }
+        };
+        let path = crate::hacker::store::FindingsStore::default_path();
+        let request = match show {
+            Some(id) => format!("findings #{id}"),
+            None => "findings".to_string(),
+        };
+        let tx = self.hacker_tx.clone();
+        self.handle.spawn_blocking(move || {
+            let text = render_hacker_findings(&path, show);
+            let _ = tx.send(HackerEvent::Lines { request, text });
+        });
+        self.toast("loading hacker findings ...");
+        self.mark_dirty();
+    }
+
+    /// `/hacker report`: writes a markdown report and prints where it went.
+    fn run_hacker_report(&mut self) {
+        if !self.cfg.hacker.store {
+            self.toast("findings store is disabled - set `[hacker] store = true`");
+            self.mark_dirty();
+            return;
+        }
+        let path = crate::hacker::store::FindingsStore::default_path();
+        let dir = crate::hacker::store::reports_dir();
+        let assessment = self.hacker.assessment.as_ref().map(|c| c.id.clone());
+        let tx = self.hacker_tx.clone();
+        self.handle.spawn_blocking(move || {
+            let text = match crate::hacker::store::FindingsStore::open(&path) {
+                Err(err) => format!("hacker report failed: {err}"),
+                Ok(store) => match store.export_markdown(&dir, assessment.as_deref()) {
+                    Ok(path) => format!("hacker report written: {}", path.display()),
+                    Err(err) => format!("hacker report failed: {err}"),
+                },
+            };
+            let _ = tx.send(HackerEvent::Lines {
+                request: "report".into(),
+                text,
+            });
+        });
+        self.toast("writing hacker report ...");
+        self.mark_dirty();
+    }
+
+    /// Appends a finished hacker job to the transcript. Failures (including
+    /// authorization denials) are shown verbatim with their stable code.
+    fn apply_hacker_event(&mut self, event: HackerEvent) {
+        match event {
+            HackerEvent::Report { request, result } => {
+                let text = match result {
+                    Ok(report) => report.render().join("\n"),
+                    Err(err) => format!("hacker {request} failed: {err}"),
+                };
+                self.entries.push(Entry::new(EntryRole::System, text));
+            }
+            HackerEvent::Lines { request, text } => {
+                self.entries.push(Entry::new(
+                    EntryRole::System,
+                    format!("[hacker:{request}]\n{text}"),
+                ));
+            }
+        }
+        self.mark_dirty();
+    }
+
+    /// Enters HACKER MODE and opens the workspace. Refusals (disabled, no
+    /// scope, invalid scope) surface as a toast, never a panic.
+    pub fn open_hacker(&mut self) {
+        if !self.cfg.hacker.enabled {
+            self.toast("HACKER MODE is disabled - set `hacker_enabled = true` to enable it");
+            self.mark_dirty();
+            return;
+        }
+        if !self.hacker.active {
+            if let Err(e) = self.hacker.activate(SystemTime::now()) {
+                self.toast(format!("hacker mode: {e}"));
+                self.mark_dirty();
+                return;
+            }
+            // Permissions widen to Hacker for the session; a rebuild makes the
+            // restricted tool schemas the model sees match. Failures are quiet.
+            if let Err(err) = self.rebuild_runtime() {
+                self.toast(format!("policy switch failed: {err}"));
+            }
+            self.toast("HACKER MODE active - authorized scope enforced, audited");
+        }
+        self.overlay = Some(Overlay::Hacker(HackerState::default()));
+        self.mark_dirty();
+    }
+
+    /// Leaves HACKER MODE: clears the assessment, the bypass and the overlay.
+    pub fn exit_hacker(&mut self) {
+        self.hacker.deactivate();
+        if matches!(self.overlay, Some(Overlay::Hacker(_))) {
+            self.overlay = None;
+        }
+        if let Err(err) = self.rebuild_runtime() {
+            self.toast(format!("policy restore failed: {err}"));
+        } else {
+            self.toast("HACKER MODE off");
+        }
         self.mark_dirty();
     }
 
@@ -5326,6 +5966,7 @@ impl App {
             KeyCode::Char('S') if alt => self.run_command(Command::Share, ""),
             KeyCode::Char('X') if alt => self.run_command(Command::Unshare, ""),
             KeyCode::Char('N') if alt => self.run_command(Command::Init, ""),
+            KeyCode::Char('H') if alt => self.run_command(Command::Hacker, ""),
             KeyCode::Char('q') if alt => self.run_command(Command::Exit, ""),
 
             // ` (backtick) opens fuzzy history search picker
@@ -5616,6 +6257,26 @@ impl App {
                     KeyCode::End => self.scroll_help(crate::ui::help_row_count() as i32),
                     _ => {}
                 }
+                self.mark_dirty();
+            }
+            Overlay::Hacker(mut state) => {
+                let count = self.hacker.registry.len();
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                        self.close_overlay();
+                        return;
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.quit = true;
+                        return;
+                    }
+                    KeyCode::Up => state.cursor = state.cursor.saturating_sub(1),
+                    KeyCode::Down if count > 0 => {
+                        state.cursor = (state.cursor + 1).min(count - 1);
+                    }
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Hacker(state));
                 self.mark_dirty();
             }
             Overlay::Connect(mut form) => {
@@ -6506,6 +7167,204 @@ mod tests {
         App::new(test_config(), tokio::runtime::Handle::current()).expect("app")
     }
 
+    /// A test app with HACKER MODE enabled and an authorized scope.
+    async fn hacker_app() -> App {
+        let mut cfg = test_config();
+        cfg.hacker.enabled = true;
+        cfg.hacker.scope = vec!["10.0.0.0/8".into(), "example.com".into()];
+        cfg.hacker.audit = false; // never write the real audit dir in tests
+        cfg.hacker.store = false; // ... nor the real findings database
+        App::new(cfg, tokio::runtime::Handle::current()).expect("app")
+    }
+
+    #[tokio::test]
+    async fn hacker_mode_disabled_refuses_to_open() {
+        let mut app = test_app().await;
+        app.run_command(Command::Hacker, "");
+        assert!(app.overlay.is_none(), "disabled mode must not open");
+        assert!(!app.hacker.active);
+        assert!(app.toast.is_some(), "a refusal hint is shown");
+    }
+
+    #[tokio::test]
+    async fn hacker_mode_activates_and_gates_auto_approve() {
+        let mut app = hacker_app().await;
+        app.run_command(Command::Hacker, "");
+        assert!(app.hacker.active, "enabled mode activates");
+        assert!(matches!(app.overlay, Some(Overlay::Hacker(_))));
+        assert!(app.hacker.auto_approve_active(SystemTime::now()));
+        assert_eq!(
+            app.effective_tool_policy(),
+            crate::agent::policy::ToolPolicy::Hacker,
+            "permissions widen while the assessment is active"
+        );
+
+        app.run_command(Command::Hacker, "exit");
+        assert!(!app.hacker.active);
+        assert!(app.overlay.is_none());
+        assert!(!app.hacker.auto_approve_active(SystemTime::now()));
+        assert_eq!(
+            app.effective_tool_policy(),
+            app.cfg.tool_policy,
+            "permissions fall back on exit"
+        );
+    }
+
+    #[tokio::test]
+    async fn hacker_status_reports_without_opening() {
+        let mut app = hacker_app().await;
+        app.run_command(Command::Hacker, "status");
+        assert!(app.overlay.is_none());
+        assert!(app.toast.as_ref().unwrap().0.contains("hacker mode"));
+    }
+
+    #[tokio::test]
+    async fn hacker_help_lists_executable_operations() {
+        let mut app = hacker_app().await;
+        app.run_command(Command::Hacker, "help");
+        let text = app
+            .entries
+            .iter()
+            .rev()
+            .find(|e| matches!(e.role, EntryRole::System))
+            .map(|e| e.text.clone())
+            .unwrap_or_default();
+        assert!(text.contains("recon/dns"), "{text}");
+        assert!(text.contains("exploitation/plan"), "{text}");
+        assert!(text.contains("vuln/correlate"), "{text}");
+        assert!(text.contains("kali/run"), "{text}");
+        assert!(text.contains("kali tools:"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn hacker_run_parses_and_activates_then_reports_background_start() {
+        let mut app = hacker_app().await;
+        // Out-of-scope: the coordinator denies before any I/O, so this never
+        // touches the network.
+        app.run_command(Command::Hacker, "run network ports 8.8.8.8");
+        assert!(app.hacker.active, "run activates the environment");
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|(t, _)| t.contains("network/ports 8.8.8.8")));
+    }
+
+    #[tokio::test]
+    async fn hacker_unknown_operation_is_refused_locally() {
+        let mut app = hacker_app().await;
+        app.run_command(Command::Hacker, "run nope nope x");
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|(t, _)| t.contains("unknown hacker operation")));
+    }
+
+    #[tokio::test]
+    async fn hacker_kali_lists_and_requires_a_target() {
+        let mut app = hacker_app().await;
+        // `list` routes to the passive availability op (no target, no exec).
+        app.run_command(Command::Hacker, "kali list");
+        assert!(app.hacker.active);
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|(t, _)| t.contains("kali/available")));
+
+        // A tool name without a target is a usage error, not a run.
+        let before = app.entries.len();
+        app.run_command(Command::Hacker, "kali nmap");
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|(t, _)| t.contains("usage: /hacker kali nmap")));
+        assert_eq!(app.entries.len(), before, "a usage error starts nothing");
+    }
+
+    #[tokio::test]
+    async fn hacker_vuln_requires_component_and_version() {
+        let mut app = hacker_app().await;
+        app.run_command(Command::Hacker, "vuln openssl");
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|(t, _)| t.contains("usage: /hacker vuln")));
+        assert!(!app.hacker.active, "a usage error must not activate");
+    }
+
+    #[tokio::test]
+    async fn apply_hacker_run_appends_rendered_report_or_error() {
+        let mut app = hacker_app().await;
+        let report = crate::hacker::modules::ModuleReport::new(
+            "recon",
+            "dns",
+            "example.com",
+            "1 address(es)",
+        )
+        .line("10.0.0.1");
+        app.apply_hacker_event(HackerEvent::Report {
+            request: "recon/dns example.com".into(),
+            result: Ok(report),
+        });
+        let last = app.entries.last().expect("entry");
+        assert!(last.text.contains("[hacker:recon] dns"));
+        assert!(last.text.contains("10.0.0.1"));
+
+        app.apply_hacker_event(HackerEvent::Report {
+            request: "network/ports x".into(),
+            result: Err("hacker_target_out_of_scope: nope".into()),
+        });
+        assert!(app
+            .entries
+            .last()
+            .unwrap()
+            .text
+            .contains("hacker_target_out_of_scope"));
+
+        app.apply_hacker_event(HackerEvent::Lines {
+            request: "findings".into(),
+            text: "3 finding(s):".into(),
+        });
+        assert!(app
+            .entries
+            .last()
+            .unwrap()
+            .text
+            .contains("[hacker:findings]"));
+    }
+
+    #[tokio::test]
+    async fn hacker_findings_and_report_respect_the_store_switch() {
+        // hacker_app() disables the store, so both must refuse with a hint.
+        let mut app = hacker_app().await;
+        app.run_command(Command::Hacker, "findings");
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|(t, _)| t.contains("findings store is disabled")));
+        app.run_command(Command::Hacker, "report");
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|(t, _)| t.contains("findings store is disabled")));
+    }
+
+    #[tokio::test]
+    async fn hacker_scope_reaches_the_assessment() {
+        let mut app = hacker_app().await;
+        app.run_command(Command::Hacker, "");
+        let ctx = app.hacker.assessment.as_ref().expect("assessment");
+        assert_eq!(ctx.allowed_cidrs, vec!["10.0.0.0/8".to_string()]);
+        assert_eq!(ctx.allowed_domains, vec!["example.com".to_string()]);
+        // Out-of-scope work is refused by the independent gate even while active.
+        let op = crate::hacker::Operation::new(
+            "recon",
+            crate::hacker::OperationCategory::ActiveDiscovery,
+        )
+        .target("8.8.8.8");
+        let decision = crate::hacker::authorize(Some(ctx), &op, SystemTime::now());
+        assert!(!decision.is_allowed(), "8.8.8.8 is out of scope");
+    }
+
     #[test]
     fn base64_matches_rfc_4648_vectors() {
         assert_eq!(base64_encode(b""), "");
@@ -6597,6 +7456,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn typed_drop_burst_is_rerouted_out_of_the_composer() {
+        let mut app = test_app().await;
+        let dir = crate::improve::testing::temp_dir("typed-drop");
+        let path = dir.path.join("shot.png");
+        std::fs::write(&path, b"\x89PNG-bytes").expect("write fixture");
+        let dropped = path.display().to_string();
+
+        // Simulate a terminal that types the drop as keystrokes: the path
+        // lands in the composer, then the burst is recognised.
+        app.composer.insert_str(&dropped);
+        assert!(app.reroute_drop_burst(&dropped), "burst should be routed");
+        assert!(app.composer.is_empty(), "path stripped from composer");
+        assert_eq!(app.pending_images.len(), 1, "image attached instead");
+
+        // A burst that is not the composer's tail is left untouched.
+        app.composer.insert_str("prefix");
+        assert!(!app.reroute_drop_burst(&dropped));
+        assert_eq!(app.composer.value(), "prefix");
+    }
+
+    #[tokio::test]
     async fn paste_plain_text_goes_into_composer_verbatim() {
         let mut app = test_app().await;
         let text = "hello world\nsecond line";
@@ -6605,23 +7485,114 @@ mod tests {
         assert!(app.pending_images.is_empty());
     }
 
+    #[tokio::test]
+    async fn paste_lands_in_the_focused_connect_field_not_the_composer() {
+        let mut app = test_app().await;
+        app.open_connect();
+        if let Some(Overlay::Connect(form)) = app.overlay.as_mut() {
+            form.focus = 1; // the api key row
+        }
+        // Terminals usually append a newline to a copied key.
+        app.on_paste("  nvapi-test-key-123 \n");
+        let Overlay::Connect(form) = app.overlay.as_ref().unwrap() else {
+            panic!("connect overlay stays open");
+        };
+        assert_eq!(form.field(1).value(), "nvapi-test-key-123");
+        assert_eq!(
+            form.field(0).value(),
+            app.cfg.base_url,
+            "base url untouched"
+        );
+        assert!(app.composer.is_empty(), "paste must not reach the composer");
+    }
+
+    #[tokio::test]
+    async fn paste_into_connect_base_url_field_targets_focus_zero() {
+        let mut app = test_app().await;
+        app.open_connect(); // focus starts on base url
+        app.on_paste("https://integrate.api.nvidia.com/v1\n");
+        let Overlay::Connect(form) = app.overlay.as_ref().unwrap() else {
+            panic!("connect overlay stays open");
+        };
+        // The field is pre-filled from config; the paste lands in it at the
+        // cursor, so it must end with the pasted URL.
+        assert!(form
+            .field(0)
+            .value()
+            .ends_with("https://integrate.api.nvidia.com/v1"));
+        assert!(app.composer.is_empty());
+    }
+
     #[test]
     fn paste_paths_parses_quotes_uris_and_rejects_prose() {
-        assert_eq!(paste_paths("hello world"), Vec::<String>::new());
+        let cwd = std::path::Path::new(".");
+        assert_eq!(paste_paths("hello world", cwd), Vec::<String>::new());
         assert_eq!(
-            paste_paths("'/tmp/a b/shot.png'"),
+            paste_paths("'/tmp/a b/shot.png'", cwd),
             vec!["/tmp/a b/shot.png".to_string()]
         );
         assert_eq!(
-            paste_paths("file:///tmp/a%20b/shot.png"),
+            paste_paths("file:///tmp/a%20b/shot.png", cwd),
             vec!["/tmp/a b/shot.png".to_string()]
         );
         assert_eq!(
-            paste_paths("/tmp/a.png /tmp/b.rs"),
+            paste_paths("/tmp/a.png /tmp/b.rs", cwd),
             vec!["/tmp/a.png".to_string(), "/tmp/b.rs".to_string()]
         );
         // Extension-only relative names are path-like too.
-        assert_eq!(paste_paths("notes.md"), vec!["notes.md".to_string()]);
+        assert_eq!(paste_paths("notes.md", cwd), vec!["notes.md".to_string()]);
+    }
+
+    #[test]
+    fn paste_paths_handles_backslash_escaped_and_backticked_paths() {
+        let cwd = std::path::Path::new(".");
+        // kitty / WezTerm shell-escape dropped paths: a backslash keeps the
+        // space inside one token, and several files stay separate tokens.
+        assert_eq!(
+            paste_paths("/tmp/a\\ b/shot.png", cwd),
+            vec!["/tmp/a b/shot.png".to_string()]
+        );
+        assert_eq!(
+            paste_paths("/tmp/a\\ b.png /tmp/c.png", cwd),
+            vec!["/tmp/a b.png".to_string(), "/tmp/c.png".to_string()]
+        );
+        // Backtick-wrapped paste from a shell.
+        assert_eq!(
+            paste_paths("`/tmp/a b/shot.png`", cwd),
+            vec!["/tmp/a b/shot.png".to_string()]
+        );
+    }
+
+    #[test]
+    fn paste_paths_keeps_a_single_unquoted_spaced_path_that_exists_whole() {
+        let dir = crate::improve::testing::temp_dir("paste-spaced");
+        let path = dir.path.join("my shot.png");
+        std::fs::write(&path, b"x").expect("write fixture");
+        let dropped = path.display().to_string();
+        // No quoting or escaping: only the on-disk check can tell that the
+        // spaces belong to the filename rather than separating two paths.
+        assert_eq!(paste_paths(&dropped, &dir.path), vec![dropped.clone()]);
+    }
+
+    #[test]
+    fn paste_paths_splits_newline_separated_drops() {
+        let cwd = std::path::Path::new(".");
+        assert_eq!(
+            paste_paths("/tmp/a.png\n/tmp/b.rs\n", cwd),
+            vec!["/tmp/a.png".to_string(), "/tmp/b.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn dropped_path_burst_accepts_real_paths_and_rejects_prose() {
+        let dir = crate::improve::testing::temp_dir("drop-burst");
+        let path = dir.path.join("shot.png");
+        std::fs::write(&path, b"x").expect("write fixture");
+        assert!(is_dropped_path_burst(&path.display().to_string()));
+        // Ordinary typing never looks like an absolute path on disk.
+        assert!(!is_dropped_path_burst("hello world"));
+        assert!(!is_dropped_path_burst("/no/such/file.png"));
+        assert!(!is_dropped_path_burst("relative.png"));
     }
 
     #[test]

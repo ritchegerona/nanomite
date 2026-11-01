@@ -39,6 +39,24 @@ pub struct ExternalTool {
     /// Hard cap in milliseconds (default 60s, max 120s).
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
+    /// Declared risk class (`safe`, `write`, `external`). **Default: external.**
+    /// An external tool runs an arbitrary local command the user installed, so
+    /// it must never be assumed harmless: without an explicit `risk` it is
+    /// treated as an external-risk call that needs Build/Hacker mode and (when
+    /// enabled) the confirmation gate.
+    #[serde(default)]
+    pub risk: Option<String>,
+}
+
+impl ExternalTool {
+    /// The tool's risk class. An unrecognised or absent `risk` defaults to
+    /// `External` - never `Safe`.
+    pub fn risk(&self) -> crate::agent::policy::Risk {
+        self.risk
+            .as_deref()
+            .and_then(crate::agent::policy::Risk::parse)
+            .unwrap_or(crate::agent::policy::Risk::External)
+    }
 }
 
 fn default_timeout() -> u64 {
@@ -122,78 +140,124 @@ impl ExternalTools {
         let Some(program) = parts.next() else {
             return Err(format!("tool `{name}` has an empty command"));
         };
-        let started = Instant::now();
-
-        use std::os::unix::process::CommandExt;
-        let mut cmd = Command::new(program);
-        cmd.args(parts)
-            .process_group(0)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("tool `{name}` failed to spawn: {e}"))?;
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            let _ = stdin.write_all(args_json.as_bytes());
-            let _ = stdin.flush();
-        }
-
-        let out_handle = std::thread::spawn({
-            let mut pipe = child.stdout.take().expect("piped stdout");
-            move || {
-                let mut buf = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
-                buf
-            }
-        });
-        let err_handle = std::thread::spawn({
-            let mut pipe = child.stderr.take().expect("piped stderr");
-            move || {
-                let mut buf = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
-                buf
-            }
-        });
-
-        let mut timed_out = false;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(st)) => break Some(st),
-                Ok(None) => {
-                    if started.elapsed() >= timeout {
-                        timed_out = true;
-                        crate::tools::exec_tools::kill_process_group(&child);
-                        let _ = child.wait();
-                        break None;
-                    }
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-                Err(e) => return Err(format!("tool `{name}` wait failed: {e}")),
-            }
-        };
-
-        let stdout = String::from_utf8_lossy(&out_handle.join().unwrap_or_default())
-            .chars()
-            .take(MAX_OUTPUT)
-            .collect();
-        let stderr = String::from_utf8_lossy(&err_handle.join().unwrap_or_default())
-            .chars()
-            .take(MAX_OUTPUT)
-            .collect();
-        let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
+        let args: Vec<String> = parts.map(str::to_string).collect();
+        let out = run_bounded(
+            program,
+            &args,
+            Some(args_json.as_bytes()),
+            timeout,
+            &format!("tool `{name}`"),
+        )?;
 
         Ok(ExternalToolResult {
             tool: name.to_string(),
-            exit_code,
-            timed_out,
-            stdout,
-            stderr,
-            duration_ms: started.elapsed().as_millis() as u64,
+            exit_code: out.exit_code,
+            timed_out: out.timed_out,
+            stdout: out.stdout,
+            stderr: out.stderr,
+            duration_ms: out.duration_ms,
         })
     }
+}
+
+/// Output of one bounded child process.
+pub(crate) struct BoundedOutput {
+    pub exit_code: i32,
+    pub timed_out: bool,
+    pub stdout: String,
+    pub stderr: String,
+    pub duration_ms: u64,
+}
+
+/// Runs one bounded child process and returns captured output.
+///
+/// Shared by the external-tool SDK and the HACKER MODE Kali bridge so there is
+/// exactly one timeout/kill/bound implementation. `stdin_bytes` is optional;
+/// stdout and stderr are read on separate threads so a full pipe cannot
+/// deadlock the waiter, and both are truncated to [`MAX_OUTPUT`] characters.
+pub(crate) fn run_bounded(
+    program: &str,
+    args: &[String],
+    stdin_bytes: Option<&[u8]>,
+    timeout: Duration,
+    label: &str,
+) -> Result<BoundedOutput, String> {
+    let started = Instant::now();
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .stdin(if stdin_bytes.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("{label} failed to spawn: {e}"))?;
+    if let (Some(bytes), Some(mut stdin)) = (stdin_bytes, child.stdin.take()) {
+        use std::io::Write;
+        let _ = stdin.write_all(bytes);
+        let _ = stdin.flush();
+    }
+
+    let out_handle = std::thread::spawn({
+        let mut pipe = child.stdout.take().expect("piped stdout");
+        move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
+            buf
+        }
+    });
+    let err_handle = std::thread::spawn({
+        let mut pipe = child.stderr.take().expect("piped stderr");
+        move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
+            buf
+        }
+    });
+
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break Some(st),
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    timed_out = true;
+                    crate::tools::exec_tools::kill_process_group(&child);
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => return Err(format!("{label} wait failed: {e}")),
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&out_handle.join().unwrap_or_default())
+        .chars()
+        .take(MAX_OUTPUT)
+        .collect();
+    let stderr = String::from_utf8_lossy(&err_handle.join().unwrap_or_default())
+        .chars()
+        .take(MAX_OUTPUT)
+        .collect();
+    let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
+
+    Ok(BoundedOutput {
+        exit_code,
+        timed_out,
+        stdout,
+        stderr,
+        duration_ms: started.elapsed().as_millis() as u64,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,6 +291,13 @@ fn validate(tool: &ExternalTool) -> Result<(), String> {
     }
     if tool.command.trim().is_empty() {
         return Err("command is empty".into());
+    }
+    if let Some(raw) = &tool.risk {
+        if crate::agent::policy::Risk::parse(raw).is_none() {
+            return Err(format!(
+                "unknown risk `{raw}` (expected safe|write|external)"
+            ));
+        }
     }
     if tool.parameters.is_null() {
         return Ok(());
@@ -366,6 +437,7 @@ user = { type = "string", description = "who to greet" }
             command: "true".into(),
             parameters: serde_json::json!({"type": "object", "properties": {}}),
             timeout_ms: 1000,
+            risk: None,
         };
         assert!(validate(&ok).is_ok());
 
@@ -383,6 +455,35 @@ user = { type = "string", description = "who to greet" }
             validate(&null_schema).is_ok(),
             "no schema = accept anything"
         );
+    }
+
+    #[test]
+    fn risk_defaults_to_external_and_unknown_values_are_rejected() {
+        use crate::agent::policy::Risk;
+        let base = ExternalTool {
+            name: "x".into(),
+            description: "d".into(),
+            command: "true".into(),
+            parameters: serde_json::Value::Null,
+            timeout_ms: 1000,
+            risk: None,
+        };
+        // Missing risk is External, never Safe.
+        assert_eq!(base.risk(), Risk::External);
+
+        let safe = ExternalTool {
+            risk: Some("safe".into()),
+            ..base.clone()
+        };
+        assert_eq!(safe.risk(), Risk::Safe);
+
+        // An unknown value is refused at load time and falls back to External.
+        let typo = ExternalTool {
+            risk: Some("harmless".into()),
+            ..base.clone()
+        };
+        assert_eq!(typo.risk(), Risk::External);
+        assert!(validate(&typo).is_err());
     }
 
     #[test]
@@ -428,6 +529,7 @@ user = { type = "string", description = "who to greet" }
                 command: script.display().to_string(),
                 parameters: serde_json::Value::Null,
                 timeout_ms: 5_000,
+                risk: None,
             },
         );
         let r = tools.run("echoer", r#"{"x":1}"#).unwrap();
@@ -461,6 +563,7 @@ user = { type = "string", description = "who to greet" }
                 command: script.display().to_string(),
                 parameters: serde_json::Value::Null,
                 timeout_ms: 300,
+                risk: None,
             },
         );
         let started = Instant::now();

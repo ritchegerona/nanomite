@@ -647,21 +647,50 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
             theme.faint_style(),
         )));
     }
+    // One shared label column so every hint starts at the same x: a picker
+    // whose hints are jammed straight onto the label (or drifting with the
+    // label's width) reads as a wall of run-together text. Capped so one long
+    // model id can never eat the whole row.
+    let label_col = picker
+        .items
+        .iter()
+        .skip(start)
+        .take(visible)
+        .map(|item| {
+            let check = if item.current { glyph::CHECK } else { " " };
+            text::width(&format!("{check} {}", item.label))
+        })
+        .max()
+        .unwrap_or(0)
+        .clamp(6, inner_w.saturating_sub(10).max(6));
+
+    let highlight_style = Style::default()
+        .fg(theme.accent())
+        .add_modifier(Modifier::BOLD);
+
     for (i, item) in picker.items.iter().enumerate().skip(start).take(visible) {
         let selected = i == picker.cursor;
-        // Reserve the check column so hints stay aligned whether or not a row is current.
         let check = if item.current { glyph::CHECK } else { " " };
         let label = format!("{check} {}", item.label);
-        // The label is never squeezed: on a tight row the hint gives up its head
-        // (the host) and keeps its tail (the key name) instead.
-        let hint = text::truncate_head(
-            &item.hint,
-            inner_w.saturating_sub(3 + text::width(&label) + 2),
-        );
+        let label_fit = text::truncate(&label, label_col);
+        let label_pad = format!("{label_fit:<label_col$}");
+        // Hints are prose: keep their head and elide the tail. The label column
+        // plus the two-space gap own the rest of the row.
+        let hint_budget = inner_w.saturating_sub(1 + label_col + 2);
+        let hint = if item.hint.is_empty() {
+            String::new()
+        } else {
+            text::truncate(&item.hint, hint_budget)
+        };
+
         if selected {
             // Full-row highlight, opencode-style: the cursor is the bar, the
             // row paints edge to edge, match highlighting stands down.
-            let text = format!(" {label}  {hint}");
+            let text = if hint.is_empty() {
+                format!(" {label_pad}")
+            } else {
+                format!(" {label_pad}  {hint}")
+            };
             let padded = format!(
                 "{:<width$}",
                 text::truncate(&text, inner_w),
@@ -673,82 +702,38 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
             )));
             continue;
         }
-        let label_w = inner_w.saturating_sub(3 + text::width(&hint));
-        let label_style = if selected {
-            Style::default().fg(theme.strong())
-        } else if item.current {
+
+        let label_style = if item.current {
             Style::default().fg(theme.accent_soft())
         } else {
             theme.dim()
         };
-
-        // Highlight query matches in label and hint
-        let highlight_style = Style::default()
-            .fg(theme.accent())
-            .add_modifier(Modifier::BOLD);
-        let label_spans = if query.is_empty() {
-            vec![Span::styled(text::truncate(&label, label_w), label_style)]
+        let mut spans = vec![Span::styled(" ", Style::default())];
+        if query.is_empty() {
+            spans.push(Span::styled(label_pad, label_style));
         } else {
-            text::highlight_matches(&label, &query, highlight_style)
-                .into_iter()
-                .map(|mut s| {
-                    s.style = s.style.patch(label_style);
-                    s
-                })
-                .collect()
-        };
-        let hint_spans = if query.is_empty() {
-            vec![Span::styled(hint, theme.faint_style())]
-        } else {
-            text::highlight_matches(&hint, &query, Style::default().fg(theme.accent()))
-        };
-
-        // Build label spans with truncation
-        let mut label_line_spans = Vec::new();
-        let mut current_width = 0;
-        for span in &label_spans {
-            let span_width = text::width(&span.content);
-            if current_width + span_width <= label_w {
-                label_line_spans.push(Span::styled(
-                    span.content.clone(),
-                    span.style.patch(label_style),
-                ));
-                current_width += span_width;
+            spans.extend(
+                text::highlight_matches(&label_pad, &query, highlight_style)
+                    .into_iter()
+                    .map(|mut s| {
+                        s.style = s.style.patch(label_style);
+                        s
+                    }),
+            );
+        }
+        if !hint.is_empty() {
+            spans.push(Span::styled("  ", theme.faint_style()));
+            if query.is_empty() {
+                spans.push(Span::styled(hint, theme.faint_style()));
             } else {
-                // Truncate this span
-                let mut remaining = label_w - current_width;
-                let mut truncated = String::new();
-                for ch in span.content.chars() {
-                    let cw = text::width(&ch.to_string());
-                    if remaining < cw {
-                        break;
-                    }
-                    truncated.push(ch);
-                    remaining -= cw;
-                }
-                if !truncated.is_empty() {
-                    label_line_spans.push(Span::styled(truncated, span.style.patch(label_style)));
-                }
-                break;
+                spans.extend(text::highlight_matches(
+                    &hint,
+                    &query,
+                    Style::default().fg(theme.accent()),
+                ));
             }
         }
-        if label_line_spans.is_empty() {
-            label_line_spans.push(Span::styled(String::new(), label_style));
-        }
-
-        // Build hint spans
-        let mut hint_line_spans = Vec::new();
-        for span in &hint_spans {
-            hint_line_spans.push(span.clone());
-        }
-
-        lines.push(Line::from(
-            vec![Span::styled("   ", Style::default().fg(theme.accent()))]
-                .into_iter()
-                .chain(label_line_spans)
-                .chain(hint_line_spans)
-                .collect::<Vec<_>>(),
-        ));
+        lines.push(Line::from(spans));
     }
 
     let block = Block::bordered()
@@ -1693,6 +1678,10 @@ fn improve_list(frame: &mut Frame, area: Rect, app: &App, state: &ImproveState) 
     for (i, row) in state.rows.iter().enumerate() {
         let selected = i == state.cursor;
         let cursor_marker = if selected { glyph::GUTTER } else { " " };
+        // Budget the path so marker (3) + target (8) + path + size all fit
+        // inside the inner width; otherwise the border clips the `+N −N`.
+        let size = format!("  +{} −{}", row.added, row.removed);
+        let path_w = inner_w.saturating_sub(11 + size.width()).max(16);
         lines.push(Line::from(vec![
             Span::styled(
                 format!(" {cursor_marker} "),
@@ -1707,17 +1696,14 @@ fn improve_list(frame: &mut Frame, area: Rect, app: &App, state: &ImproveState) 
                 },
             ),
             Span::styled(
-                text::truncate_head(&row.path, inner_w.saturating_sub(12).max(16)),
+                text::truncate_head(&row.path, path_w),
                 if selected {
                     Style::default().fg(theme.strong())
                 } else {
                     theme.dim()
                 },
             ),
-            Span::styled(
-                format!("  +{} −{}", row.added, row.removed),
-                theme.faint_style(),
-            ),
+            Span::styled(size, theme.faint_style()),
         ]));
         lines.push(Line::from(vec![
             Span::styled("       ", theme.faint_style()),
@@ -1896,6 +1882,7 @@ pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
         OverlayKind::Memory => (76, 40),
         OverlayKind::Improve => (80, 34),
         OverlayKind::SudoPassword => (60, 12),
+        OverlayKind::Hacker => (84, 40),
     };
     let width = (area.width * w_pct / 100).clamp(40.min(area.width), 100.min(area.width));
     let height = (content_rows + 2).clamp(7.min(area.height), max_h.min(area.height));
@@ -1905,6 +1892,227 @@ pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
         width,
         height,
     }
+}
+
+// ---------------------------------------------------------------------------
+// /hacker — HACKER MODE workspace (assessment, modules, operations)
+// ---------------------------------------------------------------------------
+
+/// Content rows of the HACKER MODE workspace; mirrors `hacker`'s line list.
+pub fn hacker_row_count(app: &App) -> u16 {
+    hacker_lines(app).len() as u16
+}
+
+/// Rows the workspace renders: assessment summary, module list, operations.
+fn hacker_lines(app: &App) -> Vec<Line<'static>> {
+    let theme = &app.theme;
+    let now = std::time::SystemTime::now();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let label = |text: &str| Span::styled(format!("  {text:<12}"), theme.faint_style());
+    let value = |text: String, style: Style| Span::styled(text, style);
+
+    let (name, id, status, scope_inline) = match &app.hacker.assessment {
+        Some(ctx) => (
+            ctx.name.clone(),
+            ctx.id.clone(),
+            if ctx.is_active(now) {
+                format!("active · {}s left", ctx.seconds_remaining(now))
+            } else {
+                format!("inactive ({})", ctx.status.label())
+            },
+            {
+                let mut parts = Vec::new();
+                if !ctx.allowed_cidrs.is_empty() {
+                    parts.push(ctx.allowed_cidrs.join(", "));
+                }
+                if !ctx.allowed_domains.is_empty() {
+                    parts.push(ctx.allowed_domains.join(", "));
+                }
+                if parts.is_empty() {
+                    "none".to_string()
+                } else {
+                    parts.join(" · ")
+                }
+            },
+        ),
+        None => (
+            "no assessment".to_string(),
+            "-".to_string(),
+            if app.hacker.enabled {
+                "off - run /hacker to activate".to_string()
+            } else {
+                "disabled (hacker_enabled = false)".to_string()
+            },
+            "none".to_string(),
+        ),
+    };
+
+    lines.push(Line::from(vec![
+        label("assessment"),
+        value(name, Style::default().fg(theme.strong())),
+        Span::styled(format!("  ({id})"), theme.faint_style()),
+    ]));
+    lines.push(Line::from(vec![
+        label("status"),
+        value(
+            status,
+            Style::default().fg(if app.hacker.active {
+                theme.mode_hacker()
+            } else {
+                theme.muted()
+            }),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        label("scope"),
+        value(scope_inline, theme.dim()),
+    ]));
+    lines.push(Line::from(vec![
+        label("access"),
+        value(
+            format!(
+                "tools: {} · approvals: {}",
+                if app.hacker.active {
+                    "hacker"
+                } else {
+                    app.cfg.tool_policy.label()
+                },
+                if app.hacker.auto_approve_active(now) {
+                    "auto (authorized assessment)"
+                } else {
+                    "prompt"
+                }
+            ),
+            Style::default().fg(theme.muted()),
+        ),
+    ]));
+    lines.push(Line::default());
+
+    let registry = &app.hacker.registry;
+    lines.push(Line::from(vec![Span::styled(
+        format!("  modules      {} registered", registry.len()),
+        Style::default()
+            .fg(theme.accent())
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    )]));
+
+    let selected = hacker_cursor_for(app);
+    for (i, module) in registry.iter().enumerate() {
+        let is_selected = i == selected;
+        let marker = if is_selected { glyph::GUTTER } else { " " };
+        let caps = module.capabilities();
+        let floor = caps
+            .iter()
+            .map(|c| c.risk)
+            .min()
+            .unwrap_or(crate::hacker::RiskLevel::Low);
+        let name_style = if is_selected {
+            Style::default().fg(theme.strong())
+        } else {
+            theme.dim()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {marker} "), Style::default().fg(theme.accent())),
+            Span::styled(format!("{:<18}", module.id()), name_style),
+            Span::styled(format!("{:<16}", module.category().label()), theme.dim()),
+            Span::styled(
+                format!("{} cap · floor {}", caps.len(), floor.label()),
+                theme.faint_style(),
+            ),
+        ]));
+        if is_selected {
+            lines.push(Line::from(vec![
+                Span::styled("       ", theme.faint_style()),
+                Span::styled(module.description().to_string(), theme.faint_style()),
+            ]));
+        }
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(vec![Span::styled(
+        "  operations   /hacker run <module> <op> [target] [arg]",
+        Style::default()
+            .fg(theme.accent())
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    )]));
+    for op in crate::hacker::coordinator::OPERATIONS {
+        lines.push(Line::from(vec![
+            Span::styled("    ", theme.faint_style()),
+            Span::styled(
+                format!("{:<24}", format!("{}/{}", op.module, op.op)),
+                theme.dim(),
+            ),
+            Span::styled(
+                format!(
+                    "{:<17} {:<9}{}",
+                    op.category.label(),
+                    op.category.default_risk().label(),
+                    if op.needs_target {
+                        "target required"
+                    } else {
+                        "no target"
+                    }
+                ),
+                theme.faint_style(),
+            ),
+        ]));
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "  operations are scoped, bounded and audited; version matches stay Suspected until validated",
+        theme.faint_style(),
+    )));
+    lines
+}
+
+/// The module cursor from the open overlay (0 when it is not mounted).
+fn hacker_cursor_for(app: &App) -> usize {
+    match &app.overlay {
+        Some(Overlay::Hacker(state)) => state.cursor,
+        _ => 0,
+    }
+}
+
+/// HACKER MODE workspace overlay: read-only summary of the active assessment,
+/// the module catalogue and the executable operation table.
+pub fn hacker(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+    let lines = hacker_lines(app);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if app.hacker.active {
+            theme.mode_hacker()
+        } else {
+            theme.border_focus()
+        }))
+        .title(
+            Line::from(Span::styled(
+                " HACKER MODE ",
+                Style::default()
+                    .fg(if app.hacker.active {
+                        theme.mode_hacker()
+                    } else {
+                        theme.accent()
+                    })
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .centered(),
+        )
+        .title_bottom(
+            Line::from(Span::styled(
+                " ↑↓ module · esc close · /hacker exit to leave ",
+                theme.faint_style(),
+            ))
+            .right_aligned(),
+        )
+        .style(Style::default().bg(theme.panel_bg()));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 // ---------------------------------------------------------------------------

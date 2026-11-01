@@ -492,7 +492,7 @@ pub fn markdown_with_blocks(
                     out.push(Line::from(spans));
                 }
                 let end = out.len(); // the bottom border line
-                out.push(box_rule("╰", "╯", code_w, "copy", st));
+                out.push(box_rule("╰", "╯", code_w, "", st));
                 blocks.push((start, end, source.join("\n")));
             } else {
                 flush(&mut paragraph, &mut out);
@@ -528,7 +528,13 @@ pub fn markdown_with_blocks(
                     if table_col_widths.len() <= i {
                         table_col_widths.push(0);
                     }
-                    table_col_widths[i] = table_col_widths[i].max(width(cell));
+                    // Measure the RENDERED cell (markers stripped), so column
+                    // widths track what the grid actually paints.
+                    let w: usize = inline(cell, st)
+                        .iter()
+                        .map(|s| width(s.content.as_ref()))
+                        .sum();
+                    table_col_widths[i] = table_col_widths[i].max(w);
                 }
                 table_rows.push(cells);
             }
@@ -706,7 +712,6 @@ fn flush_table(
     };
     let widths = fit_table_widths(natural, budget);
     let bar = st.fence;
-    let head = st.base.add_modifier(Modifier::BOLD);
 
     let rule = |left: &str, mid: &str, right: &str| -> Line<'static> {
         let mut text = String::from(left);
@@ -723,30 +728,74 @@ fn flush_table(
     out.push(rule("┌", "┬", "┐"));
     for (r, row) in rows.iter().enumerate() {
         if has_header && r == 0 {
-            out.push(grid_row(row, &widths, head, bar));
+            out.push(grid_row(row, &widths, st, bar, true));
             out.push(rule("├", "┼", "┤"));
         } else {
-            out.push(grid_row(row, &widths, st.base, bar));
+            out.push(grid_row(row, &widths, st, bar, false));
         }
     }
     out.push(rule("└", "┴", "┘"));
 }
 
-/// One grid row: `│ cell │ cell │` with padded, truncated cells.
-fn grid_row(row: &[String], widths: &[usize], style: Style, bar: Style) -> Line<'static> {
+/// One grid row: `│ cell │ cell │` with padded, truncated cells. Cell text
+/// runs through the inline renderer so `**bold**` and `` `code` `` read
+/// styled — never as raw markers; header rows keep their bold emphasis.
+fn grid_row(
+    row: &[String],
+    widths: &[usize],
+    st: &MarkdownStyles,
+    bar: Style,
+    header: bool,
+) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for (i, col) in widths.iter().enumerate() {
         spans.push(Span::styled("│", bar));
+        spans.push(Span::raw(" "));
         let cell = row.get(i).map(String::as_str).unwrap_or("");
-        let text = if width(cell) > *col {
-            truncate(cell, *col)
-        } else {
-            pad_end(cell, *col)
-        };
-        spans.push(Span::styled(format!(" {text} "), style));
+        let mut cell_spans = inline(cell, st);
+        if header {
+            for s in &mut cell_spans {
+                s.style = s.style.add_modifier(Modifier::BOLD);
+            }
+        }
+        spans.extend(fit_cell(cell_spans, *col));
+        spans.push(Span::raw(" "));
     }
     spans.push(Span::styled("│", bar));
     Line::from(spans)
+}
+
+/// Fits a cell's inline spans into `col` display cells: over-wide content is
+/// truncated cluster-aware (ellipsis, same as `truncate`), under-wide content
+/// is padded on the right so grid columns stay aligned.
+fn fit_cell(spans: Vec<Span<'static>>, col: usize) -> Vec<Span<'static>> {
+    let total: usize = spans.iter().map(|s| width(s.content.as_ref())).sum();
+    if total <= col {
+        let mut spans = spans;
+        if let Some(last) = spans.last_mut() {
+            last.content.to_mut().push_str(&" ".repeat(col - total));
+        } else if col > 0 {
+            spans.push(Span::raw(" ".repeat(col)));
+        }
+        return spans;
+    }
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    for s in spans {
+        if used >= col {
+            break;
+        }
+        let w = width(s.content.as_ref());
+        if used + w <= col {
+            used += w;
+            out.push(s);
+        } else {
+            let cut = truncate(s.content.as_ref(), col - used);
+            out.push(Span::styled(cut, s.style));
+            used = col;
+        }
+    }
+    out
 }
 
 /// A code-block border rule, wide as the box interior, with an optional
@@ -1100,15 +1149,6 @@ fn fit_table_widths(natural: &[usize], available: usize) -> Vec<usize> {
         widths.iter_mut().for_each(|w| *w = each);
     }
     widths
-}
-
-/// Pads `s` with trailing spaces up to `w` display columns.
-fn pad_end(s: &str, w: usize) -> String {
-    let mut out = s.to_string();
-    for _ in width(s)..w {
-        out.push(' ');
-    }
-    out
 }
 
 fn fence_marker(line: &str) -> Option<&str> {
@@ -1588,6 +1628,93 @@ mod tests {
     }
 
     #[test]
+    fn markdown_bold_never_leaks_on_paragraph_lines() {
+        let theme = Theme::detect();
+        let st = MarkdownStyles::new(&theme);
+        let src = "Intro with **nanomite** bold.\n\n**Agent Loop & Provider**\n- Full loop: model calls tools\n\n**20 Built-in Tools** (grouped)\n\n**Session & Time Machine**\n";
+        let out = markdown(src, 100, &st);
+        let joined: String = out
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!joined.contains("**"), "asterisks leaked:\n{joined}");
+        // The emphasis is actually applied, not just stripped: every visible
+        // span on the line-leading bold row carries BOLD (wrap_spans splits
+        // the line per word, so match the row, not a single span).
+        let bold_line = out
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.content.contains("Agent")))
+            .expect("bold line rendered");
+        assert!(
+            bold_line
+                .spans
+                .iter()
+                .filter(|s| !s.content.trim().is_empty())
+                .all(|s| s.style.add_modifier.contains(Modifier::BOLD)),
+            "line-leading bold not fully styled: {bold_line:?}"
+        );
+    }
+
+    #[test]
+    fn markdown_table_cells_render_inline_markdown() {
+        let theme = Theme::detect();
+        let st = MarkdownStyles::new(&theme);
+        let out = markdown(
+            "| Category | Tools |\n|---|---|\n| **Files** | `list_files` |",
+            60,
+            &st,
+        );
+        let joined: String = out
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !joined.contains("**"),
+            "bold markers leaked in cells:\n{joined}"
+        );
+        assert!(
+            !joined.contains('`'),
+            "backticks leaked in cells:\n{joined}"
+        );
+        // Header cells keep the bold emphasis (fit_cell pads, so trim).
+        let header = out
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.content.contains("Category")))
+            .expect("header row rendered");
+        assert!(
+            header
+                .spans
+                .iter()
+                .filter(|s| !s.content.trim().is_empty() && s.content != "│")
+                .all(|s| s.style.add_modifier.contains(Modifier::BOLD)),
+            "header not bold: {header:?}"
+        );
+        // Body cells: `**Files**` renders bold, `` `list_files` `` renders as code.
+        let files = out
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.content.trim_end() == "Files"))
+            .expect("files row rendered");
+        assert!(
+            files.spans.iter().any(|s| s.content.trim_end() == "Files"
+                && s.style.add_modifier.contains(Modifier::BOLD)),
+            "cell bold not styled: {files:?}"
+        );
+        let tools = out
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.content.trim_end() == "list_files"))
+            .expect("tools row rendered");
+        assert!(
+            tools
+                .spans
+                .iter()
+                .any(|s| s.content.trim_end() == "list_files" && s.style == st.code),
+            "cell code not styled: {tools:?}"
+        );
+    }
+
+    #[test]
     fn markdown_renders_tables() {
         let theme = Theme::detect();
         let st = MarkdownStyles::new(&theme);
@@ -1835,8 +1962,12 @@ mod tests {
         assert_eq!(source, "let x = 1;");
         assert!(*end >= *start);
         assert!(*end < out.len());
-        // The bottom border row carries the copy hint.
-        assert!(out[*end].to_string().contains("copy"));
+        // The bottom border is a plain rule: no copy hint inside the box.
+        assert!(
+            !out[*end].to_string().contains("copy"),
+            "copy hint leaked into the code box: {}",
+            out[*end]
+        );
     }
 
     #[test]

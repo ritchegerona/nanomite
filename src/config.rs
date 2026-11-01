@@ -477,6 +477,44 @@ impl Reasoning {
     }
 }
 
+/// HACKER MODE settings. Disabled by default: entering the cybersecurity
+/// environment is always an explicit opt-in. No credential fields live here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HackerConfig {
+    /// Whether the `/hacker` environment may be entered at all.
+    pub enabled: bool,
+    /// Authorized scope: CIDRs, IP literals and/or domain names. This is the
+    /// user's authorization input and is never derived from model output.
+    pub scope: Vec<String>,
+    /// Assessment id shown in the workspace and the audit trail.
+    pub assessment_id: String,
+    /// How long an activated assessment stays valid.
+    pub session_minutes: u64,
+    /// Owner decision: skip the interactive approval prompt while an
+    /// authorized assessment is active. Still gated on a valid, unexpired,
+    /// in-scope assessment and always audited.
+    pub auto_approve: bool,
+    /// Write the append-only security audit log.
+    pub audit: bool,
+    /// Persist findings and evidence to the SQLite store. Off means operations
+    /// still run and audit, but nothing structured is retained.
+    pub store: bool,
+}
+
+impl Default for HackerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scope: Vec::new(),
+            assessment_id: "local".into(),
+            session_minutes: 60,
+            auto_approve: true,
+            audit: true,
+            store: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub provider: ProviderKind,
@@ -528,6 +566,8 @@ pub struct Config {
     /// (`Target::Prompt`): hand-write it, or let the agent propose a change to
     /// it in `/improve`. Defaults to `~/.config/nanomite/prompt.md`.
     pub prompt_file: Option<PathBuf>,
+    /// HACKER MODE settings (`[hacker]` section).
+    pub hacker: HackerConfig,
 }
 
 /// The subset of settings persisted to disk; everything else stays env-driven.
@@ -546,14 +586,30 @@ struct Stored {
     suggestions: Option<bool>,
     compact: Option<bool>,
     confirm_external: Option<bool>,
+    // `[hacker]` section.
+    hacker_enabled: Option<bool>,
+    hacker_scope: Option<String>,
+    hacker_assessment_id: Option<String>,
+    hacker_session_minutes: Option<u64>,
+    hacker_auto_approve: Option<bool>,
+    hacker_audit: Option<bool>,
+    hacker_store: Option<bool>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
 fn parse_stored(text: &str) -> Stored {
     let mut stored = Stored::default();
+    // `[section]` headers switch the table keys are matched against. Only the
+    // top level and `[hacker]` are recognised; other sections are ignored so
+    // hand-added comment blocks never break loading.
+    let mut section = String::new();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(inner) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = inner.trim().to_ascii_lowercase();
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
@@ -563,23 +619,57 @@ fn parse_stored(text: &str) -> Stored {
         if value.is_empty() {
             continue;
         }
-        match key.trim() {
-            "provider" => stored.provider = Some(value),
-            "base_url" => stored.base_url = Some(value),
-            "api_key" => stored.api_key = Some(value),
-            "model" => stored.model = Some(value),
-            "reasoning" => stored.reasoning = Some(value),
-            "theme" => stored.theme = Some(value),
-            "disabled_tools" => stored.disabled_tools = Some(value),
-            "tool_policy" => stored.tool_policy = Some(value),
-            "prompt_file" => stored.prompt_file = Some(value),
-            "reduced_motion" => stored.reduced_motion = value.parse().ok(),
-            "suggestions" => stored.suggestions = value.parse().ok(),
-            "compact" => stored.compact = value.parse().ok(),
+        let key = key.trim();
+        match section.as_str() {
+            "hacker" => match key {
+                "enabled" => stored.hacker_enabled = Some(parse_bool(&value)),
+                "scope" => stored.hacker_scope = Some(value),
+                "assessment_id" => stored.hacker_assessment_id = Some(value),
+                "session_minutes" => stored.hacker_session_minutes = value.parse().ok(),
+                "auto_approve" => stored.hacker_auto_approve = Some(parse_bool(&value)),
+                "audit" => stored.hacker_audit = Some(parse_bool(&value)),
+                "store" => stored.hacker_store = Some(parse_bool(&value)),
+                _ => {}
+            },
+            "" => match key {
+                "provider" => stored.provider = Some(value),
+                "base_url" => stored.base_url = Some(value),
+                "api_key" => stored.api_key = Some(value),
+                "model" => stored.model = Some(value),
+                "reasoning" => stored.reasoning = Some(value),
+                "theme" => stored.theme = Some(value),
+                "disabled_tools" => stored.disabled_tools = Some(value),
+                "tool_policy" => stored.tool_policy = Some(value),
+                "prompt_file" => stored.prompt_file = Some(value),
+                "reduced_motion" => stored.reduced_motion = parse_bool_opt(&value),
+                "suggestions" => stored.suggestions = parse_bool_opt(&value),
+                "compact" => stored.compact = parse_bool_opt(&value),
+                "confirm_external" => stored.confirm_external = parse_bool_opt(&value),
+                _ => {}
+            },
             _ => {}
         }
     }
     stored
+}
+
+/// Lenient boolean: "1/true/yes/on" (case-insensitive) is true; anything else
+/// is false. Matches the env conventions elsewhere in this file.
+fn parse_bool(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Like [`parse_bool`] but `None` for values that are neither true nor false,
+/// so a typo does not silently become `false`.
+fn parse_bool_opt(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 /// A missing or unreadable file simply means "nothing saved yet".
@@ -668,6 +758,22 @@ fn stored_text(cfg: &Config) -> String {
     if !cfg.confirm_external {
         lines.push("confirm_external = false".to_string());
     }
+    lines.push(String::new());
+    // HACKER MODE: written as a section so the knobs are discoverable. Disabled
+    // by default; enabling and set the authorized scope explicitly.
+    lines.push("[hacker]".to_string());
+    lines.push(format!("enabled = {}", cfg.hacker.enabled));
+    if !cfg.hacker.scope.is_empty() {
+        lines.push(format!("scope = {}", quote(&cfg.hacker.scope.join(","))));
+    }
+    lines.push(format!(
+        "assessment_id = {}",
+        quote(&cfg.hacker.assessment_id)
+    ));
+    lines.push(format!("session_minutes = {}", cfg.hacker.session_minutes));
+    lines.push(format!("auto_approve = {}", cfg.hacker.auto_approve));
+    lines.push(format!("audit = {}", cfg.hacker.audit));
+    lines.push(format!("store = {}", cfg.hacker.store));
     lines.push(String::new());
     lines.join("\n")
 }
@@ -872,6 +978,76 @@ impl Config {
             }
         };
 
+        // HACKER MODE: disabled unless explicitly enabled, and the scope is
+        // the user's authorization input. Env overrides the file, as usual.
+        let hacker = {
+            let enabled = if use_env {
+                first_env_one("NANOMITE_HACKER")
+                    .map(|v| parse_bool(&v))
+                    .unwrap_or_else(|| stored.hacker_enabled.unwrap_or(false))
+            } else {
+                stored.hacker_enabled.unwrap_or(false)
+            };
+            let scope_raw = if use_env {
+                first_env_one("NANOMITE_HACKER_SCOPE")
+            } else {
+                None
+            }
+            .or_else(|| stored.hacker_scope.clone())
+            .unwrap_or_default();
+            let scope: Vec<String> = scope_raw
+                .split([',', ' ', '\t', '\n'])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            let assessment_id = if use_env {
+                first_env_one("NANOMITE_HACKER_ASSESSMENT")
+            } else {
+                None
+            }
+            .or_else(|| stored.hacker_assessment_id.clone())
+            .unwrap_or_else(|| "local".to_string());
+            let session_minutes = if use_env {
+                num_env_u64("NANOMITE_HACKER_SESSION_MINUTES", 60)
+            } else {
+                stored.hacker_session_minutes.unwrap_or(60)
+            };
+            let auto_approve = if use_env {
+                match first_env_one("NANOMITE_HACKER_AUTO_APPROVE") {
+                    Some(v) => parse_bool(&v),
+                    None => stored.hacker_auto_approve.unwrap_or(true),
+                }
+            } else {
+                stored.hacker_auto_approve.unwrap_or(true)
+            };
+            let audit = if use_env {
+                match first_env_one("NANOMITE_HACKER_AUDIT") {
+                    Some(v) => parse_bool(&v),
+                    None => stored.hacker_audit.unwrap_or(true),
+                }
+            } else {
+                stored.hacker_audit.unwrap_or(true)
+            };
+            let store = if use_env {
+                match first_env_one("NANOMITE_HACKER_STORE") {
+                    Some(v) => parse_bool(&v),
+                    None => stored.hacker_store.unwrap_or(true),
+                }
+            } else {
+                stored.hacker_store.unwrap_or(true)
+            };
+            HackerConfig {
+                enabled,
+                scope,
+                assessment_id,
+                session_minutes: session_minutes.max(1),
+                auto_approve,
+                audit,
+                store,
+            }
+        };
+
         // Custom prompt file: the environment wins over the persisted path, and the
         // default location is always resolved so callers can report it.
         let prompt_file = (if use_env {
@@ -951,6 +1127,7 @@ impl Config {
             } else {
                 stored.compact.unwrap_or(false)
             },
+            hacker,
         }
     }
 
@@ -1111,6 +1288,39 @@ mod tests {
         let count = ids.len();
         ids.dedup();
         assert_eq!(ids.len(), count, "duplicate preset ids");
+    }
+
+    #[test]
+    fn hacker_store_roundtrips_and_env_overrides() {
+        let path =
+            std::env::temp_dir().join(format!("nanomite-hacker-{}.toml", std::process::id()));
+        fs::write(
+            &path,
+            "model = \"gpt-4o-mini\"\n[hacker]\nenabled = true\nstore = false\naudit = false\n",
+        )
+        .expect("write config");
+        let cfg = Config::load_from(&path);
+        assert!(cfg.hacker.enabled);
+        assert!(!cfg.hacker.store, "the file value must be honoured");
+        assert!(!cfg.hacker.audit);
+
+        // Environment overrides the file.
+        std::env::set_var("NANOMITE_CONFIG", &path);
+        std::env::set_var("NANOMITE_HACKER_STORE", "1");
+        assert!(
+            Config::from_env().hacker.store,
+            "NANOMITE_HACKER_STORE must win over the file"
+        );
+        std::env::remove_var("NANOMITE_HACKER_STORE");
+        std::env::remove_var("NANOMITE_CONFIG");
+
+        // No `[hacker]` section at all -> the store defaults on.
+        let plain =
+            std::env::temp_dir().join(format!("nanomite-hacker-none-{}.toml", std::process::id()));
+        fs::write(&plain, "model = \"gpt-4o-mini\"\n").expect("write config");
+        assert!(Config::load_from(&plain).hacker.store);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&plain);
     }
 
     #[test]
