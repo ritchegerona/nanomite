@@ -16,7 +16,7 @@ siblings are not part of the project:
   `memory.json`, `test.*`, `smoke.txt` — scratch, ignore.
 - `nanomite/target/` is ~5.5 GB; build scratch copies before full rebuilds.
 
-## Build state — READ FIRST (verified 2026-11-02, v0.8.0 + HACKER MODE Phase 4: opencode-style UI, reasoning streaming, browser tools, Kali bridge, findings store, assessment lifecycle, reporting ops, evidence verify, time machine, /team, density, ETA, update command)
+## Build state — READ FIRST (verified 2026-11-02, v0.8.0 + HACKER MODE Phase 4: assessment lifecycle, reporting ops, evidence verify, finding triage, more producers)
 
 `cargo check` (lib + bins) **passes clean**. `cargo test --lib` is
 **680 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
@@ -224,16 +224,6 @@ No CI, no `.github/`, no `rustfmt.toml`/`clippy.toml`, no `rust-toolchain`.
   `~/.local/share/nanomite/board/`. Tests must not write there — check for
   `NANOMITE_MEMORY_DIR`/`NANOMITE_CONFIG`/`NANOMITE_BOARD_DIR` overrides in
   tests before adding filesystem-touching code.
-
-## Environment facts
-
-- Ollama is **not** installed. Do not assume a local endpoint or any specific
-  model; verify tool-calling behavior before depending on it.
-- The suite is offline; no network, no services, no fixtures needed.
-- A live config exists at `~/.config/nanomite/config.toml` with memory at
-  `~/.config/nanomite/memory/`. Tests must not write there — check for
-  `NANOMITE_MEMORY_DIR`/`NANOMITE_CONFIG` overrides in tests before adding
-  filesystem-touching code.
 
 ## Workflow for substantial changes
 
