@@ -6,6 +6,8 @@
 use std::net::IpAddr;
 
 use super::ModuleReport;
+use crate::hacker::findings::{Confidence, Finding};
+use crate::hacker::risk::RiskLevel;
 
 /// Upper bound on addresses reported for one host.
 pub const MAX_ADDRESSES: usize = 32;
@@ -58,6 +60,28 @@ pub fn dns_with(host: &str, ips: &[IpAddr]) -> ModuleReport {
     for ip in &ips {
         report = report.line(ip.to_string());
     }
+    if !ips.is_empty() {
+        // Inventory is a direct observation, kept informational so it never
+        // reads as a vulnerability.
+        report = report.finding(
+            Finding::new(
+                "recon",
+                "dns",
+                host.trim(),
+                format!("dns inventory: {total} address(es)"),
+                RiskLevel::Informational,
+            )
+            .confidence(Confidence::Confirmed)
+            .detail(format!(
+                "{} resolves to {}",
+                host.trim(),
+                ips.iter()
+                    .map(|ip| ip.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        );
+    }
     report
 }
 
@@ -82,6 +106,22 @@ mod tests {
         let report = dns("example.com", &stub).unwrap();
         assert_eq!(report.summary, "2 address(es)");
         assert_eq!(report.lines, vec!["10.0.0.1", "10.0.0.2"]);
+    }
+
+    #[test]
+    fn inventory_emits_one_confirmed_finding_and_none_when_empty() {
+        use crate::hacker::findings::Confidence;
+        let stub = Stub(vec!["10.0.0.1".parse().unwrap()]);
+        let report = dns("example.com", &stub).unwrap();
+        assert_eq!(report.findings.len(), 1);
+        let f = &report.findings[0];
+        assert_eq!(f.confidence, Confidence::Confirmed);
+        assert_eq!(f.severity, RiskLevel::Informational);
+        assert!(f.title.contains("1 address(es)"));
+        assert!(f.detail.contains("10.0.0.1"));
+
+        let empty = dns("example.com", &Stub(vec![])).unwrap();
+        assert!(empty.findings.is_empty(), "no addresses, no finding");
     }
 
     #[test]

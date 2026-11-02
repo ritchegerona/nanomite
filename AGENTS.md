@@ -19,11 +19,11 @@ siblings are not part of the project:
 ## Build state — READ FIRST (verified 2026-11-02, v0.8.0 + HACKER MODE Phase 3: opencode-style UI, reasoning streaming, browser tools, Kali bridge, findings store, time machine, /team, density, ETA, update command)
 
 `cargo check` (lib + bins) **passes clean**. `cargo test --lib` is
-**655 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
+**664 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
 -- -D warnings` is clean. `cargo fmt --check` is clean.
 
 `tests/production_attach.rs` is a separate **integration** target (1 test, green)
-that exercises the real startup attach path. It is *not* part of the 655; quote
+that exercises the real startup attach path. It is *not* part of the 664; quote
 the two numbers separately.
 
 `benches/perf.rs` is a stable, zero-dep harness (median of 7 batches) and
@@ -34,15 +34,15 @@ compiles on the stable toolchain: `cargo bench` works, and `cargo test`
 
 ```bash
 cargo check            # clean
-cargo test --lib       # 655 passed, 0 failed, ~5 s, fully offline (verified)
-cargo test --test production_attach   # 1 passed (integration; not in the 655)
+cargo test --lib       # 664 passed, 0 failed, ~5 s, fully offline (verified)
+cargo test --test production_attach   # 1 passed (integration; not in the 664)
 cargo bench            # benches/perf.rs harness; bench profile inherits release
 cargo clippy --all-targets -- -D warnings   # clean (no clippy.toml / CI in the repo)
 cargo fmt
 ```
 
 Do not "fix" the suite by deleting tests or by claiming a count from
-README/docs without running it. Test counts in README may be stale; 655 is correct for
+README/docs without running it. Test counts in README may be stale; 664 is correct for
 `--lib`; the integration target is counted separately.
 
 Release profile sets `panic = "abort"`, so the panic hook in `src/main.rs:141`
@@ -90,7 +90,8 @@ broken.
   injected resolver/connector/fetcher/probe/process traits), `findings.rs`
   (typed `Finding`/`Confidence`/`FindingStatus`; severity reuses `RiskLevel`),
   `store.rs` (SQLite findings + evidence + assessments, `FindingSink` trait,
-  `NullSink`; SHA-256 evidence digests; `spawn_blocking`-driven).
+  `NullSink`; SHA-256 evidence digests; status triage; md/JSON/SARIF export;
+  `spawn_blocking`-driven).
   `exploitation` is **plan-only** — no payloads or exploit code. `kali` is a
   curated bridge to installed Kali assessment tools (`kali/available`,
   `kali/run`) using fixed argv templates via the shared bounded executor;
@@ -131,7 +132,7 @@ broken.
   `read_document` is the agent-facing door to it.
 - `tests/production_attach.rs` — integration target proving the real production
   attach path (memory + config) works from the outside. 1 test, separate from
-  the 655.
+  the 664.
 
 ## Invariants (do not break)
 

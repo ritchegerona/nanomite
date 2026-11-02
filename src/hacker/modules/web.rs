@@ -5,7 +5,7 @@
 //! to another host would escape the validated scope.
 
 use super::ModuleReport;
-use crate::hacker::findings::Finding;
+use crate::hacker::findings::{Confidence, Finding};
 use crate::hacker::risk::RiskLevel;
 
 /// Minimal response shape the analyzer needs.
@@ -126,8 +126,10 @@ pub fn analyze_headers(url: &str, fetched: &Fetched) -> ModuleReport {
     for (label, title, ok, severity) in &checks {
         report = report.line(format!("{} {label}", if *ok { "✓" } else { "✗" }));
         if !*ok {
+            // An absent header is directly observed, so it is `Confirmed`.
             report = report.finding(
                 Finding::new("web", "headers", url, *title, *severity)
+                    .confidence(Confidence::Confirmed)
                     .detail(format!("response from {url} did not include `{label}`")),
             );
         }
@@ -144,6 +146,7 @@ pub fn analyze_headers(url: &str, fetched: &Fetched) -> ModuleReport {
                 "server version disclosure",
                 RiskLevel::Informational,
             )
+            .confidence(Confidence::Confirmed)
             .detail(format!("Server: {server}")),
         );
     }
@@ -171,6 +174,7 @@ pub fn analyze_headers(url: &str, fetched: &Fetched) -> ModuleReport {
                     format!("cookie missing flags: {joined}"),
                     RiskLevel::Low,
                 )
+                .confidence(Confidence::Confirmed)
                 .detail(format!("a Set-Cookie response is missing: {joined}")),
             );
         }
@@ -216,6 +220,43 @@ mod tests {
             ),
         );
         assert!(hardened.summary.contains("no missing security headers"));
+    }
+
+    #[test]
+    fn observed_gaps_are_confirmed_findings_and_hits_are_informational() {
+        use crate::hacker::findings::Confidence;
+        let report = analyze_headers("https://example.com", &fetched(200, &[("Server", "nginx")]));
+        assert!(report.findings.len() >= 2);
+        assert!(report
+            .findings
+            .iter()
+            .all(|f| f.confidence == Confidence::Confirmed));
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.title == "missing content-security-policy"));
+        let disclosure = report
+            .findings
+            .iter()
+            .find(|f| f.title == "server version disclosure")
+            .expect("disclosure finding");
+        assert_eq!(disclosure.severity, RiskLevel::Informational);
+        // The hardened response has no missing-header findings.
+        let hardened = analyze_headers(
+            "https://example.com",
+            &fetched(
+                200,
+                &[
+                    ("Strict-Transport-Security", "max-age=1"),
+                    ("Content-Security-Policy", "default-src 'self'"),
+                    ("X-Content-Type-Options", "nosniff"),
+                    ("X-Frame-Options", "DENY"),
+                    ("Referrer-Policy", "no-referrer"),
+                    ("Permissions-Policy", "geolocation=()"),
+                ],
+            ),
+        );
+        assert!(hardened.findings.is_empty());
     }
 
     #[test]

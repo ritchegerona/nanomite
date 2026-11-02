@@ -167,23 +167,28 @@ persist them to SQLite at `<hacker dir>/findings.db` (default
 
 - A finding carries module/operation, target, a title, a **severity**
   (the shared informational→critical scale), a **confidence** and a status.
-- **Confidence is honest by construction.** Version and header heuristics can
-  only produce `Suspected`; `Confirmed` requires a validated reproduction and
-  is never inferred from a version match.
+- **Confidence is honest by construction.** Directly observed facts (an open
+  port, an absent header, a completed tool run, a DNS inventory) are
+  `Confirmed`. Inferences are `Suspected` — a version→CVE match is never
+  `Confirmed`.
 - Each finding's detail is stored as an **evidence** row with a **SHA-256** so a
   later reader can tell whether what they see is what was captured. Evidence
   text is scrubbed of secrets and bounded before it reaches disk; a `Set-Cookie`
   **value** is never stored — only which flags are missing.
-- `/hacker findings` lists the newest first; `/hacker findings show <id>` shows
-  one finding plus its evidence digest. `/hacker report` writes a markdown
-  report to `<hacker dir>/reports/` and prints the path.
+- `/hacker findings` lists the newest first; `show <id>` shows one finding plus
+  its evidence digest; `triage|accept|close <id>` updates its status (and is
+  itself audited). `/hacker report [md|json|sarif]` writes a markdown, JSON or
+  SARIF 2.1.0 report to `<hacker dir>/reports/` and prints the path.
 
 Findings are **evidence, not instructions**: `/hacker findings` output is
 display-only and is never fed back to a tool or to the model as authorization.
 
-Producers today: `web/headers` (missing headers, disclosure, cookie flags) and
-`vuln/correlate` (one finding per CVE match). `recon/dns`, `network/ports` and
-the Kali bridge still record the assessment and audit but emit no findings yet.
+Producers today: `web/headers` (missing headers, disclosure, cookie flags),
+`vuln/correlate` (one finding per CVE match, `Suspected`), `network/ports` (one
+informational finding per open port), `recon/dns` (one informational DNS
+inventory finding) and `kali/run` (one informational finding per run, so the
+bounded tool output is retained as hashed evidence). `kali/available` and
+`exploitation/plan` emit none.
 
 ## Bringing your own tooling
 

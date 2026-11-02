@@ -1150,12 +1150,50 @@ enum ImproveEvent {
     Review(ImproveReview),
 }
 
+/// What a `/hacker findings` invocation asks the store to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FindingsCmd {
+    List,
+    Show(i64),
+    SetStatus(i64, crate::hacker::FindingStatus),
+}
+
+/// Parses `/hacker findings` arguments. `Err(())` means "show usage".
+fn parse_findings_cmd(args: &str) -> Result<FindingsCmd, ()> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let id = |raw: &str| raw.parse::<i64>().map_err(|_| ());
+    match parts.as_slice() {
+        [] | ["list"] => Ok(FindingsCmd::List),
+        ["show", raw] => id(raw).map(FindingsCmd::Show),
+        [verb @ ("triage" | "accept" | "close"), raw] => {
+            let status = match *verb {
+                "triage" => crate::hacker::FindingStatus::Triaged,
+                "accept" => crate::hacker::FindingStatus::Accepted,
+                _ => crate::hacker::FindingStatus::Closed,
+            };
+            id(raw).map(|id| FindingsCmd::SetStatus(id, status))
+        }
+        _ => Err(()),
+    }
+}
+
 /// Formats findings for the transcript. Pure formatting around the store, run
 /// on the blocking pool. All text is display-only (never fed back to a tool).
-fn render_hacker_findings(path: &Path, show: Option<i64>) -> String {
+fn render_hacker_findings(path: &Path, cmd: FindingsCmd) -> String {
     let store = match crate::hacker::store::FindingsStore::open(path) {
         Ok(store) => store,
         Err(err) => return format!("findings store unavailable: {err}"),
+    };
+    if let FindingsCmd::SetStatus(id, status) = cmd {
+        return match store.set_status(id, status) {
+            Err(err) => format!("findings failed: {err}"),
+            Ok(false) => format!("no finding #{id}"),
+            Ok(true) => format!("finding #{id} -> {}", status.label()),
+        };
+    }
+    let show = match cmd {
+        FindingsCmd::Show(id) => Some(id),
+        _ => None,
     };
     match show {
         Some(id) => match store.finding(id) {
@@ -4226,9 +4264,10 @@ impl App {
                         .to_string(),
                 );
                 text.push(
-                    "findings: /hacker findings [list|show <id>] · report: /hacker report"
+                    "findings: /hacker findings [list|show <id>|triage|accept|close <id>]"
                         .to_string(),
                 );
+                text.push("report: /hacker report [md|json|sarif]".to_string());
                 self.entries
                     .push(Entry::new(EntryRole::System, text.join("\n")));
                 self.mark_dirty();
@@ -4283,7 +4322,7 @@ impl App {
                 }
             }
             "findings" | "finding" => self.run_hacker_findings(rest),
-            "report" => self.run_hacker_report(),
+            "report" => self.run_hacker_report(rest),
             other => {
                 self.toast(format!(
                     "unknown /hacker subcommand `{other}` - try help, run, kali, findings, report, status, modules, scope, audit, exit"
@@ -4379,60 +4418,70 @@ impl App {
             self.mark_dirty();
             return;
         }
-        let parts: Vec<&str> = args.split_whitespace().collect();
-        let show = match parts.as_slice() {
-            [] | ["list"] => None,
-            ["show", id] => match id.parse::<i64>() {
-                Ok(id) => Some(id),
-                Err(_) => {
-                    self.toast("usage: /hacker findings show <id>");
-                    self.mark_dirty();
-                    return;
-                }
-            },
-            _ => {
-                self.toast("usage: /hacker findings [list|show <id>]");
+        let cmd = match parse_findings_cmd(args) {
+            Ok(cmd) => cmd,
+            Err(()) => {
+                self.toast("usage: /hacker findings [list|show <id>|triage|accept|close <id>]");
                 self.mark_dirty();
                 return;
             }
         };
         let path = crate::hacker::store::FindingsStore::default_path();
-        let request = match show {
-            Some(id) => format!("findings #{id}"),
-            None => "findings".to_string(),
+        let request = match cmd {
+            FindingsCmd::List => "findings".to_string(),
+            FindingsCmd::Show(id) => format!("findings #{id}"),
+            FindingsCmd::SetStatus(id, status) => {
+                format!("findings #{id} {}", status.label())
+            }
         };
+        let audit = self.hacker.audit.clone();
         let tx = self.hacker_tx.clone();
+        let request_for_task = request.clone();
         self.handle.spawn_blocking(move || {
-            let text = render_hacker_findings(&path, show);
-            let _ = tx.send(HackerEvent::Lines { request, text });
+            let text = render_hacker_findings(&path, cmd);
+            // A triage decision is an operator action worth recording.
+            if let FindingsCmd::SetStatus(id, status) = cmd {
+                audit.append(
+                    &crate::hacker::AuditRecord::new("allowed", "ok")
+                        .with_operation("findings-triage")
+                        .with_detail(format!("finding {id} -> {}", status.label())),
+                );
+            }
+            let _ = tx.send(HackerEvent::Lines {
+                request: request_for_task,
+                text,
+            });
         });
-        self.toast("loading hacker findings ...");
+        self.toast(format!("hacker {request} ..."));
         self.mark_dirty();
     }
 
-    /// `/hacker report`: writes a markdown report and prints where it went.
-    fn run_hacker_report(&mut self) {
+    /// `/hacker report [md|json|sarif]`: writes a report and prints where it went.
+    fn run_hacker_report(&mut self, args: &str) {
         if !self.cfg.hacker.store {
             self.toast("findings store is disabled - set `[hacker] store = true`");
             self.mark_dirty();
             return;
         }
+        let Some(format) = crate::hacker::store::ReportFormat::parse(args) else {
+            self.toast("usage: /hacker report [md|json|sarif]");
+            self.mark_dirty();
+            return;
+        };
         let path = crate::hacker::store::FindingsStore::default_path();
         let dir = crate::hacker::store::reports_dir();
         let assessment = self.hacker.assessment.as_ref().map(|c| c.id.clone());
         let tx = self.hacker_tx.clone();
+        let request = format!("report {}", format.extension());
         self.handle.spawn_blocking(move || {
             let text = match crate::hacker::store::FindingsStore::open(&path) {
                 Err(err) => format!("hacker report failed: {err}"),
-                Ok(store) => match store.export_markdown(&dir, assessment.as_deref()) {
+                Ok(store) => match store.export(&dir, assessment.as_deref(), format) {
                     Ok(path) => format!("hacker report written: {}", path.display()),
                     Err(err) => format!("hacker report failed: {err}"),
                 },
             };
-            let _ = tx.send(HackerEvent::Lines {
-                request: "report".into(),
-                text,
-            });
+            let _ = tx.send(HackerEvent::Lines { request, text });
         });
         self.toast("writing hacker report ...");
         self.mark_dirty();
@@ -7278,6 +7327,32 @@ mod tests {
             .as_ref()
             .is_some_and(|(t, _)| t.contains("usage: /hacker kali nmap")));
         assert_eq!(app.entries.len(), before, "a usage error starts nothing");
+    }
+
+    #[test]
+    fn hacker_findings_command_parses_every_form() {
+        use crate::hacker::FindingStatus;
+        assert_eq!(parse_findings_cmd(""), Ok(FindingsCmd::List));
+        assert_eq!(parse_findings_cmd("list"), Ok(FindingsCmd::List));
+        assert_eq!(parse_findings_cmd("show 7"), Ok(FindingsCmd::Show(7)));
+        assert_eq!(
+            parse_findings_cmd("triage 3"),
+            Ok(FindingsCmd::SetStatus(3, FindingStatus::Triaged))
+        );
+        assert_eq!(
+            parse_findings_cmd("accept 4"),
+            Ok(FindingsCmd::SetStatus(4, FindingStatus::Accepted))
+        );
+        assert_eq!(
+            parse_findings_cmd("close 5"),
+            Ok(FindingsCmd::SetStatus(5, FindingStatus::Closed))
+        );
+        assert!(parse_findings_cmd("show nope").is_err());
+        assert!(parse_findings_cmd("triage").is_err());
+        assert!(parse_findings_cmd("bogus 1").is_err());
+        assert!(parse_findings_cmd("list extra").is_err());
+        // Report formats round-trip through the store's parser.
+        assert!(crate::hacker::store::ReportFormat::parse("sarif").is_some());
     }
 
     #[tokio::test]

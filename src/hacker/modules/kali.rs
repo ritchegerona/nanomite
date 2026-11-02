@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::ModuleReport;
+use crate::hacker::findings::{Confidence, Finding};
 use crate::hacker::registry::ModuleCategory;
 use crate::hacker::risk::RiskLevel;
 
@@ -346,7 +347,7 @@ pub fn run_report(
     } else {
         format!("exit {} · {}ms", out.exit_code, out.duration_ms)
     };
-    let mut report = ModuleReport::new("kali", "run", target, summary);
+    let mut report = ModuleReport::new("kali", "run", target, summary.clone());
     report = report.line(format!(
         "tool: {} ({} · {})",
         tool.name,
@@ -359,6 +360,7 @@ pub fn run_report(
     if stdout.is_empty() {
         report = report.line("(no stdout)");
     }
+    let mut output_excerpt = stdout.join("\n");
     for line in stdout {
         report = report.line(line);
     }
@@ -366,6 +368,28 @@ pub fn run_report(
     for line in stderr {
         report = report.line(format!("stderr: {line}"));
     }
+
+    // One informational finding per run so the (bounded) tool output is
+    // retained as hashed evidence, not just transcript text.
+    if out.timed_out {
+        output_excerpt.push_str("\n(timed out)");
+    }
+    let detail = if output_excerpt.trim().is_empty() {
+        format!("{} {} ({})", tool.name, argv.join(" "), summary)
+    } else {
+        format!("{} {}\n{}", tool.name, argv.join(" "), output_excerpt)
+    };
+    report = report.finding(
+        Finding::new(
+            "kali",
+            "run",
+            target,
+            format!("{} executed", tool.name),
+            RiskLevel::Informational,
+        )
+        .confidence(Confidence::Confirmed)
+        .detail(detail),
+    );
     report
 }
 
@@ -513,6 +537,34 @@ mod tests {
         // command line + 120 stdout lines + stderr line
         assert!(report.lines.len() <= 2 + MAX_STDOUT_LINES + 1);
         assert!(report.lines.iter().any(|l| l.starts_with("command: nmap")));
+    }
+
+    #[test]
+    fn run_report_records_one_confirmed_finding_as_evidence() {
+        use crate::hacker::findings::Confidence;
+        let tool = find("nmap").unwrap();
+        let argv = build_argv(tool, "10.0.0.5");
+        let out = ProcOutput {
+            exit_code: 0,
+            timed_out: false,
+            stdout: "PORT   STATE SERVICE\n22/tcp open  ssh".into(),
+            stderr: String::new(),
+            duration_ms: 42,
+        };
+        let report = run_report(tool, "10.0.0.5", &argv, &out);
+        assert_eq!(report.findings.len(), 1);
+        let f = &report.findings[0];
+        assert_eq!(f.confidence, Confidence::Confirmed);
+        assert_eq!(f.severity, RiskLevel::Informational);
+        assert_eq!(f.title, "nmap executed");
+        assert_eq!(f.target, "10.0.0.5");
+        assert!(f.detail.contains("22/tcp open"), "{}", f.detail);
+    }
+
+    #[test]
+    fn available_emits_no_findings() {
+        let report = available(&StubProbe(HashSet::from(["nmap"])));
+        assert!(report.findings.is_empty(), "inventory is not a finding");
     }
 
     #[test]

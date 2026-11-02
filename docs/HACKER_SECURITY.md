@@ -152,6 +152,10 @@ records what an already-authorized operation produced.
   never serve as proof of authorization (the assessment alone is).
 - **No elevation.** Persistence is gated by `[hacker] store`; disabling it
   stops writes but changes no authorization decision.
+- **Triage is audited.** `/hacker findings triage|accept|close <id>` records an
+  audit entry for the status change; it is a local metadata operation and needs
+  no assessment. `/hacker report [md|json|sarif]` only renders what is already
+  stored.
 
 ## External tools
 

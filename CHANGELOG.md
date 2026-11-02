@@ -6,6 +6,27 @@ never listed as released.
 
 ## [Unreleased]
 
+### Added
+
+- **HACKER MODE — finding triage**: `/hacker findings triage|accept|close <id>`
+  updates a finding's status in the store; the decision is itself written to
+  the audit log. implemented+tested.
+- **HACKER MODE — JSON and SARIF export**: `/hacker report [md|json|sarif]`.
+  JSON is a plain findings document; SARIF is 2.1.0 (severity → error/warning/
+  note, `module/operation` rule ids, target as the artifact URI). The markdown
+  export is unchanged. implemented+tested.
+- **HACKER MODE — more finding producers**: `network/ports` emits one
+  informational finding per open port, `recon/dns` one DNS-inventory finding,
+  and `kali/run` one informational finding per run so the bounded tool output
+  is retained as hashed evidence. implemented+tested.
+
+### Changed
+
+- **HACKER MODE — confidence is now an observation/inference split**: directly
+  observed facts (open port, absent header, completed tool run, DNS inventory)
+  are recorded as `Confirmed`; inferences stay `Suspected`, and a version→CVE
+  match is never `Confirmed`.
+
 ## [0.8.0] — 2026-11-02
 
 ### Added

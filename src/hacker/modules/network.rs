@@ -8,6 +8,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use super::ModuleReport;
+use crate::hacker::findings::{Confidence, Finding};
+use crate::hacker::risk::RiskLevel;
 
 /// Addresses probed per run (bounded).
 pub const MAX_IPS: usize = 8;
@@ -54,12 +56,12 @@ pub fn scan_ports(
     let ips = &ips[..ips.len().min(MAX_IPS)];
     let ports = &ports[..ports.len().min(MAX_PORTS)];
 
-    let mut open: Vec<String> = Vec::new();
+    let mut open: Vec<(IpAddr, u16)> = Vec::new();
     for ip in ips {
         for &port in ports {
             let addr = SocketAddr::new(*ip, port);
             if connector.connect(addr, DEFAULT_TIMEOUT) {
-                open.push(format!("{ip}:{port} open"));
+                open.push((*ip, port));
             }
         }
     }
@@ -71,8 +73,22 @@ pub fn scan_ports(
         format!("{} open across {probed} probe(s)", open.len())
     };
     let mut report = ModuleReport::new("network", "ports", host, summary);
-    for line in open {
-        report = report.line(line);
+    for (ip, port) in open {
+        report = report.line(format!("{ip}:{port} open"));
+        // An accepted connection is directly observed, so it is `Confirmed`.
+        report = report.finding(
+            Finding::new(
+                "network",
+                "ports",
+                format!("{ip}:{port}"),
+                format!("open port {port}"),
+                RiskLevel::Informational,
+            )
+            .confidence(Confidence::Confirmed)
+            .detail(format!(
+                "TCP port {port} accepted a connection on {ip} (target {host})"
+            )),
+        );
     }
     Ok(report)
 }
@@ -101,6 +117,38 @@ mod tests {
         assert!(report.lines.contains(&"10.0.0.1:22 open".to_string()));
         assert!(report.lines.contains(&"10.0.0.1:443 open".to_string()));
         assert!(!report.lines.iter().any(|l| l.contains(":80")));
+    }
+
+    #[test]
+    fn open_ports_become_confirmed_informational_findings() {
+        use crate::hacker::findings::Confidence;
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let open = HashSet::from([(ip, 22), (ip, 443)]);
+        let report = scan_ports("example.com", &[ip], &[22, 80, 443], &Stub { open }).unwrap();
+        assert_eq!(report.findings.len(), 2, "one finding per open port");
+        assert!(report
+            .findings
+            .iter()
+            .all(|f| f.confidence == Confidence::Confirmed));
+        assert!(report
+            .findings
+            .iter()
+            .all(|f| f.severity == RiskLevel::Informational));
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.title == "open port 443" && f.target == "10.0.0.1:443"));
+        // A closed port produces no finding.
+        let none = scan_ports(
+            "example.com",
+            &[ip],
+            &[80],
+            &Stub {
+                open: HashSet::new(),
+            },
+        )
+        .unwrap();
+        assert!(none.findings.is_empty());
     }
 
     #[test]

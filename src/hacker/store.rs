@@ -18,7 +18,7 @@ use std::time::SystemTime;
 
 use super::audit::{hacker_dir, scrub_secrets};
 use super::context::AssessmentContext;
-use super::findings::Finding;
+use super::findings::{Finding, FindingStatus};
 use super::modules::ModuleReport;
 
 /// Database filename under the hacker directory.
@@ -118,6 +118,33 @@ impl FindingSink for NullSink {
     }
     fn enabled(&self) -> bool {
         false
+    }
+}
+
+/// Export format for a findings report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportFormat {
+    Markdown,
+    Json,
+    Sarif,
+}
+
+impl ReportFormat {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "md" | "markdown" => Some(ReportFormat::Markdown),
+            "json" => Some(ReportFormat::Json),
+            "sarif" => Some(ReportFormat::Sarif),
+            _ => None,
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            ReportFormat::Markdown => "md",
+            ReportFormat::Json => "json",
+            ReportFormat::Sarif => "sarif",
+        }
     }
 }
 
@@ -274,6 +301,16 @@ impl FindingsStore {
             .map_err(FindingStoreError::from)
     }
 
+    /// Updates a finding's triage status. Returns `false` when no such id.
+    pub fn set_status(&self, id: i64, status: FindingStatus) -> Result<bool, FindingStoreError> {
+        let conn = self.lock();
+        let changed = conn.execute(
+            "UPDATE findings SET status = ?1 WHERE id = ?2",
+            params![status.label(), id],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Evidence rows for a finding, oldest first.
     pub fn evidence(&self, finding_id: i64) -> Result<Vec<StoredEvidence>, FindingStoreError> {
         let conn = self.lock();
@@ -379,25 +416,138 @@ impl FindingsStore {
         Ok(out)
     }
 
+    /// Renders a machine-readable JSON report.
+    pub fn render_json(&self, assessment_id: Option<&str>) -> Result<String, FindingStoreError> {
+        let findings = self.findings(assessment_id, HARD_FINDING_LIMIT)?;
+        let entries: Vec<serde_json::Value> = findings
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "id": f.id,
+                    "assessment_id": f.assessment_id,
+                    "module": f.module,
+                    "operation": f.operation,
+                    "target": f.target,
+                    "title": f.title,
+                    "severity": f.severity,
+                    "confidence": f.confidence,
+                    "status": f.status,
+                    "detail": f.detail,
+                    "created_at": f.created_at,
+                })
+            })
+            .collect();
+        let doc = serde_json::json!({
+            "tool": "nanomite-hacker",
+            "version": env!("CARGO_PKG_VERSION"),
+            "assessment": assessment_id,
+            "generated": now_rfc3339(),
+            "finding_count": entries.len(),
+            "findings": entries,
+        });
+        serde_json::to_string_pretty(&doc)
+            .map_err(|e| FindingStoreError::Database(format!("json: {e}")))
+    }
+
+    /// Renders a SARIF 2.1.0 report (the shape CI/security dashboards ingest).
+    pub fn render_sarif(&self, assessment_id: Option<&str>) -> Result<String, FindingStoreError> {
+        let findings = self.findings(assessment_id, HARD_FINDING_LIMIT)?;
+        let results: Vec<serde_json::Value> = findings
+            .iter()
+            .map(|f| {
+                let text = if f.detail.is_empty() {
+                    f.title.clone()
+                } else {
+                    format!("{}\n{}", f.title, f.detail)
+                };
+                serde_json::json!({
+                    "ruleId": format!("{}/{}", f.module, f.operation),
+                    "level": sarif_level(&f.severity),
+                    "message": { "text": text },
+                    "locations": [{
+                        "physicalLocation": {
+                            "artifactLocation": { "uri": f.target }
+                        }
+                    }],
+                    "properties": {
+                        "findingId": f.id,
+                        "severity": f.severity,
+                        "confidence": f.confidence,
+                        "status": f.status,
+                    }
+                })
+            })
+            .collect();
+        let doc = serde_json::json!({
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {
+                    "driver": {
+                        "name": "nanomite-hacker",
+                        "informationUri": "https://github.com/ritchegerona/nanomite",
+                        "version": env!("CARGO_PKG_VERSION"),
+                    }
+                },
+                "results": results,
+            }]
+        });
+        serde_json::to_string_pretty(&doc)
+            .map_err(|e| FindingStoreError::Database(format!("sarif: {e}")))
+    }
+
+    /// Renders a report in `format`.
+    pub fn render(
+        &self,
+        assessment_id: Option<&str>,
+        format: ReportFormat,
+    ) -> Result<String, FindingStoreError> {
+        match format {
+            ReportFormat::Markdown => self.render_markdown(assessment_id),
+            ReportFormat::Json => self.render_json(assessment_id),
+            ReportFormat::Sarif => self.render_sarif(assessment_id),
+        }
+    }
+
+    /// Writes a report in `format` into `dir` and returns the path.
+    pub fn export(
+        &self,
+        dir: &Path,
+        assessment_id: Option<&str>,
+        format: ReportFormat,
+    ) -> Result<PathBuf, FindingStoreError> {
+        let body = self.render(assessment_id, format)?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| FindingStoreError::Io(format!("create {}: {e}", dir.display())))?;
+        let stem = assessment_id.unwrap_or("all");
+        let name = format!(
+            "{}-{}.{}",
+            sanitize_file_stem(stem),
+            now_rfc3339().replace([':', '+'], "-"),
+            format.extension()
+        );
+        let path = dir.join(name);
+        std::fs::write(&path, body)
+            .map_err(|e| FindingStoreError::Io(format!("write {}: {e}", path.display())))?;
+        Ok(path)
+    }
+
     /// Writes a markdown report into `dir` and returns the path.
     pub fn export_markdown(
         &self,
         dir: &Path,
         assessment_id: Option<&str>,
     ) -> Result<PathBuf, FindingStoreError> {
-        let body = self.render_markdown(assessment_id)?;
-        std::fs::create_dir_all(dir)
-            .map_err(|e| FindingStoreError::Io(format!("create {}: {e}", dir.display())))?;
-        let stem = assessment_id.unwrap_or("all");
-        let name = format!(
-            "{}-{}.md",
-            sanitize_file_stem(stem),
-            now_rfc3339().replace([':', '+'], "-")
-        );
-        let path = dir.join(name);
-        std::fs::write(&path, body)
-            .map_err(|e| FindingStoreError::Io(format!("write {}: {e}", path.display())))?;
-        Ok(path)
+        self.export(dir, assessment_id, ReportFormat::Markdown)
+    }
+}
+
+/// Maps a stored severity label onto a SARIF result level.
+fn sarif_level(severity: &str) -> &'static str {
+    match severity {
+        "medium" => "warning",
+        "high" | "critical" => "error",
+        _ => "note",
     }
 }
 
@@ -579,6 +729,7 @@ mod tests {
                 "missing content-security-policy",
                 RiskLevel::Medium,
             )
+            .confidence(Confidence::Confirmed)
             .detail("body: no CSP header · password=hunter2"),
         )
     }
@@ -598,7 +749,7 @@ mod tests {
         let findings = store.findings(Some("asm-1"), 10).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, "medium");
-        assert_eq!(findings[0].confidence, "suspected");
+        assert_eq!(findings[0].confidence, "confirmed");
         assert_eq!(findings[0].status, "open");
 
         let evidence = store.evidence(findings[0].id).unwrap();
@@ -693,7 +844,7 @@ mod tests {
         let md = store.render_markdown(Some("asm-1")).unwrap();
         assert!(md.contains("# Findings — Lab"));
         assert!(md.contains("missing content-security-policy"));
-        assert!(md.contains("confidence: suspected"));
+        assert!(md.contains("confidence: confirmed"));
 
         let dir = std::env::temp_dir().join(format!("nanomite-report-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -710,6 +861,69 @@ mod tests {
             .render_markdown(None)
             .unwrap()
             .contains("all assessments"));
+    }
+
+    #[test]
+    fn status_can_be_triaged_and_round_trips() {
+        let store = FindingsStore::open_in_memory().unwrap();
+        let id = store
+            .insert_finding(
+                "asm-1",
+                &Finding::new("web", "headers", "t", "x", RiskLevel::Low),
+            )
+            .unwrap();
+        assert!(store.set_status(id, FindingStatus::Triaged).unwrap());
+        assert_eq!(store.finding(id).unwrap().unwrap().status, "triaged");
+        assert!(store.set_status(id, FindingStatus::Closed).unwrap());
+        assert_eq!(store.finding(id).unwrap().unwrap().status, "closed");
+        // Unknown id: no change, no error.
+        assert!(!store.set_status(9999, FindingStatus::Closed).unwrap());
+    }
+
+    #[test]
+    fn report_formats_parse_and_emit_valid_documents() {
+        assert_eq!(ReportFormat::parse(""), Some(ReportFormat::Markdown));
+        assert_eq!(ReportFormat::parse("MD"), Some(ReportFormat::Markdown));
+        assert_eq!(ReportFormat::parse("json"), Some(ReportFormat::Json));
+        assert_eq!(ReportFormat::parse("SARIF"), Some(ReportFormat::Sarif));
+        assert_eq!(ReportFormat::parse("xml"), None);
+        assert_eq!(ReportFormat::Sarif.extension(), "sarif");
+
+        let store = FindingsStore::open_in_memory().unwrap();
+        store.record(&ctx(), &report()).unwrap();
+
+        let json: serde_json::Value =
+            serde_json::from_str(&store.render_json(Some("asm-1")).unwrap()).unwrap();
+        assert_eq!(json["finding_count"], 1);
+        assert_eq!(json["findings"][0]["severity"], "medium");
+
+        let sarif: serde_json::Value =
+            serde_json::from_str(&store.render_sarif(Some("asm-1")).unwrap()).unwrap();
+        assert_eq!(sarif["version"], "2.1.0");
+        assert_eq!(
+            sarif["runs"][0]["tool"]["driver"]["name"],
+            "nanomite-hacker"
+        );
+        assert_eq!(sarif["runs"][0]["results"][0]["level"], "warning");
+        assert_eq!(sarif["runs"][0]["results"][0]["ruleId"], "web/headers");
+    }
+
+    #[test]
+    fn export_writes_each_format_with_its_extension() {
+        let store = FindingsStore::open_in_memory().unwrap();
+        store.record(&ctx(), &report()).unwrap();
+        let dir = std::env::temp_dir().join(format!("nanomite-report-fmt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (format, ext) in [
+            (ReportFormat::Markdown, "md"),
+            (ReportFormat::Json, "json"),
+            (ReportFormat::Sarif, "sarif"),
+        ] {
+            let path = store.export(&dir, Some("asm-1"), format).unwrap();
+            assert_eq!(path.extension().unwrap(), ext);
+            assert!(path.is_file());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
