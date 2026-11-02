@@ -63,9 +63,9 @@ impl Risk {
 }
 
 /// Asks the user before a risky tool call runs. The UI layer implements
-/// this over its event loop; builds without one (headless runs, tests, or
-/// `confirm_external = false`) fall back to the mode policy alone, exactly
-/// as before this gate existed.
+/// this over its event loop; only Plan mode consults it (Coder, Build and
+/// Hacker auto-approve - owner decision). Builds without one (headless runs,
+/// tests, or `confirm_external = false`) fall back to the mode policy alone.
 pub trait Confirmer: Send + Sync {
     /// `true` allows the call; `false` refuses it with a user-declined
     /// error the model can read and route around.

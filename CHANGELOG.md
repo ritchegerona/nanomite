@@ -8,6 +8,17 @@ never listed as released.
 
 ### Added
 
+- **HACKER MODE — assessment lifecycle**: `/hacker assessment list|use <id>|
+  complete [<id>]`. Assessments persist their authorized scope; `use` resumes
+  only a stored, authorized, unexpired assessment and re-runs `validate()`;
+  completing the active assessment deactivates HACKER MODE and falls back to
+  the configured tool policy. implemented+tested.
+- **HACKER MODE — `reporting` operations**: `reporting/summary` counts findings
+  by severity and status, and `reporting/export <md|json|sarif>` writes a
+  report. Both are passive and target-less, route through the coordinator, and
+  use the same store reads as `/hacker report`. implemented+tested.
+- **HACKER MODE — evidence verification**: `/hacker findings verify <id>`
+  re-computes every evidence SHA-256 and flags a mismatch. implemented+tested.
 - **HACKER MODE — finding triage**: `/hacker findings triage|accept|close <id>`
   updates a finding's status in the store; the decision is itself written to
   the audit log. implemented+tested.
@@ -22,6 +33,10 @@ never listed as released.
 
 ### Changed
 
+- **Tool confirmation prompts are now Plan-only** (owner decision): the
+  `Confirmer` gate still asks before `Risk::External` calls in Plan mode, while
+  Coder, Build and Hacker auto-approve so a working session is never interrupted.
+  Plan mode's own policy still refuses command execution. implemented+tested.
 - **HACKER MODE — confidence is now an observation/inference split**: directly
   observed facts (open port, absent header, completed tool run, DNS inventory)
   are recorded as `Confirmed`; inferences stay `Suspected`, and a version→CVE

@@ -17,7 +17,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::SystemTime;
 
 use super::audit::{hacker_dir, scrub_secrets};
-use super::context::AssessmentContext;
+use super::context::{AssessmentContext, AssessmentStatus};
 use super::findings::{Finding, FindingStatus};
 use super::modules::ModuleReport;
 
@@ -66,6 +66,36 @@ pub struct StoredAssessment {
     pub finding_count: i64,
 }
 
+/// A persisted assessment together with everything needed to resume it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAssessmentSpec {
+    pub id: String,
+    pub name: String,
+    pub authorization_ref: Option<String>,
+    pub status: String,
+    pub start: SystemTime,
+    pub expiry: SystemTime,
+    pub cidrs: Vec<String>,
+    pub domains: Vec<String>,
+}
+
+/// Counts for one scope (all assessments, or a single one).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReportSummary {
+    pub total: usize,
+    /// `(severity label, count)`, ordered by the severity scale.
+    pub by_severity: Vec<(String, usize)>,
+    /// `(status label, count)`, ordered alphabetically.
+    pub by_status: Vec<(String, usize)>,
+}
+
+/// Result of re-hashing one evidence row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceCheck {
+    pub id: i64,
+    pub ok: bool,
+}
+
 /// A persisted finding row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredFinding {
@@ -109,6 +139,19 @@ pub trait FindingSink: Send + Sync {
     }
 }
 
+/// Write **and** read access to findings, as the coordinator's `reporting`
+/// operations need both. Implemented by [`FindingsStore`]; [`NullSink`]
+/// answers reads with an error so a disabled store never fakes a report.
+pub trait FindingsBackend: FindingSink {
+    fn summary(&self, assessment_id: Option<&str>) -> Result<ReportSummary, String>;
+    fn export(
+        &self,
+        dir: &Path,
+        assessment_id: Option<&str>,
+        format: ReportFormat,
+    ) -> Result<PathBuf, String>;
+}
+
 /// A sink that persists nothing. Used when the store is disabled.
 pub struct NullSink;
 
@@ -118,6 +161,20 @@ impl FindingSink for NullSink {
     }
     fn enabled(&self) -> bool {
         false
+    }
+}
+
+impl FindingsBackend for NullSink {
+    fn summary(&self, _assessment_id: Option<&str>) -> Result<ReportSummary, String> {
+        Err("findings store is disabled".into())
+    }
+    fn export(
+        &self,
+        _dir: &Path,
+        _assessment_id: Option<&str>,
+        _format: ReportFormat,
+    ) -> Result<PathBuf, String> {
+        Err("findings store is disabled".into())
     }
 }
 
@@ -242,7 +299,13 @@ impl FindingsStore {
                 created_at TEXT    NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_evidence_finding
-                ON evidence(finding_id);",
+                ON evidence(finding_id);
+            CREATE TABLE IF NOT EXISTS assessment_scopes (
+                assessment_id TEXT PRIMARY KEY,
+                cidrs         TEXT NOT NULL DEFAULT '[]',
+                domains       TEXT NOT NULL DEFAULT '[]',
+                updated_at    TEXT NOT NULL
+            );",
         )?;
         Ok(())
     }
@@ -251,6 +314,132 @@ impl FindingsStore {
     pub fn upsert_assessment(&self, ctx: &AssessmentContext) -> Result<(), FindingStoreError> {
         let conn = self.lock();
         upsert_assessment(&conn, ctx)
+    }
+
+    /// Persists `ctx`'s authorized scope, so the assessment can be listed with
+    /// its scope and resumed later.
+    pub fn save_scope(&self, ctx: &AssessmentContext) -> Result<(), FindingStoreError> {
+        let conn = self.lock();
+        save_scope(&conn, ctx)
+    }
+
+    /// Updates an assessment's lifecycle status. Returns `false` for unknown ids.
+    pub fn set_assessment_status(
+        &self,
+        id: &str,
+        status: AssessmentStatus,
+    ) -> Result<bool, FindingStoreError> {
+        let conn = self.lock();
+        let changed = conn.execute(
+            "UPDATE assessments SET status = ?1 WHERE id = ?2",
+            params![status.label(), id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Loads one assessment with its persisted scope, for resuming.
+    pub fn load_assessment(
+        &self,
+        id: &str,
+    ) -> Result<Option<StoredAssessmentSpec>, FindingStoreError> {
+        let conn = self.lock();
+        let row = conn
+            .query_row(
+                "SELECT a.id, a.name, a.authorization_ref, a.status, a.started_at, a.expiry_at,
+                        COALESCE(s.cidrs, '[]'), COALESCE(s.domains, '[]')
+                 FROM assessments a
+                 LEFT JOIN assessment_scopes s ON s.assessment_id = a.id
+                 WHERE a.id = ?1",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((id, name, authorization_ref, status, start, expiry, cidrs, domains)) = row else {
+            return Ok(None);
+        };
+        let start = parse_rfc3339(&start).ok_or_else(|| {
+            FindingStoreError::Database(format!("assessment {id}: bad started_at"))
+        })?;
+        let expiry = parse_rfc3339(&expiry).ok_or_else(|| {
+            FindingStoreError::Database(format!("assessment {id}: bad expiry_at"))
+        })?;
+        Ok(Some(StoredAssessmentSpec {
+            id,
+            name,
+            authorization_ref,
+            status,
+            start,
+            expiry,
+            cidrs: parse_json_list(&cidrs),
+            domains: parse_json_list(&domains),
+        }))
+    }
+
+    /// Finding counts by severity and status, optionally scoped.
+    pub fn summary(&self, assessment_id: Option<&str>) -> Result<ReportSummary, FindingStoreError> {
+        let conn = self.lock();
+        let mut out = ReportSummary::default();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT severity, COUNT(*) FROM findings
+                 WHERE (?1 IS NULL OR assessment_id = ?1)
+                 GROUP BY severity",
+            )?;
+            let rows = stmt.query_map(params![assessment_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (severity, count) = row?;
+                out.by_severity.push((severity, count.max(0) as usize));
+            }
+        }
+        {
+            let mut stmt = conn.prepare(
+                "SELECT status, COUNT(*) FROM findings
+                 WHERE (?1 IS NULL OR assessment_id = ?1)
+                 GROUP BY status",
+            )?;
+            let rows = stmt.query_map(params![assessment_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (status, count) = row?;
+                out.by_status.push((status, count.max(0) as usize));
+            }
+        }
+        out.total = out.by_severity.iter().map(|(_, n)| n).sum();
+        // Deterministic order: descending severity, then alphabetical status.
+        out.by_severity
+            .sort_by_key(|(label, _)| std::cmp::Reverse(severity_rank(label)));
+        out.by_status.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(out)
+    }
+
+    /// Re-hashes each evidence row of a finding and reports whether it matches
+    /// the recorded digest (empty when the finding has no evidence).
+    pub fn verify_evidence(
+        &self,
+        finding_id: i64,
+    ) -> Result<Vec<EvidenceCheck>, FindingStoreError> {
+        let rows = self.evidence(finding_id)?;
+        Ok(rows
+            .into_iter()
+            .map(|e| EvidenceCheck {
+                id: e.id,
+                ok: sha256_hex(e.excerpt.as_bytes()) == e.sha256,
+            })
+            .collect())
     }
 
     /// Persists one finding and its evidence row; returns the finding id.
@@ -551,13 +740,29 @@ fn sarif_level(severity: &str) -> &'static str {
     }
 }
 
+impl FindingsBackend for FindingsStore {
+    fn summary(&self, assessment_id: Option<&str>) -> Result<ReportSummary, String> {
+        FindingsStore::summary(self, assessment_id).map_err(|e| e.to_string())
+    }
+
+    fn export(
+        &self,
+        dir: &Path,
+        assessment_id: Option<&str>,
+        format: ReportFormat,
+    ) -> Result<PathBuf, String> {
+        FindingsStore::export(self, dir, assessment_id, format).map_err(|e| e.to_string())
+    }
+}
+
 impl FindingSink for FindingsStore {
-    /// Persists the assessment header, every finding and one evidence row per
-    /// finding (the finding's detail, hashed). Done under a single lock so a
+    /// Persists the assessment header, scope, every finding and one evidence row
+    /// per finding (the finding's detail, hashed). Done under a single lock so a
     /// partially written operation is never observable.
     fn record(&self, ctx: &AssessmentContext, report: &ModuleReport) -> Result<usize, String> {
         let conn = self.lock();
         upsert_assessment(&conn, ctx).map_err(|e| e.to_string())?;
+        save_scope(&conn, ctx).map_err(|e| e.to_string())?;
         for finding in &report.findings {
             let id = insert_finding(&conn, &ctx.id, finding).map_err(|e| e.to_string())?;
             let excerpt = bounded_scrub(&finding.detail);
@@ -565,6 +770,41 @@ impl FindingSink for FindingsStore {
         }
         Ok(report.findings.len())
     }
+}
+
+fn save_scope(conn: &Connection, ctx: &AssessmentContext) -> Result<(), FindingStoreError> {
+    let cidrs = serde_json::to_string(&ctx.allowed_cidrs).unwrap_or_else(|_| "[]".into());
+    let domains = serde_json::to_string(&ctx.allowed_domains).unwrap_or_else(|_| "[]".into());
+    conn.execute(
+        "INSERT INTO assessment_scopes (assessment_id, cidrs, domains, updated_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(assessment_id) DO UPDATE SET
+            cidrs = excluded.cidrs,
+            domains = excluded.domains,
+            updated_at = excluded.updated_at",
+        params![ctx.id, cidrs, domains, now_rfc3339()],
+    )?;
+    Ok(())
+}
+
+fn parse_json_list(raw: &str) -> Vec<String> {
+    serde_json::from_str(raw).unwrap_or_default()
+}
+
+fn severity_rank(label: &str) -> u8 {
+    match label {
+        "informational" => 0,
+        "low" => 1,
+        "medium" => 2,
+        "high" => 3,
+        "critical" => 4,
+        _ => 5,
+    }
+}
+
+fn parse_rfc3339(raw: &str) -> Option<SystemTime> {
+    let dt = chrono::DateTime::parse_from_rfc3339(raw).ok()?;
+    Some(dt.with_timezone(&chrono::Utc).into())
 }
 
 fn upsert_assessment(conn: &Connection, ctx: &AssessmentContext) -> Result<(), FindingStoreError> {
@@ -923,6 +1163,126 @@ mod tests {
             assert_eq!(path.extension().unwrap(), ext);
             assert!(path.is_file());
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scope_is_persisted_and_an_assessment_can_be_loaded_for_resume() {
+        let store = FindingsStore::open_in_memory().unwrap();
+        store.record(&ctx(), &report()).unwrap();
+
+        let spec = store.load_assessment("asm-1").unwrap().expect("loaded");
+        assert_eq!(spec.id, "asm-1");
+        assert_eq!(spec.name, "Lab");
+        assert_eq!(spec.authorization_ref.as_deref(), Some("LAB-1"));
+        assert_eq!(spec.status, "authorized");
+        assert_eq!(spec.cidrs, vec!["10.0.0.0/8".to_string()]);
+        assert!(spec.domains.is_empty());
+        assert!(spec.expiry > spec.start);
+
+        assert!(store.load_assessment("nope").unwrap().is_none());
+
+        // Scope is refreshed on the next save.
+        let mut renamed = ctx();
+        renamed.allowed_domains = vec!["example.com".into()];
+        store.save_scope(&renamed).unwrap();
+        let spec = store.load_assessment("asm-1").unwrap().unwrap();
+        assert_eq!(spec.domains, vec!["example.com".to_string()]);
+    }
+
+    #[test]
+    fn assessment_status_can_be_completed() {
+        let store = FindingsStore::open_in_memory().unwrap();
+        store.record(&ctx(), &report()).unwrap();
+        assert!(store
+            .set_assessment_status("asm-1", AssessmentStatus::Completed)
+            .unwrap());
+        assert_eq!(
+            store.load_assessment("asm-1").unwrap().unwrap().status,
+            "completed"
+        );
+        assert!(!store
+            .set_assessment_status("missing", AssessmentStatus::Completed)
+            .unwrap());
+    }
+
+    #[test]
+    fn summary_counts_by_severity_and_status() {
+        let store = FindingsStore::open_in_memory().unwrap();
+        store.upsert_assessment(&ctx()).unwrap();
+        for (sev, status) in [
+            (RiskLevel::Critical, FindingStatus::Open),
+            (RiskLevel::High, FindingStatus::Open),
+            (RiskLevel::Low, FindingStatus::Closed),
+        ] {
+            let id = store
+                .insert_finding("asm-1", &Finding::new("web", "headers", "t", "x", sev))
+                .unwrap();
+            store.set_status(id, status).unwrap();
+        }
+        let s = store.summary(Some("asm-1")).unwrap();
+        assert_eq!(s.total, 3);
+        // Descending severity: critical, high, low.
+        assert_eq!(
+            s.by_severity,
+            vec![
+                ("critical".to_string(), 1),
+                ("high".to_string(), 1),
+                ("low".to_string(), 1),
+            ]
+        );
+        assert_eq!(
+            s.by_status,
+            vec![("closed".to_string(), 1), ("open".to_string(), 2)]
+        );
+        assert!(store.summary(Some("other")).unwrap().total == 0);
+        assert_eq!(store.summary(None).unwrap().total, 3);
+    }
+
+    #[test]
+    fn evidence_verification_detects_tampering() {
+        let dir = std::env::temp_dir().join(format!("nanomite-verify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(STORE_FILE);
+        let (finding_id, id);
+        {
+            let store = FindingsStore::open(&path).unwrap();
+            // `record` writes the evidence row that `verify_evidence` checks.
+            store.record(&ctx(), &report()).unwrap();
+            finding_id = store.findings(Some("asm-1"), 10).unwrap()[0].id;
+            id = store.evidence(finding_id).unwrap()[0].id;
+            let checks = store.verify_evidence(finding_id).unwrap();
+            assert_eq!(checks, vec![EvidenceCheck { id, ok: true }]);
+        }
+        // Simulate an external writer tampering with the stored excerpt.
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute(
+                "UPDATE evidence SET excerpt = 'tampered' WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        }
+        let store = FindingsStore::open(&path).unwrap();
+        let checks = store.verify_evidence(finding_id).unwrap();
+        assert_eq!(checks, vec![EvidenceCheck { id, ok: false }]);
+        // A finding with no evidence yields an empty check list.
+        assert!(store.verify_evidence(999).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn findings_store_implements_the_backend_reads() {
+        let store = FindingsStore::open_in_memory().unwrap();
+        store.record(&ctx(), &report()).unwrap();
+        let backend: &dyn FindingsBackend = &store;
+        assert_eq!(backend.summary(Some("asm-1")).unwrap().total, 1);
+        let dir = std::env::temp_dir().join(format!("nanomite-backend-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = backend
+            .export(&dir, Some("asm-1"), ReportFormat::Json)
+            .unwrap();
+        assert!(path.is_file());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -233,7 +233,7 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/hacker",
         aliases: &["/sec"],
-        hint: "HACKER MODE workspace - /hacker [status|modules|scope|audit|run|exit] (alt+shift+h)",
+        hint: "HACKER MODE workspace - /hacker [status|modules|scope|audit|run|assessment|findings|report|exit] (alt+shift+h)",
         kind: Command::Hacker,
     },
     // -- appearance ------------------------------------------------------------

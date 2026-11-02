@@ -97,12 +97,13 @@ pages, and `nanomite update` to move to the next version in one command.
   answers, streamed live into an overlay
 - **HACKER MODE** (`/hacker`, off by default) — an authorized cybersecurity
   operations environment, separate from the tool-permission ladder: a typed
-  assessment scope, an independent authorization gate, a gated auto-approve and
-  a secret-scrubbed audit log. Bounded recon/network/web/vuln operations run
-  through one coordinator, installed Kali assessment tools (`nmap`, `nikto`,
-  `nuclei`, …) run from fixed argv templates, findings persist to SQLite with
-  hashed evidence and triage, and `/hacker report [md|json|sarif]` exports a
-  report. Exploitation stays plan-only — no payloads
+  assessment scope, an independent authorization gate, and a secret-scrubbed
+  audit log. Bounded recon/network/web/vuln operations run through one
+  coordinator, installed Kali assessment tools (`nmap`, `nikto`, `nuclei`, …)
+  run from fixed argv templates, findings persist to SQLite with hashed
+  evidence and triage, named assessments can be listed/resumed/completed,
+  evidence digests re-verified, and a `reporting` module summarizes or exports
+  (markdown/JSON/SARIF). Exploitation stays plan-only — no payloads
 - **Follow-up suggestions** — when a turn finishes, a tiny side-call asks the
   model for three short next-step prompts and pops them up above the prompt:
   `Tab` cycles, `enter` sends the highlighted one, `esc` or typing dismisses
@@ -145,7 +146,7 @@ pages, and `nanomite update` to move to the next version in one command.
   and they are appended to the system prompt on every turn
 - **Persistent setup** — provider, key, model, theme and tool toggles are saved
   to `~/.config/nanomite/config.toml` and survive restarts
-- **Offline-capable test suite** — 664 tests, zero network required
+- **Offline-capable test suite** — 680 tests, zero network required
 
 ## Installation
 

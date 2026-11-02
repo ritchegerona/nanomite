@@ -1,9 +1,11 @@
 # HACKER MODE
 
-> Status: **Phase 3 — findings & evidence store.** Phase 2 operations run
+> Status: **Phase 4 — assessment lifecycle & reporting.** Phase 2 operations run
 > against an active assessment, plus a curated bridge to installed Kali
-> assessment tools; successful operations now persist structured findings and
-> hashed evidence to a SQLite store and can export a markdown report.
+> assessment tools; successful operations persist structured findings and
+> hashed evidence to a SQLite store. Named assessments can be listed, resumed
+> and completed, a `reporting` module summarizes/exports them, and stored
+> evidence can be re-verified against its SHA-256.
 > Exploitation is **plan-only** (no payloads, no compromise automation).
 > HACKER MODE is a cybersecurity operations *environment*. It is **not**
 > `ToolPolicy::Hacker`, which is a general tool-permission level.
@@ -25,8 +27,11 @@ persistence infrastructure unchanged, and is **disabled by default**.
 /hacker run <module> <op> [target] [arg]
 /hacker kali list  # installed Kali assessment tools
 /hacker kali <tool> <target>
-/hacker findings   # persisted findings (also: findings show <id>)
-/hacker report     # export a markdown report to the hacker dir
+/hacker findings   # persisted findings (also: show <id>, verify <id>)
+/hacker report [md|json|sarif]   # export to the hacker dir
+/hacker assessment list          # persisted assessments
+/hacker assessment use <id>      # resume one (stored scope + window)
+/hacker assessment complete [<id>]
 /hacker exit       # leave, restore the configured tool policy
 ```
 
@@ -51,7 +56,7 @@ enabled = false            # opt-in; default off
 scope = "10.0.0.0/8,example.com"   # authorized CIDRs/IPs/domains (comma- or space-separated)
 assessment_id = "local"
 session_minutes = 60       # how long an activated assessment stays valid
-auto_approve = true        # skip the approval prompt while an authorized assessment is active
+auto_approve = true        # retained bypass; the confirmation prompt is Plan-only
 audit = true               # write the append-only audit log
 store = true               # persist findings + evidence to the SQLite store
 ```
@@ -78,7 +83,7 @@ whether permissions and auto-approval are on, the 12-module catalogue with each
 module's category/capability count/risk floor, and the executable operation
 table with each operation's category and risk floor.
 
-## Operations (Phase 2)
+## Operations
 
 | operation | category | floor | target | does |
 |---|---|---|---|---|
@@ -95,6 +100,14 @@ execute, the target is authorized *before* any I/O, anything that connects or
 fetches is resolved and every address re-checked (a permitted hostname cannot
 become an SSRF into private/metadata space), and every allow/deny/error is
 audited with a duration.
+
+Phase 4 adds two passive, target-less `reporting` operations. Both read only
+the findings store — they never touch a target:
+
+| operation | category | floor | target | does |
+|---|---|---|---|---|
+| `reporting/summary` | passive | low | none | counts findings by severity and status |
+| `reporting/export` | passive | low | none (format arg) | writes md/JSON/SARIF, same renderer as `/hacker report` |
 
 Execution properties:
 
@@ -114,14 +127,12 @@ Execution properties:
 `recon`, `network`, `web`, `vuln`, `forensics`, `osint`, `threat-intel`,
 `password`, `wireless`, `exploitation`, `post-exploitation`, `reporting`.
 
-Four modules execute their first operation (recon, network, web, vuln),
-`exploitation` provides the plan operation, and `kali` bridges installed
-assessment tools. The rest remain descriptors until their phase lands.
+Five modules execute operations (`recon`, `network`, `web`, `vuln`,
+`reporting`), `exploitation` provides the plan operation, and `kali` bridges
+installed assessment tools. The rest remain descriptors until their phase lands.
 
 ## Not (yet) implemented
 
-- No finding triage/edit commands, no multi-asset assessment manager, and no
-  SARIF/JSON export — `/hacker report` writes markdown only.
 - No authenticated enumeration, password auditing, wireless work or
   post-exploitation.
 - No exploit execution of any kind. Confirmation, PoC tooling and any
@@ -176,7 +187,8 @@ persist them to SQLite at `<hacker dir>/findings.db` (default
   text is scrubbed of secrets and bounded before it reaches disk; a `Set-Cookie`
   **value** is never stored — only which flags are missing.
 - `/hacker findings` lists the newest first; `show <id>` shows one finding plus
-  its evidence digest; `triage|accept|close <id>` updates its status (and is
+  its evidence digest; `verify <id>` re-computes every evidence SHA-256 and
+  flags a mismatch; `triage|accept|close <id>` updates its status (and is
   itself audited). `/hacker report [md|json|sarif]` writes a markdown, JSON or
   SARIF 2.1.0 report to `<hacker dir>/reports/` and prints the path.
 
@@ -190,12 +202,31 @@ inventory finding) and `kali/run` (one informational finding per run, so the
 bounded tool output is retained as hashed evidence). `kali/available` and
 `exploitation/plan` emit none.
 
+## Assessment lifecycle (Phase 4)
+
+Assessments are persisted with their authorized scope, so they survive a
+restart and can be resumed by id:
+
+- `/hacker assessment list` reads the newest assessments from the store
+  (id, name, status, finding count, window, authorization reference).
+- `/hacker assessment use <id>` loads the **stored** scope and window and calls
+  `HackerSession::resume`, which refuses a disabled session, an empty scope, a
+  non-authorized/completed assessment, an expired window or one that is not
+  valid yet. The scope always comes from the store/config — never from model
+  output — and `validate()` runs before the session switches.
+- `/hacker assessment complete [<id>]` marks an assessment completed; if it is
+  the active one, HACKER MODE deactivates and the tool policy falls back.
+
+The agent cannot call these: they are local slash commands (metadata + store
+reads). Resuming never bypasses the authorization gate, the scope checks or the
+audit log.
+
 ## Bringing your own tooling
 
 nanomite coordinates and records; it does not embed offensive tooling. To use
 an existing authorized framework, register it as an external tool in the tool
 manifest and set `risk = "external"` so the general `ToolPolicy` gate keeps it
-behind Build/Hacker mode. With an active assessment, the gated auto-approve
-already applies.
+behind Build/Hacker mode. HACKER MODE never shows the interactive confirmation
+prompt (the gate is Plan-only).
 
 See `docs/HACKER_SECURITY.md` for the authorization, scope and audit model.

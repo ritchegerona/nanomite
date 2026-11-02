@@ -1,6 +1,6 @@
 # HACKER MODE — security model
 
-> Status: **Phase 2, implemented+tested.** Describes only what is implemented.
+> Status: **Phase 4, implemented+tested.** Describes only what is implemented.
 
 ## Separation from the existing policy
 
@@ -104,24 +104,18 @@ Typed targets and rules in `src/hacker/scope.rs`:
 `OperationCategory` sets a **floor** (`effective_risk`), so a module cannot
 under-declare an intrusive operation as informational.
 
-## Approval — the gated auto-approve (owner decision)
+## Approval — Plan-only confirmation gate (owner decision 2026-11-02)
 
-When HACKER MODE is active **and** an authorized, unexpired, scope-validated
-assessment is loaded, and `hacker.auto_approve` is on, the interactive
-confirmation prompt for `Risk::External` tool calls is skipped. The model
-cannot set this: the bypass is a shared flag driven only by entering HACKER
-MODE with a configured scope.
+The interactive confirmation prompt for `Risk::External` tool calls
+(`run_command`, `ssh_run`, `memory_delete`, the browser tools) is consulted only
+in **Plan** mode; Coder, Build and Hacker auto-approve, so an active session is
+never interrupted. A denial in Plan mode returns `user_declined` to the model.
 
-The bypass is **gated**, not global:
-
-- it requires `enabled` + a loaded assessment that passes `validate()`;
-- it requires the assessment to be `Authorized` and unexpired — an expired
-  session drops the bypass on the next tick (`App::on_tick`);
-- permissions widen to `ToolPolicy::Hacker` only while that same valid
-  assessment holds, and fall back to the configured policy on expiry or exit;
-- every operation is still audited.
-
-Turning `hacker.auto_approve` off keeps the prompt even inside HACKER MODE.
+HACKER MODE therefore never prompts. This does not weaken its controls: the
+authorization gate, the scope checks and the audit log run for every operation
+regardless of tool mode. `hacker.auto_approve` and the shared bypass flag are
+retained as defense-in-depth; with the Plan-only gate the confirmer is already
+skipped while HACKER MODE is in force.
 
 ## Audit
 
@@ -146,7 +140,8 @@ records what an already-authorized operation produced.
   value is never stored — only the names of missing flags.
 - **Evidence integrity.** Each finding's detail is stored as an evidence row
   with a SHA-256 (`sha2`) and byte count, so a reader can verify the excerpt is
-  unchanged.
+  unchanged. `/hacker findings verify <id>` re-computes every digest and reports
+  a mismatch instead of trusting the row.
 - **Display-only on the way out.** `/hacker findings` and `/hacker report`
   render text for the operator. That output is never fed back to a tool and can
   never serve as proof of authorization (the assessment alone is).
@@ -156,6 +151,25 @@ records what an already-authorized operation produced.
   audit entry for the status change; it is a local metadata operation and needs
   no assessment. `/hacker report [md|json|sarif]` only renders what is already
   stored.
+- **Reporting reads the store only.** `reporting/summary` and
+  `reporting/export` are passive operations with no target: they call the same
+  store reads as `/hacker report` and never touch a target.
+
+## Assessment lifecycle
+
+Assessments are persisted with their authorized scope and can be resumed by id:
+
+- `/hacker assessment list` reads persisted assessments (metadata only).
+- `/hacker assessment use <id>` loads the **stored** scope and window and calls
+  `HackerSession::resume`, which refuses a disabled session, an empty scope, a
+  non-authorized/completed assessment, an expired window or one that is not yet
+  valid. The scope is never taken from model output, and `validate()` runs
+  before the session switches.
+- `/hacker assessment complete [<id>]` updates the status row; if it is the
+  active assessment, HACKER MODE deactivates and the tool policy falls back.
+
+None of these commands can authorize an operation by themselves; resuming still
+passes the full authorization gate, scope checks and audit on every operation.
 
 ## External tools
 

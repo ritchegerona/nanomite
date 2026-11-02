@@ -1024,14 +1024,16 @@ struct SessionGrants {
 }
 
 /// The UI side of `agent::policy::Confirmer`: granted tools fast-path,
-/// everything else queues a `ConfirmRequest` for the y/n/a/d prompt.
+/// everything else queues a `ConfirmRequest` for the y/n/a/d prompt. The
+/// runtime only consults this gate in Plan mode.
 pub(crate) struct UiConfirmer {
     tx: tokio::sync::mpsc::UnboundedSender<ConfirmRequest>,
     grants: Arc<std::sync::Mutex<SessionGrants>>,
     /// HACKER MODE bypass: set exactly while an authorized, unexpired,
-    /// scope-validated assessment is active (see `HackerSession`). When set,
-    /// risky calls are auto-approved. The model can never set this flag - only
-    /// the user entering HACKER MODE with a configured scope can.
+    /// scope-validated assessment is active (see `HackerSession`). Retained as
+    /// defense-in-depth; with the Plan-only gate the confirmer is already
+    /// skipped while HACKER MODE is in force. The model can never set this
+    /// flag - only the user entering HACKER MODE with a configured scope can.
     bypass: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -1156,6 +1158,56 @@ enum FindingsCmd {
     List,
     Show(i64),
     SetStatus(i64, crate::hacker::FindingStatus),
+    Verify(i64),
+}
+
+/// What a `/hacker assessment` invocation asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AssessmentCmd {
+    List,
+    Use(String),
+    Complete(Option<String>),
+}
+
+/// Parses `/hacker assessment` arguments. `Err(())` means "show usage".
+fn parse_assessment_cmd(args: &str) -> Result<AssessmentCmd, ()> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts.as_slice() {
+        [] | ["list"] => Ok(AssessmentCmd::List),
+        ["use", id] => Ok(AssessmentCmd::Use((*id).to_string())),
+        ["complete"] => Ok(AssessmentCmd::Complete(None)),
+        ["complete", id] => Ok(AssessmentCmd::Complete(Some((*id).to_string()))),
+        _ => Err(()),
+    }
+}
+
+/// Renders the persisted assessment list for the transcript.
+fn render_assessment_list(path: &Path) -> String {
+    let store = match crate::hacker::store::FindingsStore::open(path) {
+        Ok(store) => store,
+        Err(err) => return format!("findings store unavailable: {err}"),
+    };
+    match store.assessments(100) {
+        Err(err) => format!("assessment list failed: {err}"),
+        Ok(rows) if rows.is_empty() => "no assessments recorded yet".to_string(),
+        Ok(rows) => {
+            let mut out = format!("{} assessment(s):\n", rows.len());
+            for a in rows {
+                out.push_str(&format!(
+                    "  {} · {} · status {} · {} finding(s)\n    window {} → {}\n    authorization: {}\n    resume with: /hacker assessment use {}\n",
+                    a.id,
+                    a.name,
+                    a.status,
+                    a.finding_count,
+                    a.started_at,
+                    a.expiry_at,
+                    a.authorization_ref.as_deref().unwrap_or("(none recorded)"),
+                    a.id
+                ));
+            }
+            out
+        }
+    }
 }
 
 /// Parses `/hacker findings` arguments. `Err(())` means "show usage".
@@ -1165,6 +1217,7 @@ fn parse_findings_cmd(args: &str) -> Result<FindingsCmd, ()> {
     match parts.as_slice() {
         [] | ["list"] => Ok(FindingsCmd::List),
         ["show", raw] => id(raw).map(FindingsCmd::Show),
+        ["verify", raw] => id(raw).map(FindingsCmd::Verify),
         [verb @ ("triage" | "accept" | "close"), raw] => {
             let status = match *verb {
                 "triage" => crate::hacker::FindingStatus::Triaged,
@@ -1189,6 +1242,27 @@ fn render_hacker_findings(path: &Path, cmd: FindingsCmd) -> String {
             Err(err) => format!("findings failed: {err}"),
             Ok(false) => format!("no finding #{id}"),
             Ok(true) => format!("finding #{id} -> {}", status.label()),
+        };
+    }
+    if let FindingsCmd::Verify(id) = cmd {
+        return match store.verify_evidence(id) {
+            Err(err) => format!("findings failed: {err}"),
+            Ok(checks) if checks.is_empty() => format!("finding #{id} has no evidence"),
+            Ok(checks) => {
+                let mut out = format!("evidence for finding #{id}:\n");
+                for c in checks {
+                    out.push_str(&format!(
+                        "  #{} {}\n",
+                        c.id,
+                        if c.ok {
+                            "ok (sha256 matches)"
+                        } else {
+                            "MISMATCH (content changed since capture)"
+                        }
+                    ));
+                }
+                out
+            }
         };
     }
     let show = match cmd {
@@ -1258,6 +1332,10 @@ enum HackerEvent {
     },
     /// Pre-rendered transcript text from a findings/report query.
     Lines { request: String, text: String },
+    /// A persisted assessment loaded for `/hacker assessment use`.
+    Resume(Box<crate::hacker::StoredAssessmentSpec>),
+    /// `/hacker assessment complete` finished for this assessment id.
+    Completed(String),
 }
 
 /// opencode-style follow-up suggestions: after a turn finishes, a tiny
@@ -1432,7 +1510,9 @@ impl App {
         );
         let hacker_bypass = hacker.bypass_flag();
 
-        // Interactive tool confirmations: on by default; test presets and
+        // Interactive tool confirmations: on by default, but the runtime only
+        // consults the gate in Plan mode - Coder, Build and Hacker
+        // auto-approve (owner decision). Test presets and
         // `confirm_external = false` keep the old always-allow behavior.
         let (confirmer, confirm_rx, confirm_grants) = if cfg.confirm_external {
             let grants = Arc::new(std::sync::Mutex::new(SessionGrants::default()));
@@ -4264,10 +4344,13 @@ impl App {
                         .to_string(),
                 );
                 text.push(
-                    "findings: /hacker findings [list|show <id>|triage|accept|close <id>]"
+                    "findings: /hacker findings [list|show|verify|triage|accept|close] <id>"
                         .to_string(),
                 );
                 text.push("report: /hacker report [md|json|sarif]".to_string());
+                text.push(
+                    "assessments: /hacker assessment [list|use <id>|complete [<id>]]".to_string(),
+                );
                 self.entries
                     .push(Entry::new(EntryRole::System, text.join("\n")));
                 self.mark_dirty();
@@ -4322,6 +4405,7 @@ impl App {
                 }
             }
             "findings" | "finding" => self.run_hacker_findings(rest),
+            "assessment" | "assessments" => self.run_hacker_assessment(rest),
             "report" => self.run_hacker_report(rest),
             other => {
                 self.toast(format!(
@@ -4349,6 +4433,7 @@ impl App {
             if let Err(err) = self.rebuild_runtime() {
                 self.toast(format!("policy switch failed: {err}"));
             }
+            self.spawn_hacker_assessment_save();
         }
         let Some(spec) = crate::hacker::coordinator::operation_spec(module, op) else {
             self.toast(format!(
@@ -4433,6 +4518,7 @@ impl App {
             FindingsCmd::SetStatus(id, status) => {
                 format!("findings #{id} {}", status.label())
             }
+            FindingsCmd::Verify(id) => format!("findings #{id} verify"),
         };
         let audit = self.hacker.audit.clone();
         let tx = self.hacker_tx.clone();
@@ -4454,6 +4540,109 @@ impl App {
         });
         self.toast(format!("hacker {request} ..."));
         self.mark_dirty();
+    }
+
+    /// `/hacker assessment list|use <id>|complete [<id>]`: reads and resumes
+    /// persisted assessments on the blocking pool.
+    fn run_hacker_assessment(&mut self, args: &str) {
+        if !self.cfg.hacker.store {
+            self.toast("findings store is disabled - set `[hacker] store = true`");
+            self.mark_dirty();
+            return;
+        }
+        let cmd = match parse_assessment_cmd(args) {
+            Ok(cmd) => cmd,
+            Err(()) => {
+                self.toast("usage: /hacker assessment [list|use <id>|complete [<id>]]");
+                self.mark_dirty();
+                return;
+            }
+        };
+        let path = crate::hacker::store::FindingsStore::default_path();
+        let tx = self.hacker_tx.clone();
+        match cmd {
+            AssessmentCmd::List => {
+                self.handle.spawn_blocking(move || {
+                    let text = render_assessment_list(&path);
+                    let _ = tx.send(HackerEvent::Lines {
+                        request: "assessments".into(),
+                        text,
+                    });
+                });
+                self.toast("loading assessments ...");
+            }
+            AssessmentCmd::Use(id) => {
+                let label = id.clone();
+                self.handle.spawn_blocking(move || {
+                    let text = match crate::hacker::store::FindingsStore::open(&path) {
+                        Err(err) => format!("assessment use failed: {err}"),
+                        Ok(store) => match store.load_assessment(&id) {
+                            Err(err) => format!("assessment use failed: {err}"),
+                            Ok(Some(spec)) => {
+                                let _ = tx.send(HackerEvent::Resume(Box::new(spec)));
+                                return;
+                            }
+                            Ok(None) => format!("no assessment `{id}`"),
+                        },
+                    };
+                    let _ = tx.send(HackerEvent::Lines {
+                        request: format!("assessment use {id}"),
+                        text,
+                    });
+                });
+                self.toast(format!("loading assessment {label} ..."));
+            }
+            AssessmentCmd::Complete(id) => {
+                let id = id.or_else(|| self.hacker.assessment.as_ref().map(|c| c.id.clone()));
+                let Some(id) = id else {
+                    self.toast("no active assessment to complete");
+                    self.mark_dirty();
+                    return;
+                };
+                let label = id.clone();
+                self.handle.spawn_blocking(move || {
+                    let done = match crate::hacker::store::FindingsStore::open(&path) {
+                        Err(err) => {
+                            let _ = tx.send(HackerEvent::Lines {
+                                request: "assessment complete".into(),
+                                text: format!("assessment complete failed: {err}"),
+                            });
+                            return;
+                        }
+                        Ok(store) => store
+                            .set_assessment_status(&id, crate::hacker::AssessmentStatus::Completed)
+                            .unwrap_or(false),
+                    };
+                    if done {
+                        let _ = tx.send(HackerEvent::Completed(id));
+                    } else {
+                        let _ = tx.send(HackerEvent::Lines {
+                            request: "assessment complete".into(),
+                            text: format!("no assessment `{id}`"),
+                        });
+                    }
+                });
+                self.toast(format!("completing assessment {label} ..."));
+            }
+        }
+        self.mark_dirty();
+    }
+
+    /// Best-effort: record the current assessment and its scope so it can be
+    /// listed and resumed later. Never blocks the UI thread.
+    fn spawn_hacker_assessment_save(&self) {
+        let Some(ctx) = self.hacker.assessment.clone() else {
+            return;
+        };
+        let Some(path) = self.hacker_store_path() else {
+            return;
+        };
+        self.handle.spawn_blocking(move || {
+            if let Ok(store) = crate::hacker::store::FindingsStore::open(&path) {
+                let _ = store.upsert_assessment(&ctx);
+                let _ = store.save_scope(&ctx);
+            }
+        });
     }
 
     /// `/hacker report [md|json|sarif]`: writes a report and prints where it went.
@@ -4504,6 +4693,42 @@ impl App {
                     format!("[hacker:{request}]\n{text}"),
                 ));
             }
+            HackerEvent::Resume(spec) => {
+                let outcome = self.hacker.resume(&spec, SystemTime::now());
+                match outcome {
+                    Ok(()) => {
+                        if let Err(err) = self.rebuild_runtime() {
+                            self.toast(format!("policy switch failed: {err}"));
+                        }
+                        self.entries.push(Entry::new(
+                            EntryRole::System,
+                            format!(
+                                "[hacker:assessment] resumed `{}` · {}",
+                                spec.id,
+                                self.hacker.status_line(SystemTime::now())
+                            ),
+                        ));
+                    }
+                    Err(err) => {
+                        self.entries.push(Entry::new(
+                            EntryRole::System,
+                            format!("[hacker:assessment] resume refused: {err}"),
+                        ));
+                    }
+                }
+            }
+            HackerEvent::Completed(id) => {
+                if self.hacker.assessment.as_ref().is_some_and(|c| c.id == id) {
+                    self.hacker.deactivate();
+                    if let Err(err) = self.rebuild_runtime() {
+                        self.toast(format!("policy switch failed: {err}"));
+                    }
+                }
+                self.entries.push(Entry::new(
+                    EntryRole::System,
+                    format!("[hacker:assessment] `{id}` marked completed"),
+                ));
+            }
         }
         self.mark_dirty();
     }
@@ -4527,6 +4752,7 @@ impl App {
             if let Err(err) = self.rebuild_runtime() {
                 self.toast(format!("policy switch failed: {err}"));
             }
+            self.spawn_hacker_assessment_save();
             self.toast("HACKER MODE active - authorized scope enforced, audited");
         }
         self.overlay = Some(Overlay::Hacker(HackerState::default()));
@@ -7347,12 +7573,50 @@ mod tests {
             parse_findings_cmd("close 5"),
             Ok(FindingsCmd::SetStatus(5, FindingStatus::Closed))
         );
+        assert_eq!(parse_findings_cmd("verify 9"), Ok(FindingsCmd::Verify(9)));
         assert!(parse_findings_cmd("show nope").is_err());
+        assert!(parse_findings_cmd("verify").is_err());
         assert!(parse_findings_cmd("triage").is_err());
         assert!(parse_findings_cmd("bogus 1").is_err());
         assert!(parse_findings_cmd("list extra").is_err());
         // Report formats round-trip through the store's parser.
         assert!(crate::hacker::store::ReportFormat::parse("sarif").is_some());
+    }
+
+    #[test]
+    fn hacker_assessment_command_parses_every_form() {
+        assert_eq!(parse_assessment_cmd(""), Ok(AssessmentCmd::List));
+        assert_eq!(parse_assessment_cmd("list"), Ok(AssessmentCmd::List));
+        assert_eq!(
+            parse_assessment_cmd("use asm-1"),
+            Ok(AssessmentCmd::Use("asm-1".into()))
+        );
+        assert_eq!(
+            parse_assessment_cmd("complete"),
+            Ok(AssessmentCmd::Complete(None))
+        );
+        assert_eq!(
+            parse_assessment_cmd("complete asm-2"),
+            Ok(AssessmentCmd::Complete(Some("asm-2".into())))
+        );
+        assert!(parse_assessment_cmd("use").is_err());
+        assert!(parse_assessment_cmd("bogus").is_err());
+        assert!(parse_assessment_cmd("list extra").is_err());
+    }
+
+    #[tokio::test]
+    async fn hacker_assessment_respects_the_store_switch() {
+        // hacker_app() disables the store, so the command must refuse cleanly.
+        let mut app = hacker_app().await;
+        for args in ["list", "use asm-1", "complete"] {
+            app.run_command(Command::Hacker, &format!("assessment {args}"));
+            assert!(
+                app.toast
+                    .as_ref()
+                    .is_some_and(|(t, _)| t.contains("findings store is disabled")),
+                "`assessment {args}` must refuse without a store"
+            );
+        }
     }
 
     #[tokio::test]

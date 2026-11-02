@@ -33,7 +33,10 @@ pub use findings::{Confidence, Finding, FindingStatus};
 pub use registry::{HackerModule, ModuleCategory, Registry};
 pub use risk::{OperationCategory, RiskLevel};
 pub use scope::ScopeMatch;
-pub use store::{FindingSink, FindingsStore, NullSink};
+pub use store::{
+    EvidenceCheck, FindingSink, FindingsBackend, FindingsStore, NullSink, ReportFormat,
+    ReportSummary, StoredAssessmentSpec,
+};
 
 /// The live HACKER MODE session held by the app.
 ///
@@ -121,6 +124,85 @@ impl HackerSession {
             &AuditRecord::new("allowed", "ok")
                 .with_assessment(self.assessment_id.clone())
                 .with_operation("hacker-mode-activate")
+                .with_detail(format!("scope: {}", self.scope_specs.join(", "))),
+        );
+        Ok(())
+    }
+
+    /// Resumes a persisted assessment, preserving its original window.
+    ///
+    /// Refuses when the feature is disabled, the assessment is not authorized,
+    /// its window has expired (or has not started), or it has no recorded
+    /// scope. Resuming never widens scope: it adopts exactly what was stored.
+    pub fn resume(
+        &mut self,
+        spec: &store::StoredAssessmentSpec,
+        now: SystemTime,
+    ) -> Result<(), String> {
+        if !self.enabled {
+            return Err("HACKER MODE is disabled - set `hacker_enabled = true`".into());
+        }
+        if spec.cidrs.is_empty() && spec.domains.is_empty() {
+            return Err(format!(
+                "assessment `{}` has no recorded scope - cannot resume",
+                spec.id
+            ));
+        }
+        if !spec
+            .status
+            .eq_ignore_ascii_case(AssessmentStatus::Authorized.label())
+        {
+            return Err(format!(
+                "assessment `{}` is {} - not resumable",
+                spec.id, spec.status
+            ));
+        }
+        if now >= spec.expiry {
+            return Err(format!(
+                "assessment `{}` window already expired - raise a new one",
+                spec.id
+            ));
+        }
+        if now < spec.start {
+            return Err(format!("assessment `{}` is not valid yet", spec.id));
+        }
+
+        let mut ctx = AssessmentContext::new(spec.id.clone(), spec.name.clone());
+        ctx.allowed_cidrs = spec.cidrs.clone();
+        ctx.allowed_domains = spec.domains.clone();
+        ctx.permitted_modules = self.registry.iter().map(|m| m.id().to_string()).collect();
+        ctx.permitted_ops = vec![
+            OperationCategory::Passive,
+            OperationCategory::ActiveDiscovery,
+            OperationCategory::Authenticated,
+            OperationCategory::Intrusive,
+        ];
+        ctx.authorization_ref = spec
+            .authorization_ref
+            .clone()
+            .or_else(|| Some(format!("resumed ({})", spec.id)));
+        ctx.status = AssessmentStatus::Authorized;
+        ctx.start = spec.start;
+        ctx.expiry = spec.expiry;
+        ctx.validate().map_err(|e| e.join("; "))?;
+
+        // Keep the config-derived fields in step, so a later activate() rebuilds
+        // the same scope rather than the old config.
+        self.scope_specs = spec
+            .cidrs
+            .iter()
+            .chain(spec.domains.iter())
+            .cloned()
+            .collect();
+        self.assessment_id = spec.id.clone();
+        self.assessment_name = spec.name.clone();
+        self.assessment = Some(ctx);
+        self.active = true;
+        self.sync_bypass(now);
+        self.audit.append(
+            &AuditRecord::new("allowed", "ok")
+                .with_assessment(spec.id.clone())
+                .with_operation("hacker-mode-resume")
                 .with_detail(format!("scope: {}", self.scope_specs.join(", "))),
         );
         Ok(())
@@ -272,6 +354,130 @@ mod tests {
         assert!(flag.load(Ordering::SeqCst));
         s.deactivate();
         assert!(!flag.load(Ordering::SeqCst));
+    }
+
+    fn spec(
+        status: &str,
+        start: SystemTime,
+        expiry: SystemTime,
+        cidrs: Vec<&str>,
+        domains: Vec<&str>,
+    ) -> StoredAssessmentSpec {
+        StoredAssessmentSpec {
+            id: "asm-stored".into(),
+            name: "Stored engagement".into(),
+            authorization_ref: Some("TICKET-9".into()),
+            status: status.into(),
+            start,
+            expiry,
+            cidrs: cidrs.into_iter().map(str::to_string).collect(),
+            domains: domains.into_iter().map(str::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn resume_adopts_the_stored_scope_and_window() {
+        let now = SystemTime::now();
+        let mut s = session(vec![], true);
+        let stored = spec(
+            "authorized",
+            now - Duration::from_secs(60),
+            now + Duration::from_secs(3600),
+            vec!["10.0.0.0/8"],
+            vec!["example.com"],
+        );
+        s.resume(&stored, now).expect("resumes");
+        assert!(s.active);
+        let ctx = s.assessment.as_ref().unwrap();
+        assert_eq!(ctx.id, "asm-stored");
+        assert_eq!(ctx.allowed_cidrs, vec!["10.0.0.0/8".to_string()]);
+        assert_eq!(ctx.allowed_domains, vec!["example.com".to_string()]);
+        assert_eq!(ctx.authorization_ref.as_deref(), Some("TICKET-9"));
+        // The stored window is preserved, not renewed.
+        assert!(ctx.expiry <= now + Duration::from_secs(3600));
+        assert!(s.auto_approve_active(now));
+    }
+
+    #[test]
+    fn resume_refuses_disabled_empty_completed_expired_and_future() {
+        let now = SystemTime::now();
+        let good = spec(
+            "authorized",
+            now - Duration::from_secs(1),
+            now + Duration::from_secs(10),
+            vec!["10.0.0.0/8"],
+            vec![],
+        );
+
+        let mut off = session(vec!["10.0.0.0/8"], false);
+        assert!(off.resume(&good, now).is_err(), "disabled must refuse");
+
+        let mut s = session(vec![], true);
+        let no_scope = spec(
+            "authorized",
+            now - Duration::from_secs(1),
+            now + Duration::from_secs(10),
+            vec![],
+            vec![],
+        );
+        assert!(s
+            .resume(&no_scope, now)
+            .unwrap_err()
+            .contains("no recorded scope"));
+
+        let completed = spec(
+            "completed",
+            now - Duration::from_secs(1),
+            now + Duration::from_secs(10),
+            vec!["10.0.0.0/8"],
+            vec![],
+        );
+        assert!(s
+            .resume(&completed, now)
+            .unwrap_err()
+            .contains("not resumable"));
+
+        let expired = spec(
+            "authorized",
+            now - Duration::from_secs(100),
+            now - Duration::from_secs(1),
+            vec!["10.0.0.0/8"],
+            vec![],
+        );
+        assert!(s.resume(&expired, now).unwrap_err().contains("expired"));
+
+        let future = spec(
+            "authorized",
+            now + Duration::from_secs(60),
+            now + Duration::from_secs(120),
+            vec!["10.0.0.0/8"],
+            vec![],
+        );
+        assert!(s
+            .resume(&future, now)
+            .unwrap_err()
+            .contains("not valid yet"));
+        assert!(!s.active);
+    }
+
+    #[test]
+    fn resume_keeps_later_activation_on_the_same_scope() {
+        let now = SystemTime::now();
+        let mut s = session(vec!["192.168.0.0/16"], true);
+        let stored = spec(
+            "authorized",
+            now - Duration::from_secs(1),
+            now + Duration::from_secs(600),
+            vec!["10.0.0.0/8"],
+            vec!["example.com"],
+        );
+        s.resume(&stored, now).unwrap();
+        // Re-activating (e.g. after exit) rebuilds from the resumed config.
+        s.deactivate();
+        s.activate(now).unwrap();
+        let ctx = s.assessment.as_ref().unwrap();
+        assert_eq!(ctx.allowed_cidrs, vec!["10.0.0.0/8".to_string()]);
+        assert_eq!(ctx.allowed_domains, vec!["example.com".to_string()]);
     }
 
     #[test]

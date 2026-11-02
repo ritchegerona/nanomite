@@ -12,6 +12,7 @@ pub mod exploitation;
 pub mod kali;
 pub mod network;
 pub mod recon;
+pub mod reporting;
 pub mod vuln;
 pub mod web;
 

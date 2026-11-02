@@ -155,9 +155,10 @@ pub struct AgentRuntime {
     /// default: no hooks, zero overhead.
     hooks: Arc<Vec<HookConfig>>,
     /// Optional interactive confirmation gate: consulted before dispatching
-    /// risk-External calls (shell, SSH, destructive deletes) when the mode
-    /// policy permits them. `None` runs without asking - headless and test
-    /// builds, or `confirm_external = false` in the config.
+    /// risk-External calls (shell, SSH, destructive deletes) in Plan mode.
+    /// Coder, Build and Hacker auto-approve (owner decision), so an active
+    /// session is never interrupted by the prompt. `None` runs without asking -
+    /// headless and test builds, or `confirm_external = false` in the config.
     confirmer: Option<std::sync::Arc<dyn Confirmer>>,
 }
 
@@ -561,19 +562,21 @@ impl AgentRuntime {
                 }
                 let detail = describe_args(&call);
                 let preview = preview_args(&call);
-                // Interactive gate: risk-External calls ask the user first
-                // when a confirmer is attached. A denial is returned to the
-                // model as structured data it can route around, matching
-                // the policy and hook refusal paths. External tools carry
-                // their own declared risk (safe default: External) rather
-                // than being assumed harmless by name.
+                // Interactive gate: owner decision - only Plan mode asks.
+                // Coder, Build and Hacker auto-approve External-risk calls so
+                // a working session is never interrupted by the prompt. A
+                // denial in Plan mode is returned to the model as structured
+                // data it can route around, matching the policy and hook
+                // refusal paths. External tools carry their own declared risk
+                // (safe default: External) rather than being assumed harmless
+                // by name.
                 let call_risk = self
                     .tools
                     .external
                     .get(&call.name)
                     .map(|t| t.risk())
                     .unwrap_or_else(|| Risk::of(&call.name));
-                if call_risk == Risk::External {
+                if call_risk == Risk::External && self.tool_policy == ToolPolicy::Plan {
                     if let Some(confirmer) = &self.confirmer {
                         let allowed = tokio::select! {
                             ok = confirmer.confirm(&call.name, preview.clone()) => ok,
@@ -1782,9 +1785,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_denied_external_call_returns_user_declined_to_the_model() {
+    async fn a_denied_external_call_in_plan_mode_returns_user_declined_to_the_model() {
         let runtime = runtime_with(Arc::new(RunCommandProvider::new()), None)
-            .with_tool_policy(ToolPolicy::Hacker)
+            .with_tool_policy(ToolPolicy::Plan)
             .with_confirmer(Arc::new(FixedConfirmer { allow: false }));
         let events = collect_turn(&runtime).await;
         let denied = events.iter().any(|e| {
@@ -1804,16 +1807,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_allowed_external_call_dispatches_normally() {
+    async fn only_plan_mode_consults_the_confirmer() {
+        // Coder, Build and Hacker auto-approve (owner decision): a
+        // deny-everything confirmer is never consulted there.
+        for policy in [ToolPolicy::Coder, ToolPolicy::Build, ToolPolicy::Hacker] {
+            let runtime = runtime_with(Arc::new(RunCommandProvider::new()), None)
+                .with_tool_policy(policy)
+                .with_confirmer(Arc::new(FixedConfirmer { allow: false }));
+            let events = collect_turn(&runtime).await;
+            assert!(
+                !events.iter().any(|e| matches!(
+                    e,
+                    AgentEvent::ToolEnd { detail, .. } if detail.contains("user_declined")
+                )),
+                "{policy:?} must not prompt: {events:?}"
+            );
+            // Coder still refuses execution through its own mode policy.
+            if policy != ToolPolicy::Coder {
+                assert!(
+                    events
+                        .iter()
+                        .any(|e| matches!(e, AgentEvent::ToolEnd { ok: true, .. })),
+                    "{policy:?} must dispatch run_command: {events:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plan_mode_approval_still_faces_the_mode_policy() {
         let runtime = runtime_with(Arc::new(RunCommandProvider::new()), None)
-            .with_tool_policy(ToolPolicy::Hacker)
+            .with_tool_policy(ToolPolicy::Plan)
             .with_confirmer(Arc::new(FixedConfirmer { allow: true }));
         let events = collect_turn(&runtime).await;
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, AgentEvent::ToolEnd { ok: true, .. })),
-            "allowed run_command must dispatch: {events:?}"
+            events.iter().any(|e| matches!(
+                e,
+                AgentEvent::ToolEnd { ok: false, detail, .. } if detail.contains("plan_mode")
+            )),
+            "plan policy must still refuse execution: {events:?}"
         );
         assert!(!events.iter().any(|e| matches!(
             e,

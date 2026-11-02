@@ -22,12 +22,12 @@ use super::modules::network::{Connector, TcpConnector};
 use super::modules::recon::{Resolver, SystemResolver};
 use super::modules::vuln::{self, VulnEntry};
 use super::modules::web::{Fetcher, ReqwestFetcher};
-use super::modules::{exploitation, network, recon, web, ModuleReport};
+use super::modules::{exploitation, network, recon, reporting, web, ModuleReport};
 use super::risk::{effective_risk, OperationCategory, RiskLevel};
 use super::scope::{
     classify_ip, host_in_scope, ip_in_scope, normalize_host, resolved_in_scope, IpClass, ScopeMatch,
 };
-use super::store::{FindingSink, FindingsStore, NullSink};
+use super::store::{FindingsBackend, FindingsStore, NullSink, ReportFormat};
 
 /// One executable operation and the policy it is judged under.
 #[derive(Debug, Clone, Copy)]
@@ -113,6 +113,22 @@ pub const OPERATIONS: &[OpSpec] = &[
         true,
         "<tool>",
     ),
+    spec(
+        "reporting",
+        "summary",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    spec(
+        "reporting",
+        "export",
+        OperationCategory::Passive,
+        false,
+        false,
+        "<md|json|sarif>",
+    ),
 ];
 
 /// Looks up an operation (case-insensitive on module and op).
@@ -133,8 +149,10 @@ pub struct Deps<'a> {
     pub probe: &'a dyn BinaryProbe,
     /// Bounded process runner for the Kali bridge.
     pub process: &'a dyn ProcessRunner,
-    /// Where findings from a successful operation are persisted.
-    pub store: &'a dyn FindingSink,
+    /// Persistence **and** read/export for findings (the `reporting` ops read it).
+    pub store: &'a dyn FindingsBackend,
+    /// Where `reporting/export` writes; production is `<hacker dir>/reports`.
+    pub reports_dir: &'a std::path::Path,
 }
 
 /// A sink used when no findings store is configured; module-level, so a
@@ -151,6 +169,8 @@ pub struct OwnedDeps {
     pub process: SystemRunner,
     /// `None` when the findings store is disabled or failed to open.
     pub store: Option<FindingsStore>,
+    /// Output directory for `reporting/export`.
+    pub reports_dir: std::path::PathBuf,
 }
 
 impl OwnedDeps {
@@ -189,11 +209,12 @@ impl OwnedDeps {
             probe: PathProbe,
             process: SystemRunner,
             store,
+            reports_dir: super::store::reports_dir(),
         }
     }
 
     pub fn deps(&self) -> Deps<'_> {
-        let store: &dyn FindingSink = match self.store.as_ref() {
+        let store: &dyn FindingsBackend = match self.store.as_ref() {
             Some(store) => store,
             None => &NULL_SINK,
         };
@@ -205,6 +226,7 @@ impl OwnedDeps {
             probe: &self.probe,
             process: &self.process,
             store,
+            reports_dir: &self.reports_dir,
         }
     }
 }
@@ -331,6 +353,17 @@ pub fn run(
                 "exploitation/plan needs a weakness class (e.g. exposed-service)".to_string()
             })?;
             exploitation::plan(target, class)
+        }
+        ("reporting", "summary") => deps
+            .store
+            .summary(Some(&ctx.id))
+            .map(|summary| reporting::summary_report(&ctx.id, &summary)),
+        ("reporting", "export") => {
+            let format = ReportFormat::parse(arg)
+                .ok_or_else(|| "reporting/export needs a format (md, json or sarif)".to_string())?;
+            deps.store
+                .export(deps.reports_dir, Some(&ctx.id), format)
+                .map(|path| reporting::export_report(&ctx.id, format, &path))
         }
         ("kali", "available") => Ok(kali::available(deps.probe)),
         ("kali", "run") => {
@@ -557,6 +590,7 @@ pub fn operation_risk(spec: &OpSpec) -> RiskLevel {
 mod tests {
     use super::super::context::AssessmentStatus;
     use super::super::modules::network::Connector;
+    use super::super::store::{FindingSink, ReportSummary};
     use super::*;
     use std::collections::HashSet;
     use std::net::SocketAddr;
@@ -646,6 +680,22 @@ mod tests {
             Ok(report.findings.len())
         }
     }
+    impl FindingsBackend for RecordingSink {
+        fn summary(&self, _assessment_id: Option<&str>) -> Result<ReportSummary, String> {
+            Ok(ReportSummary {
+                total: self.0.lock().unwrap().len(),
+                ..ReportSummary::default()
+            })
+        }
+        fn export(
+            &self,
+            _dir: &std::path::Path,
+            _assessment_id: Option<&str>,
+            _format: ReportFormat,
+        ) -> Result<std::path::PathBuf, String> {
+            Err("recording sink does not export".into())
+        }
+    }
 
     static PRESENT: StubProbe = StubProbe(true);
     static SILENT: SilentProcess = SilentProcess;
@@ -665,6 +715,7 @@ mod tests {
             probe: &PRESENT,
             process: &SILENT,
             store: &NULL_STORE,
+            reports_dir: std::path::Path::new("."),
         }
     }
 
@@ -679,6 +730,7 @@ mod tests {
             "vuln".into(),
             "exploitation".into(),
             "kali".into(),
+            "reporting".into(),
         ];
         ctx.permitted_ops = vec![
             OperationCategory::Passive,
@@ -980,6 +1032,7 @@ mod tests {
             probe: &PRESENT,
             process: &SILENT,
             store: &sink,
+            reports_dir: std::path::Path::new("."),
         };
         let report = run(
             Some(&ctx),
@@ -999,6 +1052,125 @@ mod tests {
         assert!(seen
             .iter()
             .any(|s| s.contains("missing content-security-policy")));
+    }
+
+    #[test]
+    fn reporting_summary_reads_the_store_and_reflects_recorded_findings() {
+        let ctx = ctx();
+        let ip: IpAddr = "10.0.0.9".parse().unwrap();
+        let resolver = StubResolver {
+            map: vec![("10.0.0.9".into(), vec![ip])],
+        };
+        let connector = StubConnector(HashSet::new());
+        let fetcher = StubFetcher(web::Fetched {
+            status: 200,
+            headers: vec![],
+        });
+        let store = FindingsStore::open_in_memory().unwrap();
+        let deps = Deps {
+            resolver: &resolver,
+            connector: &connector,
+            fetcher: &fetcher,
+            vulndb: &[],
+            probe: &PRESENT,
+            process: &SILENT,
+            store: &store,
+            reports_dir: std::path::Path::new("."),
+        };
+        // An empty store summarizes explicitly.
+        let empty = run(
+            Some(&ctx),
+            &AuditLog::disabled(),
+            &deps,
+            "reporting",
+            "summary",
+            "",
+            "",
+            now(&ctx),
+        )
+        .unwrap();
+        assert_eq!(empty.summary, "no findings recorded yet");
+
+        // Record findings, then the summary counts them.
+        run(
+            Some(&ctx),
+            &AuditLog::disabled(),
+            &deps,
+            "web",
+            "headers",
+            "10.0.0.9",
+            "",
+            now(&ctx),
+        )
+        .unwrap();
+        let summary = run(
+            Some(&ctx),
+            &AuditLog::disabled(),
+            &deps,
+            "reporting",
+            "summary",
+            "",
+            "",
+            now(&ctx),
+        )
+        .unwrap();
+        assert!(
+            summary.summary.ends_with("finding(s)"),
+            "{}",
+            summary.summary
+        );
+        assert!(summary.lines.iter().any(|l| l.starts_with("by severity:")));
+    }
+
+    #[test]
+    fn reporting_export_validates_format_and_writes_a_file() {
+        let ctx = ctx();
+        let resolver = StubResolver { map: vec![] };
+        let connector = StubConnector(HashSet::new());
+        let fetcher = StubFetcher(web::Fetched {
+            status: 0,
+            headers: vec![],
+        });
+        let store = FindingsStore::open_in_memory().unwrap();
+        let reports = std::env::temp_dir().join(format!("nanomite-reports-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&reports);
+        let deps = Deps {
+            resolver: &resolver,
+            connector: &connector,
+            fetcher: &fetcher,
+            vulndb: &[],
+            probe: &PRESENT,
+            process: &SILENT,
+            store: &store,
+            reports_dir: &reports,
+        };
+        let err = run(
+            Some(&ctx),
+            &AuditLog::disabled(),
+            &deps,
+            "reporting",
+            "export",
+            "",
+            "xml",
+            now(&ctx),
+        )
+        .unwrap_err();
+        assert!(err.contains("needs a format"), "{err}");
+
+        let report = run(
+            Some(&ctx),
+            &AuditLog::disabled(),
+            &deps,
+            "reporting",
+            "export",
+            "",
+            "json",
+            now(&ctx),
+        )
+        .unwrap();
+        assert!(report.summary.contains("json report written"));
+        assert!(report.lines.iter().any(|l| l.contains(".json")));
+        let _ = std::fs::remove_dir_all(&reports);
     }
 
     #[test]
@@ -1048,6 +1220,7 @@ mod tests {
             probe: &PRESENT,
             process: &process,
             store: &NULL_STORE,
+            reports_dir: std::path::Path::new("."),
         };
         let report = run(
             Some(&ctx),
@@ -1111,6 +1284,7 @@ mod tests {
             probe: &absent,
             process: &SILENT,
             store: &NULL_STORE,
+            reports_dir: std::path::Path::new("."),
         };
         let err = run(
             Some(&ctx),
