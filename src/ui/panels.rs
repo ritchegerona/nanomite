@@ -178,7 +178,8 @@ pub fn rule(frame: &mut Frame, area: Rect, theme: &Theme) {
     let _ = (frame, area, theme);
 }
 
-/// Status strip above the composer. Rebuilt only when its inputs change.
+/// Status strip on the bottom edge, under the composer. Rebuilt only when
+/// its inputs change.
 /// The footer badge for the active tool mode: `(label, color)`. Every mode
 /// gets its dedicated palette colour - amber plan, blue coder, green build,
 /// red hacker - so the mode is recognisable by colour alone in any theme.

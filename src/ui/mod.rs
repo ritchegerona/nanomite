@@ -334,8 +334,8 @@ impl View {
             ratatui::layout::Constraint::Min(3),
             ratatui::layout::Constraint::Length(queue_rows),
             ratatui::layout::Constraint::Length(suggest_rows),
-            ratatui::layout::Constraint::Length(1),
             ratatui::layout::Constraint::Length(composer_rows),
+            ratatui::layout::Constraint::Length(1),
         ])
         .horizontal_margin(1)
         .split(area);
@@ -349,8 +349,10 @@ impl View {
             } else {
                 None
             },
-            footer: areas[4],
-            composer: areas[5],
+            composer: areas[4],
+            // Status strip sits flush on the terminal's bottom edge, under
+            // the composer - opencode's footer order.
+            footer: areas[5],
         };
         self.layout = Some((area, composer_rows, queue_rows, suggest_rows, rects));
         rects

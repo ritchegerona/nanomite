@@ -33,6 +33,9 @@ never listed as released.
 
 ### Changed
 
+- **Status strip moved to the bottom edge**: the footer line (`working ·
+  steps · tools`, mode badge, toasts) now renders below the composer as the
+  terminal's last row, matching opencode's footer order. implemented+tested.
 - **Tool confirmation prompts are now Plan-only** (owner decision): the
   `Confirmer` gate still asks before `Risk::External` calls in Plan mode, while
   Coder, Build and Hacker auto-approve so a working session is never interrupted.
