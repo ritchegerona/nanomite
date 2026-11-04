@@ -75,6 +75,14 @@ pages, and `nanomite update` to move to the next version in one command.
 
 - **Real-time streaming** from any OpenAI-compatible endpoint (OpenAI, NVIDIA
   NIM, OpenRouter, Groq, Together, DeepSeek, Ollama, LM Studio, llama.cpp, …)
+- **Multiple providers at once** — save an API key per provider (`[providers]`
+  in the config); `/model` queries every keyed provider in parallel and groups
+  the result under provider headers, so switching model *and* provider is one
+  keypress
+- **Daily learning** — `/learn <topic>` runs a research turn that recalls prior
+  lessons, studies the topic with the agent's own tools, saves durable lessons
+  to memory (tags `learning` + `technique`) and stages concrete improvements in
+  `/improve`; `/learn daily on` runs one session per day
 - **Full agent loop** — the model calls tools, nanomite executes them, results
   stream back until the task is done (unlimited steps by default, tunable via
   environment variables)
@@ -82,9 +90,9 @@ pages, and `nanomite update` to move to the next version in one command.
   (SQLite + human-readable markdown) that survives restarts and provider
   changes. It is on by default: records are retrieved before every turn and
   captured after, per policy (see [Persistent memory](#persistent-memory))
-- **20 built-in tools** — file access, document extraction, a workspace shell,
-  SSH, web access, six memory tools and two self-improvement tools
-  (see [Tools](#tools))
+- **34 built-in tools** — file access, document extraction, a workspace shell,
+  SSH, web access, browser automation, git/test/index/plan, six memory tools
+  and two self-improvement tools (see [Tools](#tools))
 - **Tool library** — `/tools` lists every tool grouped by category and lets you
   enable or disable any of them; disabled tools are hidden from the model and
   refused at dispatch
@@ -146,7 +154,7 @@ pages, and `nanomite update` to move to the next version in one command.
   and they are appended to the system prompt on every turn
 - **Persistent setup** — provider, key, model, theme and tool toggles are saved
   to `~/.config/nanomite/config.toml` and survive restarts
-- **Offline-capable test suite** — 680 tests, zero network required
+- **Offline-capable test suite** — 698 tests, zero network required
 
 ## Installation
 
@@ -358,8 +366,8 @@ file-shaped is sandboxed to the workspace root — paths that escape are refused
 
 **Tool library**
 
-`/tools` lists all 20 tools grouped by category (files · exec · web · memory ·
-document · self-improve) with ✓ enabled / ✗ disabled. Toggles are written to
+`/tools` lists all 34 tools grouped by category (files · exec · web · memory ·
+document · git · test · index · plan · self-improve) with ✓ enabled / ✗ disabled. Toggles are written to
 `disabled_tools` in `~/.config/nanomite/config.toml` and survive restarts;
 `NANOMITE_DISABLED_TOOLS` overrides the file. A disabled tool is filtered out of
 the schema list before it is ever sent to the provider *and* refused again at
@@ -489,7 +497,7 @@ to `LIKE` search, reporting the index in use honestly.
 | `enter` | Send · run the highlighted command |
 | `/` or `ctrl+x` | Open the command menu |
 | `ctrl+j` / `alt+enter` | Newline in the prompt |
-| `esc` | Interrupt the agent · close an overlay · clear the prompt |
+| `esc` | Interrupt the agent · close an overlay · clear the prompt (press twice within 700 ms to force-stop a stuck tool) |
 | `ctrl+t` / `ctrl+l` | New session · clear transcript |
 | `ctrl+r` | Cycle reasoning effort |
 | `ctrl+f` | Search the transcript (enter/↓ next · ↑ prev · esc closes) |
@@ -520,9 +528,9 @@ features · appearance · output.
 
 | Command | Aliases | Key | Purpose |
 |---|---|---|---|
-| `/connect` | `/login`, `/auth` | alt+c | Edit the endpoint URL and API key |
+| `/connect` | `/login`, `/auth` | alt+c | Edit the endpoint URL and API key (saved per provider) |
 | `/provider` | `/providers` | alt+p | Switch the provider — pick from the list |
-| `/models` | `/model` | alt+m | Switch the model — filter or type an id |
+| `/models` | `/model` | alt+m | Switch model — every keyed provider queried, grouped under headers |
 | `/reasoning` | `/effort` | ctrl+r | Cycle reasoning effort: minimal · low · medium · high |
 | `/policy` | `/mode` | shift+tab | Cycle tool mode: plan · coder · build · hacker |
 | `/tools` |  | alt+l | Tool library — enable or disable the agent's tools |
@@ -545,6 +553,7 @@ features · appearance · output.
 | `/team` | `/parallel` | alt+shift+t | Run three agents in parallel on one goal — decompose, execute, synthesize |
 | `/improve` |  | alt+i | Review self-edit proposals — `a` approve (with regression gate), `r` reject |
 | `/improve-from-board` |  | alt+shift+i | Stage the board's synthesis as a proposal |
+| `/learn` | `/study` | alt+shift+l | Daily learning — `/learn <topic>` · `status` · `digest` · `daily on\|off` · `topics` · `topic <t>` |
 | `/details` |  | ctrl+o | Cycle tool display: hidden · rows · full (`ctrl+o`) |
 | `/thinking` |  | alt+k | Toggle the thinking indicator |
 | `/focus` |  | f2 | Show only the latest exchange (`f2`) |
@@ -604,8 +613,10 @@ src/
 │   ├── diff.rs      unified diff artifacts
 │   ├── runner.rs    .bak backup, regression check, byte-exact rollback
 │   └── audit.rs     append-only JSONL decision log
+├── learn/
+│   └── mod.rs       daily learning: cadence state, topics, turn prompt
 ├── tools/
-│   ├── catalog.rs   the 18-tool inventory as data (name, description, category)
+│   ├── catalog.rs   the 34-tool inventory as data (name, description, category)
 │   ├── file_tools.rs  list/read/write/edit/search (workspace-sandboxed)
 │   ├── document_tools.rs  read_document over the extract/ registry
 │   ├── exec_tools.rs  run_command, ssh_run
@@ -634,7 +645,7 @@ src/
 ## Development
 
 ```bash
-cargo test --lib     # 370 tests, fully offline
+cargo test --lib     # 698 tests, fully offline
 cargo run            # dev build against your config
 cargo build --release
 ```

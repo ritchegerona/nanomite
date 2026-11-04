@@ -5,8 +5,8 @@ authoritative store; Markdown documents are a one-way human-readable
 projection. Nothing in `src/memory/` knows about any AI provider — records
 are plain serde data, so changing models never touches stored knowledge.
 
-Status: **L3** (updated 2026-10-26). Integrated and regression-tested in the
-409-test suite; `tests/production_attach.rs` covers the real startup attach
+Status: **L3** (updated 2026-11-04). Integrated and regression-tested in the
+698-test suite; `tests/production_attach.rs` covers the real startup attach
 path. The `consolidation_merges_exact_duplicates_only` failure noted in the
 2026-10-14 audit is fixed, and the `export()` deadlock found then is fixed.
 Runtime/UI integration is live: `MemoryEngine` attaches at startup and the six
@@ -37,6 +37,16 @@ Policy switches (all honored at attach time):
 
 `/memory` is an async browser over the store: recent records, with a record-body
 overlay for the selected one.
+
+## Learning records
+
+The daily learning loop (`docs/LEARNING.md`) stores lessons as ordinary memory
+records: category `project`, tags `learning`, `technique` and a topic slug.
+`/learn digest` and the hacker `/hacker techniques` recall search by tag, so
+lessons are available to any later turn through normal retrieval. Research
+output is untrusted data: it can add records and stage proposals, but cannot
+authorize a privileged operation, and the memory policy still refuses
+credentials on the way in.
 
 ## Data model
 

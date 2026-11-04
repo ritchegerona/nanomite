@@ -1,0 +1,97 @@
+{
+  "name": "nanomite-advanced-hardening",
+  "description": "Harden all modules to advanced/sophisticated standard while keeping HACKER mode and HACKER CONFIG fully intact. Zero breaking changes.",
+  "tasks": [
+    {
+      "id": 1,
+      "description": "Install Python dev deps and run baseline Python tests",
+      "status": "done",
+      "created_at": "2026-11-04T06:08:35.330336+00:00",
+      "updated_at": "2026-11-04T07:54:40.422664+00:00",
+      "depends_on": [],
+      "tags": [
+        "python",
+        "baseline"
+      ]
+    },
+    {
+      "id": 2,
+      "description": "Rust: Port HackerSession to typestate (Discovered -> Authorized -> Active -> Closed) with capability gating",
+      "status": "done",
+      "created_at": "2026-11-04T06:08:35.330336+00:00",
+      "updated_at": "2026-11-04T06:12:27.288882+00:00",
+      "depends_on": [
+        1
+      ],
+      "tags": [
+        "rust",
+        "typestate",
+        "hacker"
+      ]
+    },
+    {
+      "id": 3,
+      "description": "Rust: Wire CapabilitySession into /hacker command dispatch and coordinator",
+      "status": "done",
+      "created_at": "2026-11-04T06:08:35.330336+00:00",
+      "updated_at": "2026-11-04T06:15:12.213158+00:00",
+      "depends_on": [
+        2
+      ],
+      "tags": [
+        "rust",
+        "integration",
+        "hacker"
+      ]
+    },
+    {
+      "id": 4,
+      "description": "Python: Harden cracking package (engine, cli, report, wordlist) to advanced standard with full tests",
+      "status": "done",
+      "created_at": "2026-11-04T06:08:35.330336+00:00",
+      "updated_at": "2026-11-04T06:15:18.493985+00:00",
+      "depends_on": [
+        1
+      ],
+      "tags": [
+        "python",
+        "hacker",
+        "cracking"
+      ]
+    },
+    {
+      "id": 5,
+      "description": "Python: Add property-based tests and CTI report generation to cracking",
+      "status": "done",
+      "created_at": "2026-11-04T06:08:35.330336+00:00",
+      "updated_at": "2026-11-04T06:50:06.439039+00:00",
+      "depends_on": [
+        4
+      ],
+      "tags": [
+        "verify",
+        "tests",
+        "rust"
+      ]
+    },
+    {
+      "id": 6,
+      "description": "Run full Rust + Python test suites after every change; verify zero regressions",
+      "status": "done",
+      "created_at": "2026-11-04T06:08:35.330336+00:00",
+      "updated_at": "2026-11-04T07:54:40.425590+00:00",
+      "depends_on": [
+        2,
+        3,
+        5
+      ],
+      "tags": [
+        "verify",
+        "tests",
+        "python"
+      ]
+    }
+  ],
+  "created_at": "2026-11-04T06:08:35.330336+00:00",
+  "updated_at": "2026-11-04T07:54:40.425590+00:00"
+}

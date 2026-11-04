@@ -13,6 +13,7 @@
 
 pub mod audit;
 pub mod authorization;
+pub mod capability;
 pub mod context;
 pub mod coordinator;
 pub mod findings;
@@ -21,6 +22,7 @@ pub mod registry;
 pub mod risk;
 pub mod scope;
 pub mod store;
+pub mod typestate;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -102,6 +104,17 @@ impl HackerSession {
     /// The flag the UI confirmer consults to skip the approval prompt.
     pub fn bypass_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.bypass)
+    }
+
+    /// Public accessor for the assessment id, used by the typestate wrapper
+    /// for audit labeling without exposing the private field.
+    pub fn assessment_id_dbg(&self) -> &str {
+        &self.assessment_id
+    }
+
+    /// Public accessor for the configured session duration in minutes.
+    pub fn session_minutes(&self) -> u64 {
+        self.session_minutes
     }
 
     /// Enters HACKER MODE. Requires the feature enabled and non-empty scope;

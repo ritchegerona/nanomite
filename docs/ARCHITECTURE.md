@@ -3,8 +3,8 @@
 Single-crate Rust binary (`nanomite`, edition 2021) over a library crate:
 `src/main.rs` owns the terminal, everything testable lives in `src/lib.rs`,
 which declares `agent`, `app`, `board`, `commands`, `config`, `extract`,
-`improve`, `memory` (behind a deliberate `#[allow(dead_code)]` for its API
-superset), `session`, `tools`, `ui`. Updated 2026-10-26.
+`improve`, `learn`, `memory` (behind a deliberate `#[allow(dead_code)]` for its
+API superset), `session`, `tools`, `ui`. Updated 2026-11-04.
 
 ```
 src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::render
@@ -34,11 +34,11 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
   `text.rs` wrapping + minimal markdown. All state lives in `App`; rendering is
   a pure function of `&App` per frame, redrawn only when dirty.
 - **App (`src/app.rs`)** — the state machine: key handling, overlay stack,
-  provider/model pickers, command router (`src/commands.rs`, 28 commands
+  provider/model pickers, command router (`src/commands.rs`, 42 commands
   including `/memory`, `/copy`, `/tools`, `/panel`, `/improve`, `/policy`,
-  `/models`, `/prev`, `/next`, all parsed locally), session persist/restore,
-  engine pump. Agent turns run as background tasks feeding `AgentEvent`s;
-  the UI never blocks.
+  `/models`, `/learn`, `/prev`, `/next`, all parsed locally), session
+  persist/restore, engine pump. Agent turns run as background tasks feeding
+  `AgentEvent`s; the UI never blocks.
 - **Agent (`src/agent/`)** — `provider.rs` defines the `AgentProvider` trait
   (`stream_chat`, `list_models`, `chat_completion` helper) and the streaming
   event model (`Delta` / `ToolCall` / `Usage` / `Done`) with a fragment
@@ -78,11 +78,20 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
   rolls back byte-exactly on failure; `audit.rs` appends every decision to a
   JSONL log. The agent can only stage (`propose_self_edit`); applying requires
   the user pressing `a` in `/improve`.
+- **Learning (`src/learn/`)** — the daily learning loop is pure logic: cadence
+  state (`state.json`), topic rotation, slugging and `learning_prompt`, the
+  instruction text for a normal turn. `/learn <topic>` starts a research turn
+  that saves lessons to memory (tags `learning` + `technique`) and stages
+  improvements with `propose_self_edit`; `/learn daily on` opts into one
+  automatic session per local day (`[learn] daily`, off by default). No network
+  or model calls inside the module. Details in `docs/LEARNING.md`.
 - **Providers (`src/config.rs` + `src/agent/openai.rs`)** — one HTTP client
-  serves every preset (17 cloud + ollama/lmstudio/vllm/llamacpp + `custom`).
-  Setup persists to `~/.config/nanomite/config.toml` (atomic write, `0600`);
-  precedence is built-in defaults < file < environment (`NANOMITE_*`). The
-  file also carries `theme`, `disabled_tools`, `tool_policy` and `prompt_file`.
+  serves every preset. Setup persists to `~/.config/nanomite/config.toml`
+  (atomic write, `0600`); precedence is built-in defaults < file < environment
+  (`NANOMITE_*`). Per-provider API keys live in `[providers]` (the active key is
+  mirrored in `api_key`), so `/model` can query every keyed provider in parallel
+  and group the result under provider headers. The file also carries `theme`,
+  `disabled_tools`, `tool_policy`, `prompt_file` and `[learn]`.
 - **Sessions (`src/session.rs`)** — `StoredSession` v1 JSON: provider, model,
   cwd, transcript entries. Markdown export for `/export` and `/share`.
 - **Memory (`src/memory/`)** — SQLite (bundled) is authoritative; markdown
@@ -105,6 +114,8 @@ src/main.rs ── tokio event loop ──▶ App (src/app.rs) ──▶ ui::ren
    **untrusted data**; none of them can authorize privileged operations.
    Enforcement: central `ToolPolicy` at dispatch + per-subsystem gates
    (`MemoryPolicy`, `disabled_tools`, the `/improve` proposal gate).
-5. A self-edit may never target the safety layer: `src/memory/security.rs`,
-   `src/memory/policy.rs`, `src/main.rs`. And apply is reachable only from the
-   user's `/improve` approval, never from a tool call.
+5. A self-edit is staged for review and never applied by a tool: applying is
+   reachable only from the user's `/improve` approval. The former hard denylist
+   on `src/memory/security.rs`, `src/memory/policy.rs` and `src/main.rs` was
+   removed by owner decision 2026-10-30; user approval and the regression gate
+   remain the controls.

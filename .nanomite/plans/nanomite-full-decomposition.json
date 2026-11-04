@@ -1,0 +1,101 @@
+{
+  "name": "nanomite-full-decomposition",
+  "description": "Decompose god objects into focused modules following advanced coding standard, preserving all HACKER capabilities",
+  "tasks": [
+    {
+      "id": 1,
+      "description": "Decompose src/app/mod.rs (9263 lines) into focused sub-modules",
+      "status": "pending",
+      "created_at": "2026-11-04T07:40:34.075202+00:00",
+      "updated_at": "2026-11-04T07:40:34.075202+00:00",
+      "depends_on": [],
+      "tags": [
+        "rust",
+        "refactor",
+        "decomposition",
+        "app"
+      ]
+    },
+    {
+      "id": 2,
+      "description": "Rewrite src/config.rs (1833 lines) - split into provider/hacker/learning modules with schema validation",
+      "status": "pending",
+      "created_at": "2026-11-04T07:40:34.075202+00:00",
+      "updated_at": "2026-11-04T07:40:34.075202+00:00",
+      "depends_on": [
+        1
+      ],
+      "tags": [
+        "rust",
+        "refactor",
+        "config",
+        "hacker-config"
+      ]
+    },
+    {
+      "id": 3,
+      "description": "Rewrite src/session.rs (655 lines) - split into store.rs + export.rs + search.rs",
+      "status": "done",
+      "created_at": "2026-11-04T07:40:34.075202+00:00",
+      "updated_at": "2026-11-04T07:54:40.424533+00:00",
+      "depends_on": [
+        1
+      ],
+      "tags": [
+        "rust",
+        "refactor",
+        "session"
+      ]
+    },
+    {
+      "id": 4,
+      "description": "Refactor src/main.rs (601 lines) - extract edge concerns, structured logging",
+      "status": "pending",
+      "created_at": "2026-11-04T07:40:34.075202+00:00",
+      "updated_at": "2026-11-04T07:40:34.075202+00:00",
+      "depends_on": [
+        1
+      ],
+      "tags": [
+        "rust",
+        "refactor",
+        "main",
+        "observability"
+      ]
+    },
+    {
+      "id": 5,
+      "description": "Refactor src/commands.rs (430 lines) - pure command parsing",
+      "status": "done",
+      "created_at": "2026-11-04T07:40:34.075202+00:00",
+      "updated_at": "2026-11-04T07:54:40.425252+00:00",
+      "depends_on": [
+        1
+      ],
+      "tags": [
+        "rust",
+        "refactor",
+        "commands"
+      ]
+    },
+    {
+      "id": 6,
+      "description": "Run full test suite (Rust + Python) to verify zero regressions",
+      "status": "pending",
+      "created_at": "2026-11-04T07:40:34.075202+00:00",
+      "updated_at": "2026-11-04T07:40:34.075202+00:00",
+      "depends_on": [
+        2,
+        3,
+        4,
+        5
+      ],
+      "tags": [
+        "testing",
+        "validation"
+      ]
+    }
+  ],
+  "created_at": "2026-11-04T07:40:34.075202+00:00",
+  "updated_at": "2026-11-04T07:54:40.425253+00:00"
+}

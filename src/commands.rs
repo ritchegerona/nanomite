@@ -49,6 +49,7 @@ pub enum Command {
     Team,
     Density,
     Hacker,
+    Learn,
 }
 
 pub struct Entry {
@@ -228,6 +229,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "stage the board's synthesis as a proposal (alt+shift+i)",
         kind: Command::ImproveFromBoard,
+    },
+    Entry {
+        command: "/learn",
+        aliases: &["/study"],
+        hint: "daily learning - /learn <topic> | status | digest | daily on|off (alt+shift+l)",
+        kind: Command::Learn,
     },
     // -- security -------------------------------------------------------------
     Entry {

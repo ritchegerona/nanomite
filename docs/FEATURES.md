@@ -7,11 +7,15 @@ conditions · **L3** integrated and regression-tested · **L4**
 benchmark-validated and monitored. Evidence in `docs/ARCHITECTURE.md` and test
 suite.
 
-## Working (verified by the 409-test suite)
+## Working (verified by the 698-test suite)
 
 - Streaming chat with any OpenAI-compatible endpoint (L3) — 21 presets,
   keyless localhost support, `/provider` `/models` `/connect` menus.
-- Bounded agent loop with **33 tools**, interrupts, usage accounting (L3).
+- **Multi-provider setup** (L3): per-provider API keys persist in
+  `[providers]`, the legacy single key migrates, and `/model` queries every
+  keyed provider in parallel, grouping results under non-selectable provider
+  headers. Picking a model switches provider + key + model in one step.
+- Bounded agent loop with **34 tools**, interrupts, usage accounting (L3).
 - Workspace-sandboxed file tools; shell + key-only SSH; web fetch/search (L3);
   git status/diff/log/commit/branch (L3); test runner (L3); symbol index (L3);
   plan/task list (L3) — see `docs/TOOLS.md`.
@@ -25,12 +29,24 @@ suite.
   after (L3) — see `docs/MEMORY.md`.
 - Multi-agent board: `/panel <topic>` convenes four personas plus a chair,
   streamed live, persisted in SQLite (L3) — see `docs/ARCHITECTURE.md`.
-- Tool library `/tools` (33 tools, ✓/✗, persisted; disabled tools are filtered
+- Tool library `/tools` (34 tools, ✓/✗, persisted; disabled tools are filtered
   from the schema list and refused at dispatch) (L3).
 - Self-improvement `/improve`: propose → review diff → approve (with `.bak`,
   `cargo test --lib` gate and byte-exact rollback) or reject; append-only JSONL
   audit log (the hard self-edit denylist was removed by owner decision
   2026-10-30) — see `docs/SECURITY.md`.
+- **Daily learning loop** `/learn`: research a topic with the agent's own tools,
+  save durable lessons to memory (tags `learning` + `technique`), and stage
+  concrete improvements for `/improve`. `/learn daily on` opts into one
+  automatic session per local calendar day (off by default); `/learn status`,
+  `digest`, `topics` and `topic <t>` manage the loop. Pure cadence logic, no
+  network or model calls in `src/learn/` (L3) — see `docs/LEARNING.md`.
+- **Hacker knowledge recall**: `/hacker techniques [query]` surfaces
+  `technique`-tagged memories, and HACKER MODE's prompt directs recall/save of
+  reusable tradecraft (L3) — see `docs/HACKER_MODE.md`.
+- **Two-stage Esc**: one Esc cooperatively interrupts a turn; a second within
+  700 ms (or any Esc once cancelling) force-stops it, killing the blocked
+  tool's process group (L3).
 - File-intelligence extractors + the `read_document` tool; library-crate split
   (`src/lib.rs`) and the `benches/perf` harness (L3).
 - **Central policy engine** (`agent/policy.rs`): `ToolPolicy` (Auto/Plan/Readonly)
@@ -59,7 +75,12 @@ Reasoning/execution modes · evolution lifecycle beyond `/improve` (experiment
   meaningful inside a checkout.
 - Web tools have no offline behavior; the app has no offline indicator.
 - `/compact` summarization quality is unmeasured; context savings are unclaimed.
-- Release installation is manual; no signature infrastructure.
-- Verification snapshot: `cargo test --lib` **409 passed / 0 failed**
+- Release installation is manual; no signature infrastructure. On macOS the
+  installer re-signs the copied binary ad-hoc (`codesign --force --sign -`),
+  because the linker-only signature is rejected once the binary is copied to a
+  new path.
+- The daily learning turn spends model tokens and needs working tools
+  (`web_fetch`/`browse` for external topics); it is off by default.
+- Verification snapshot: `cargo test --lib` **698 passed / 0 failed**
   (fully offline) plus `tests/production_attach.rs` (1 integration test) +
-  `tests/agent_integration.rs` (7 integration tests).
+  `tests/agent_integration.rs` (8 integration tests).

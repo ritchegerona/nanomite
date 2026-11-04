@@ -500,6 +500,15 @@ pub struct HackerConfig {
     /// Persist findings and evidence to the SQLite store. Off means operations
     /// still run and audit, but nothing structured is retained.
     pub store: bool,
+    /// Capability token that binds an `OpCapability` to this session. When set
+    /// (`NANOMITE_HACKER_CAPABILITY_TOKEN`), every `/hacker run` is gated
+    /// through the typestate capability layer before execution. When absent,
+    /// operations fall back to the existing `HackerSession` authorization.
+    pub capability_token: Option<String>,
+    /// Modules permitted by the capability ceiling. When the token is set but
+    /// this is empty, only the four read-only modules (recon, network, web,
+    /// vuln) are allowed.
+    pub allowed_modules: Option<Vec<String>>,
 }
 
 impl Default for HackerConfig {
@@ -512,6 +521,8 @@ impl Default for HackerConfig {
             auto_approve: true,
             audit: true,
             store: true,
+            capability_token: None,
+            allowed_modules: None,
         }
     }
 }
@@ -574,6 +585,12 @@ pub struct Config {
     pub prompt_file: Option<PathBuf>,
     /// HACKER MODE settings (`[hacker]` section).
     pub hacker: HackerConfig,
+    /// Run a learning session automatically once per calendar day. Off by
+    /// default: a daily session spends model tokens, so it is an explicit
+    /// opt-in. Persisted; `NANOMITE_LEARN_DAILY` overrides.
+    pub learning_daily: bool,
+    /// Pinned learning topic. `None` rotates through [`crate::learn::DEFAULT_TOPICS`].
+    pub learning_topic: Option<String>,
 }
 
 /// The subset of settings persisted to disk; everything else stays env-driven.
@@ -602,6 +619,10 @@ struct Stored {
     hacker_auto_approve: Option<bool>,
     hacker_audit: Option<bool>,
     hacker_store: Option<bool>,
+    hacker_allowed_modules: Option<Vec<String>>,
+    // `[learn]` section.
+    learning_daily: Option<bool>,
+    learning_topic: Option<String>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
@@ -643,6 +664,20 @@ fn parse_stored(text: &str) -> Stored {
                 "auto_approve" => stored.hacker_auto_approve = Some(parse_bool(&value)),
                 "audit" => stored.hacker_audit = Some(parse_bool(&value)),
                 "store" => stored.hacker_store = Some(parse_bool(&value)),
+                "allowed_modules" => {
+                    stored.hacker_allowed_modules = Some(
+                        value.split([',', ' ', '\t', '\n'])
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect(),
+                    );
+                }
+                _ => {}
+            },
+            "learn" => match key {
+                "daily" => stored.learning_daily = parse_bool_opt(&value),
+                "topic" => stored.learning_topic = Some(value),
                 _ => {}
             },
             "" => match key {
@@ -798,6 +833,19 @@ fn stored_text(cfg: &Config) -> String {
     lines.push(format!("auto_approve = {}", cfg.hacker.auto_approve));
     lines.push(format!("audit = {}", cfg.hacker.audit));
     lines.push(format!("store = {}", cfg.hacker.store));
+    if let Some(modules) = &cfg.hacker.allowed_modules {
+        if !modules.is_empty() {
+            lines.push(format!("allowed_modules = {}", quote(&modules.join(","))));
+        }
+    }
+    lines.push(String::new());
+    // Daily learning loop. Off by default (each session spends model tokens);
+    // `/learn daily on` flips it, `topic` pins a subject instead of rotating.
+    lines.push("[learn]".to_string());
+    lines.push(format!("daily = {}", cfg.learning_daily));
+    if let Some(topic) = &cfg.learning_topic {
+        lines.push(format!("topic = {}", quote(topic)));
+    }
     lines.push(String::new());
     lines.join("\n")
 }
@@ -1073,6 +1121,22 @@ impl Config {
             } else {
                 stored.hacker_store.unwrap_or(true)
             };
+            let capability_token = if use_env {
+                first_env_one("NANOMITE_HACKER_CAPABILITY_TOKEN")
+            } else {
+                None
+            };
+            let allowed_modules = if use_env {
+                first_env_one("NANOMITE_HACKER_MODULES").map(|raw| {
+                    raw.split([',', ' ', '\t', '\n'])
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+            } else {
+                stored.hacker_allowed_modules.clone()
+            };
             HackerConfig {
                 enabled,
                 scope,
@@ -1081,6 +1145,8 @@ impl Config {
                 auto_approve,
                 audit,
                 store,
+                capability_token,
+                allowed_modules,
             }
         };
 
@@ -1164,6 +1230,22 @@ impl Config {
             } else {
                 stored.compact.unwrap_or(false)
             },
+            learning_daily: if use_env {
+                match first_env_one("NANOMITE_LEARN_DAILY") {
+                    Some(v) => parse_bool(&v),
+                    None => stored.learning_daily.unwrap_or(false),
+                }
+            } else {
+                stored.learning_daily.unwrap_or(false)
+            },
+            learning_topic: (if use_env {
+                first_env_one("NANOMITE_LEARN_TOPIC")
+            } else {
+                None
+            })
+            .or_else(|| stored.learning_topic.clone())
+            .map(|topic| topic.trim().to_string())
+            .filter(|topic| !topic.is_empty()),
             hacker,
         }
     }
@@ -1389,6 +1471,37 @@ mod tests {
             std::env::temp_dir().join(format!("nanomite-hacker-none-{}.toml", std::process::id()));
         fs::write(&plain, "model = \"gpt-4o-mini\"\n").expect("write config");
         assert!(Config::load_from(&plain).hacker.store);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&plain);
+    }
+
+    #[test]
+    fn learning_section_roundtrips_defaults_off_and_env_overrides() {
+        let path = std::env::temp_dir().join(format!("nanomite-learn-{}.toml", std::process::id()));
+        let mut cfg = Config::from_env();
+        cfg.learning_daily = true;
+        cfg.learning_topic = Some("agent evaluation".into());
+        cfg.save_to(&path);
+
+        let loaded = Config::load_from(&path);
+        assert!(loaded.learning_daily);
+        assert_eq!(loaded.learning_topic.as_deref(), Some("agent evaluation"));
+
+        // No `[learn]` section -> daily learning stays off.
+        let plain =
+            std::env::temp_dir().join(format!("nanomite-learn-none-{}.toml", std::process::id()));
+        fs::write(&plain, "model = \"gpt-4o-mini\"\n").expect("write config");
+        let plain_cfg = Config::load_from(&plain);
+        assert!(!plain_cfg.learning_daily);
+        assert!(plain_cfg.learning_topic.is_none());
+
+        // Environment overrides the file.
+        std::env::set_var("NANOMITE_CONFIG", &path);
+        std::env::set_var("NANOMITE_LEARN_DAILY", "off");
+        assert!(!Config::load().learning_daily);
+        std::env::remove_var("NANOMITE_LEARN_DAILY");
+        std::env::remove_var("NANOMITE_CONFIG");
+
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&plain);
     }

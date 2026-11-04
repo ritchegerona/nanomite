@@ -19,11 +19,11 @@ siblings are not part of the project:
 ## Build state — READ FIRST (verified 2026-11-02, v0.8.0 + HACKER MODE Phase 4: assessment lifecycle, reporting ops, evidence verify, finding triage, more producers)
 
 `cargo check` (lib + bins) **passes clean**. `cargo test --lib` is
-**683 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
+**698 passed / 0 failed** (~5 s, fully offline). `cargo clippy --all-targets
 -- -D warnings` is clean. `cargo fmt --check` is clean.
 
 `tests/production_attach.rs` is a separate **integration** target (1 test, green)
-that exercises the real startup attach path. It is *not* part of the 683; quote
+that exercises the real startup attach path. It is *not* part of the 698; quote
 the two numbers separately. `tests/agent_integration.rs` is a third offline
 target (8 tests, green): config load/env, session persist/restore (v1 + v2),
 in-memory memory, document extraction, and tool-set file/exec operations.
@@ -36,15 +36,15 @@ compiles on the stable toolchain: `cargo bench` works, and `cargo test`
 
 ```bash
 cargo check            # clean
-cargo test --lib       # 683 passed, 0 failed, ~5 s, fully offline (verified)
-cargo test --test production_attach   # 1 passed (integration; not in the 683)
+cargo test --lib       # 698 passed, 0 failed, ~5 s, fully offline (verified)
+cargo test --test production_attach   # 1 passed (integration; not in the 698)
 cargo bench            # benches/perf.rs harness; bench profile inherits release
 cargo clippy --all-targets -- -D warnings   # clean (no clippy.toml / CI in the repo)
 cargo fmt
 ```
 
 Do not "fix" the suite by deleting tests or by claiming a count from
-README/docs without running it. Test counts in README may be stale; 683 is correct for
+README/docs without running it. Test counts in README may be stale; 698 is correct for
 `--lib`; the integration target is counted separately.
 
 Release profile sets `panic = "abort"`, so the panic hook in `src/main.rs:141`
@@ -127,6 +127,14 @@ broken.
   (`.bak` backup, `cargo test --lib` regression gate, byte-exact rollback),
   `audit.rs` (append-only JSONL decision log). UI: `/improve` list + review
   view; `a` approves, `r` rejects.
+- `src/learn/` — daily learning loop: cadence state (`state.json` in the data
+  dir), topic rotation (`DEFAULT_TOPICS`), and `learning_prompt`, the
+  instruction text for a normal agent turn. `/learn <topic>` starts research;
+  the agent saves durable lessons via `memory_save` (tags `learning` +
+  `technique`) and stages concrete changes via `propose_self_edit` (approval
+  still only in `/improve`). `/learn status|digest|daily on|off|topics`. Daily
+  auto-run is opt-in (`[learn] daily = true`, off by default) and checks once
+  per local calendar day at startup. Pure logic: no network, no model calls.
 - `src/update.rs` — `nanomite update`: fetch origin, ff-only pull, rebuild the release binary in place (git-checkout installs)
 - `src/ui/` — `theme.rs` (4 palettes, persisted, and the shared
   `theme::glyph` constants), `chat.rs`, `composer.rs`, `panels.rs`
@@ -148,7 +156,7 @@ broken.
   `read_document` is the agent-facing door to it.
 - `tests/production_attach.rs` — integration target proving the real production
   attach path (memory + config) works from the outside. 1 test, separate from
-  the 683.
+  the 698.
 
 ## Invariants (do not break)
 

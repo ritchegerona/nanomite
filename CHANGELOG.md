@@ -8,6 +8,17 @@ never listed as released.
 
 ### Added
 
+- **Daily learning loop**: `/learn <topic>` runs a research turn that recalls
+  prior lessons, researches the topic with the agent's own tools, saves durable
+  lessons to memory (tags `learning` + `technique`), and stages concrete
+  improvements with `propose_self_edit` (still approved only in `/improve`).
+  `/learn status` shows cadence/streak, `/learn digest` lists saved lessons,
+  `/learn daily on|off` opts into a once-per-calendar-day automatic session
+  (off by default), `/learn topics` lists the rotation, `/learn topic <t>`
+  pins a subject. State lives in `<data>/nanomite/learn/state.json`
+  (`NANOMITE_LEARN_DIR` overrides); `[learn] daily|topic` persists in config.
+  implemented+tested (11 new tests).
+
 - **HACKER MODE — assessment lifecycle**: `/hacker assessment list|use <id>|
   complete [<id>]`. Assessments persist their authorized scope; `use` resumes
   only a stored, authorized, unexpired assessment and re-runs `validate()`;

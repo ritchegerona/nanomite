@@ -125,6 +125,13 @@ cargo build --release --locked
 # ── 4. Install binary ──────────────────────────────────────────────────────
 mkdir -p "$INSTALL_DIR"
 cp "target/release/nanomite" "$INSTALL_DIR/nanomite"
+# macOS kills a copied binary whose only signature is the linker's ad-hoc one
+# ("zsh: killed", SIGKILL) once it lives at a new path. Re-sign it ad-hoc so the
+# installed copy actually runs.
+if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
+  codesign --force --sign - "$INSTALL_DIR/nanomite" >/dev/null 2>&1 || \
+    warn "codesign failed — if 'nanomite' is killed on launch, run: codesign --force --sign - $INSTALL_DIR/nanomite"
+fi
 log "Installed to $INSTALL_DIR/nanomite"
 
 # ── 5. PATH check ──────────────────────────────────────────────────────────
