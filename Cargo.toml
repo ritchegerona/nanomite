@@ -1,8 +1,8 @@
 [package]
 name = "nanomite"
-version = "0.8.0"
+version = "1.1.0"
 edition = "2021"
-description = "A microscopic terminal coding agent: streaming chat with any OpenAI-compatible model, 33 tools, persistent memory, multi-agent board, polished TUI"
+description = "Microscopic terminal AI agent: OpenAI-compatible streaming, 34 tools, SQLite+FTS5 memory, multi-agent board, self-edit loop, HACKER MODE, 6 themes, 14MB static binary"
 license = "MIT"
 repository = "https://github.com/ritchegerona/nanomite"
 readme = "README.md"
