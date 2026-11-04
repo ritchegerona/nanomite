@@ -527,6 +527,73 @@ impl Default for HackerConfig {
     }
 }
 
+/// Errors produced when validating a `HackerConfig`.
+#[derive(Debug)]
+pub enum HackerConfigError {
+    /// `enabled = true` but no scope was configured.
+    ScopeRequired,
+    /// `session_minutes` is zero (window would never open).
+    SessionMinutesZero,
+    /// A scope entry is neither a valid CIDR nor a valid domain name.
+    InvalidScopeEntry(String),
+}
+
+impl std::fmt::Display for HackerConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HackerConfigError::ScopeRequired => {
+                write!(f, "hacker.enabled = true but no authorized scope configured")
+            }
+            HackerConfigError::SessionMinutesZero => {
+                write!(f, "hacker.session_minutes must be greater than zero")
+            }
+            HackerConfigError::InvalidScopeEntry(entry) => {
+                write!(f, "invalid hacker scope entry: {entry}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for HackerConfigError {}
+
+impl HackerConfig {
+    /// Validate the configuration. Call this after loading from file/env
+    /// and before activating HACKER MODE.
+    pub fn validate(&self) -> Result<(), HackerConfigError> {
+        if self.enabled && self.scope.is_empty() {
+            return Err(HackerConfigError::ScopeRequired);
+        }
+        if self.session_minutes == 0 {
+            return Err(HackerConfigError::SessionMinutesZero);
+        }
+
+        for entry in &self.scope {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !trimmed.contains('/')
+                && !is_ip_literal(trimmed)
+                && !is_domain(trimmed)
+            {
+                return Err(HackerConfigError::InvalidScopeEntry(
+                    trimmed.to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn is_ip_literal(s: &str) -> bool {
+    s.parse::<std::net::IpAddr>().is_ok()
+}
+
+fn is_domain(s: &str) -> bool {
+    s.contains('.') && s.chars().all(|c| c.is_ascii() && !c.is_whitespace())
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub provider: ProviderKind,

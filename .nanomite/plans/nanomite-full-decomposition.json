@@ -50,9 +50,9 @@
     {
       "id": 4,
       "description": "Refactor src/main.rs (601 lines) - extract edge concerns, structured logging",
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-11-04T07:40:34.075202+00:00",
-      "updated_at": "2026-11-04T07:40:34.075202+00:00",
+      "updated_at": "2026-11-04T08:04:07.940398+00:00",
       "depends_on": [
         1
       ],
@@ -81,9 +81,9 @@
     {
       "id": 6,
       "description": "Run full test suite (Rust + Python) to verify zero regressions",
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-11-04T07:40:34.075202+00:00",
-      "updated_at": "2026-11-04T07:40:34.075202+00:00",
+      "updated_at": "2026-11-04T08:04:07.942036+00:00",
       "depends_on": [
         2,
         3,
@@ -97,5 +97,5 @@
     }
   ],
   "created_at": "2026-11-04T07:40:34.075202+00:00",
-  "updated_at": "2026-11-04T07:54:40.425253+00:00"
+  "updated_at": "2026-11-04T08:04:07.942036+00:00"
 }

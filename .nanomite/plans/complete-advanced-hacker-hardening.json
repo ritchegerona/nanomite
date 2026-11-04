@@ -18,9 +18,9 @@
     {
       "id": 2,
       "description": "Decompose app.rs into src/app/ modules (state, runtime, command_dispatch, overlays, sessions, hacker, learn, image)",
-      "status": "done",
+      "status": "inprogress",
       "created_at": "2026-11-04T06:44:28.402812+00:00",
-      "updated_at": "2026-11-04T07:54:40.424053+00:00",
+      "updated_at": "2026-11-04T08:02:13.701627+00:00",
       "depends_on": [
         1
       ],
@@ -119,5 +119,5 @@
     }
   ],
   "created_at": "2026-11-04T06:44:28.402812+00:00",
-  "updated_at": "2026-11-04T07:54:40.424883+00:00"
+  "updated_at": "2026-11-04T08:02:13.701628+00:00"
 }

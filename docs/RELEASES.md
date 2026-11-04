@@ -1,16 +1,16 @@
 # Releases and updates
 
-Status: **L1 — manual releases, v0.6.0 (2026-10-27).** Infrastructure for
-authenticated updates is not implemented; this file specifies the required
+Status: **L2 — tagged manual releases, v1.0.0 (2026-11-04).** Infrastructure
+for authenticated updates is not implemented; this file specifies the required
 workflow so any future implementation can be checked against it.
 
 ## Current release
 
-- **Version:** `0.6.0` (see `Cargo.toml`)
-- **Git tag:** `v0.6.0`
+- **Version:** `1.0.0`
+- **Git tag:** `v1.0.0`
+- **Branch:** `master`
 - **Build:** `cargo build --release`
-- **Tests:** 441 lib + 8 integration = 449 passed, clippy clean
-- **Benchmarks:** stable, no regressions
+- **Tests:** 705 Rust + 76 Python = 781 total, all passing; clippy clean
 - **Install:** copy binary to `$PATH`; previous binary kept as rollback
 
 ## Required update workflow (Milestone 14)
@@ -31,8 +31,8 @@ supports them.
 
 - Releases are manual: `cargo build --release`, copy the binary, keep the
   previous binary as the rollback artifact.
-- Last known-good baseline: v0.5.0, 437/437 lib + 8 integration tests green,
-  clippy clean (CI gates it).
+- Last known-good baseline: v0.8.0, 698 lib + 8 integration tests green,
+  clippy clean.
 - Versioning: semver + `v*` tags; generate notes from CHANGELOG entries,
   Git history, and test results — never from model invention.
 
@@ -40,9 +40,10 @@ supports them.
 
 | Version | Date | Highlights |
 |---|---|---|
-| 0.6.0 | 2026-10-27 | Four tool modes on Shift+Tab (plan/coder/build/hacker), footer badges, legacy policy migration. |
-| 0.5.0 | 2026-10-27 | Stages F-L: plan-mode enforcement, session v2, hooks, external tool SDK, worktrees, CI+packaging, docs. Clippy clean. |
-| 0.4.0 | 2026-10-27 | Central policy engine + `/policy`, themed sudo password modal (live-verified), git/test/index/plan tools. 33 tools, 417 tests. |
-| 0.3.0 | 2026-10-26 | Stages A-E: Authorization engine, Git tools (5), Test runner, Symbol index (3), Policy engine (Auto/Plan/Readonly), Plan system (5). 33 tools total. |
-| 0.2.0 | 2026-10-15 | Memory (L3), extractors, board, self-improve, tool library, 18 tools. |
-| 0.1.x | — | Early development, not released. |
+| 1.0.0 | 2026-11-04 | **Advanced capability layer**: typestate `HackerSessionTyped` (`Discovered→Authorized→Active→Closed`), `OpCapability` unforgeable token with `CapEvent` audit trail, `CapError` fail-fast domain errors, scope + risk-ceiling checks. Python cracking toolkit under `src/nanomite/cracking/` with context-managed sessions, streaming wordlist generator, CTI-grade reports. Installer scripts fixed (`install.sh`, `install.ps1`) with Python deps. Full documentation overhaul: `ARCHITECTURE.md`, `HACKER_MODE.md`, `HACKER_SECURITY.md`, `INSTALLATION.md`. |
+| 0.8.0 | 2026-11-02 | HACKER MODE Phase 4: assessment lifecycle (`list|use|complete`), reporting operations (`summary|export`), evidence verification (`verify <id>`), finding triage (`triage|accept|close`), JSON+SARIF export, more finding producers. Double-Esc interrupt. Tool confirmation prompts Plan-only. Footer status strip moved to bottom edge. |
+| 0.7.0 | 2026-10-28 | opencode-style chat UI, transcript selection, performance pass, tool display levels, compact density, ETA estimates, `nanomite update`, browser automation, `/team`, time machine, transcript search, focus mode, `/doctor`, `/hud`, alt+letter chords, crash forensics. |
+| 0.6.0 | 2026-10-27 | Follow-up suggestions, prompt queue drain, per-mode colours, four tool modes (plan/coder/build/hacker), Shift+Tab cycle fix. |
+| 0.5.0 | 2026-10-27 | Plan mode enforcement, session persistence v2, hooks/event system, external tool SDK, parallel worktrees, CI+packaging, documentation overhaul. |
+| 0.4.0 | 2026-10-27 | Central tool authorization engine, git tool suite, test runner, symbol index, plan/task system, sudo password modal. |
+| 0.3.0 | 2026-10-26 | Prompt queue, OpenCode-style chat UI, welcome screen, thinking indicator, modular app architecture, integration tests, CI pipeline, security updates. |

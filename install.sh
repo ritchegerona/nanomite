@@ -2,8 +2,9 @@
 # nanomite — unified installer (curl | sh)
 #   curl -fsSL https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.sh | bash
 #
-# Installs: Rust toolchain, system build deps, Chromium (for browse tools), nanomite binary
-
+# Installs: Rust toolchain, system build deps, Chromium (for browse tools),
+# Python toolkit deps (cracking engine), nanomite binary.
+#
 set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
@@ -11,11 +12,12 @@ REPO="ritchegerona/nanomite"
 INSTALL_DIR="${HOME}/.local/bin"
 BUILD_DIR="/tmp/nanomite-build-$$"
 MIN_RUST_VERSION="1.75"   # MSRV
+MIN_PYTHON_VERSION="3.9"
 
 # ── Helpers ────────────────────────────────────────────────────────────────
-log()   { printf "\033[1;32m[%s]\033[0m %s\n" "$(date +%H:%M:%S)" "$*"; }
-warn()  { printf "\033[1;33m[%s]\033[0m %s\n" "$(date +%H:%M:%S)" "$*"; }
-error() { printf "\033[1;31m[%s]\033[0m %s\n" "$(date +%H:%M:%S)" "$*" >&2; }
+log()   { printf '\033[1;32m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
+warn()  { printf '\033[1;33m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
+error() { printf '\033[1;31m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 die()   { error "$*"; exit 1; }
 
 has()   { command -v "$1" >/dev/null 2>&1; }
@@ -36,6 +38,18 @@ case "$ARCH" in
 esac
 log "Detected: $OS / $ARCH"
 
+# ── 0. Python 3.9+ check (needed for cracking toolkit) ─────────────────────
+if has python3; then
+  PYVER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  if ver_ge "$PYVER" "$MIN_PYTHON_VERSION"; then
+    log "Python $PYVER OK (≥ $MIN_PYTHON_VERSION)"
+  else
+    warn "Python $PYVER < $MIN_PYTHON_VERSION — cracking toolkit may not work"
+  fi
+else
+  warn "python3 not found — cracking toolkit will not work until Python ≥ $MIN_PYTHON_VERSION is installed"
+fi
+
 # ── 1. Ensure Rust toolchain ───────────────────────────────────────────────
 if has cargo; then
   RUSTV="$(cargo --version | cut -d' ' -f2)"
@@ -47,14 +61,19 @@ if has cargo; then
   fi
 else
   log "Installing Rust (rustup)..."
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --no-modify-path --profile minimal
-  # shellcheck disable=SC1091
-  . "$HOME/.cargo/env"
 fi
 
-# Make cargo available for the rest of the script
+# Make cargo available for the rest of the script (rustup --no-modify-path)
 export PATH="$HOME/.cargo/bin:$PATH"
+# shellcheck disable=SC1091
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+
+# Re-verify cargo is on PATH after sourcing
+if ! has cargo; then
+  die "cargo not found after rustup install. Restart your shell and re-run, or add $HOME/.cargo/bin to PATH."
+fi
 
 # ── 2. System build dependencies ───────────────────────────────────────────
 install_linux_deps() {
@@ -94,11 +113,10 @@ install_macos_deps() {
   if has brew; then
     log "Installing build deps via Homebrew..."
     brew install --quiet pkg-config openssl@3 2>/dev/null || true
-    # Chromium for browse tools — use chromium (open-source) or google-chrome
     if ! has chromium && ! has "Google Chrome"; then
       log "Installing Chromium for browse tools..."
-      brew install --quiet --cask chromium 2>/dev/null ||
-        brew install --quiet --cask google-chrome 2>/dev/null ||
+      brew install --quiet --cask chromium 2>/dev/null || \
+        brew install --quiet --cask google-chrome 2>/dev/null || \
         warn "Could not install Chromium — browse tools will not work"
     fi
   else
@@ -113,18 +131,39 @@ case "$OS" in
   macos)  install_macos_deps ;;
 esac
 
-# ── 3. Build nanomite ──────────────────────────────────────────────────────
+# ── 3. Python toolkit dependencies (cracking engine) ───────────────────────
+install_python_deps() {
+  if ! has python3; then
+    warn "python3 not found — skipping Python toolkit dependencies"
+    return 0
+  fi
+  log "Installing Python toolkit dependencies (numpy, scikit-learn, onnxruntime, llama-cpp-python, pytest, mypy, ruff)..."
+  python3 -m pip install --upgrade pip 2>/dev/null || warn "pip upgrade failed (continuing)"
+  python3 -m pip install \
+    numpy \
+    scikit-learn \
+    onnxruntime \
+    llama-cpp-python \
+    pytest \
+    mypy \
+    ruff 2>/dev/null || warn "Some Python packages failed to install — install manually with: pip install numpy scikit-learn onnxruntime llama-cpp-python pytest mypy ruff"
+}
+
+install_python_deps
+
+# ── 4. Build nanomite ──────────────────────────────────────────────────────
 log "Cloning $REPO..."
 rm -rf "$BUILD_DIR"
 git clone --depth 1 "https://github.com/$REPO.git" "$BUILD_DIR"
 
 log "Building release binary (this takes ~2-3 min)..."
 cd "$BUILD_DIR"
-cargo build --release --locked
+cargo build --release
 
-# ── 4. Install binary ──────────────────────────────────────────────────────
+# ── 5. Install binary ──────────────────────────────────────────────────────
 mkdir -p "$INSTALL_DIR"
 cp "target/release/nanomite" "$INSTALL_DIR/nanomite"
+
 # macOS kills a copied binary whose only signature is the linker's ad-hoc one
 # ("zsh: killed", SIGKILL) once it lives at a new path. Re-sign it ad-hoc so the
 # installed copy actually runs.
@@ -134,17 +173,17 @@ if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
 fi
 log "Installed to $INSTALL_DIR/nanomite"
 
-# ── 5. PATH check ──────────────────────────────────────────────────────────
+# ── 6. PATH check ──────────────────────────────────────────────────────────
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   warn "$INSTALL_DIR is not in your PATH."
   warn "Add this to your shell config (~/.bashrc, ~/.zshrc, ~/.config/fish/config.fish):"
   printf '  export PATH="%s:$PATH"\n' "$INSTALL_DIR"
 fi
 
-# ── 6. Cleanup ─────────────────────────────────────────────────────────────
+# ── 7. Cleanup ─────────────────────────────────────────────────────────────
 rm -rf "$BUILD_DIR"
 
-# ── 7. Verify ──────────────────────────────────────────────────────────────
+# ── 8. Verify ──────────────────────────────────────────────────────────────
 if "$INSTALL_DIR/nanomite" --version >/dev/null 2>&1; then
   VER="$("$INSTALL_DIR/nanomite" --version)"
   log "✅ $VER installed successfully!"
@@ -153,10 +192,10 @@ else
   die "Binary built but verification failed."
 fi
 
-# ── 8. Next steps ──────────────────────────────────────────────────────────
+# ── 9. Next steps ──────────────────────────────────────────────────────────
 cat <<'EOF'
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NEXT STEPS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -176,9 +215,12 @@ NEXT STEPS
    macOS:  brew install --cask chromium
    Windows: Edge is preinstalled
 
-4) Keep updated:
+4) Python cracking toolkit (optional, for HACKER MODE password audits):
+   pip install numpy scikit-learn onnxruntime llama-cpp-python pytest mypy ruff
+
+5) Keep updated:
    nanomite update   # git-checkout installs only
    # Or re-run this installer for the latest master
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EOF

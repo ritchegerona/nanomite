@@ -165,13 +165,15 @@ pages, and `nanomite update` to move to the next version in one command.
 | **Linux / macOS** | `curl -fsSL https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.sh \| bash` |
 | **Windows (PowerShell)** | `irm https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.ps1 \| iex` |
 
-These scripts install Rust (via rustup), system build dependencies (gcc, pkg-config, openssl, Chromium/Edge), build the release binary from `master`, and place it in `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.cargo\bin` (Windows).
+These scripts install Rust (via rustup), system build dependencies (gcc, pkg-config, openssl, Chromium/Edge), Python toolkit dependencies for the cracking engine, build the release binary from `master`, and place it in `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.cargo\bin` (Windows).
+
+See [docs/INSTALLATION.md](docs/INSTALLATION.md) for the full platform-specific guide.
 
 ---
 
 ### Manual build from source
 
-Prerequisites: [Rust](https://rustup.rs) 1.75+ (via `rustup`), plus platform build tools.
+Prerequisites: [Rust](https://rustup.rs) 1.75+ (via `rustup`), Python 3.9+ (for the cracking toolkit), plus platform build tools.
 
 **Linux:**
 ```bash
@@ -218,6 +220,17 @@ Notes for Windows:
   is auto-discovered
 - Windows support is functional but newer than Linux — report anything that
   misbehaves
+
+### Python toolkit (cracking engine)
+
+The Python cracking toolkit lives under `src/nanomite/cracking/` and requires:
+
+```bash
+pip install numpy scikit-learn onnxruntime llama-cpp-python pytest mypy ruff
+```
+
+It is optional — nanomite runs without it — but HACKER MODE password-audit
+operations need it.
 
 ### One-line install (recommended)
 

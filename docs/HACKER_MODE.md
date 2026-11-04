@@ -1,19 +1,14 @@
 # HACKER MODE
 
-> Status: **Phase 4 — assessment lifecycle & reporting.** Phase 2 operations run
-> against an active assessment, plus a curated bridge to installed Kali
-> assessment tools; successful operations persist structured findings and
-> hashed evidence to a SQLite store. Named assessments can be listed, resumed
-> and completed, a `reporting` module summarizes/exports them, and stored
-> evidence can be re-verified against its SHA-256.
+> Status: **Phase 4+ — advanced capability layer.** HACKER MODE is a
+> cybersecurity operations *environment*, separate from `ToolPolicy::Hacker`.
+> It adds a **typestate capability-session** (`Discovered → Authorized →
+> Active → Closed`), an unforgeable `OpCapability` token, an independent
+> authorization gate, an assessment scope, an append-only audit trail, and a
+> module registry on top of the existing nanomite agent runtime.
+>
 > Exploitation is **plan-only** (no payloads, no compromise automation).
-> HACKER MODE is a cybersecurity operations *environment*. It is **not**
-> `ToolPolicy::Hacker`, which is a general tool-permission level.
-
-HACKER MODE layers an independent authorization gate, an assessment scope, an
-append-only audit trail, and a module registry on top of the existing nanomite
-agent runtime. It reuses the provider, runtime, tool dispatch, TUI and
-persistence infrastructure unchanged, and is **disabled by default**.
+> HACKER MODE is **disabled by default**.
 
 ## Entering it
 
@@ -53,7 +48,7 @@ Without either, `/hacker` refuses with a hint and changes nothing.
 ```toml
 [hacker]
 enabled = false            # opt-in; default off
-scope = "10.0.0.0/8,example.com"   # authorized CIDRs/IPs/domains (comma- or space-separated)
+scope = "10.0.0.0/8,example.com"   # authorized CIDRs/IPs/domains
 assessment_id = "local"
 session_minutes = 60       # how long an activated assessment stays valid
 auto_approve = true        # retained bypass; the confirmation prompt is Plan-only
@@ -76,6 +71,47 @@ Environment overrides (win over the file, per nanomite convention):
 Existing config files load unchanged: the section is optional and every key
 has a default.
 
+## Advanced capability layer (typestate)
+
+HACKER MODE sessions use a **typestate capability gate**. Invalid operations
+are unrepresentable at compile time (Rust) or runtime-guarded (Python):
+
+```
+Discovered  ── authorize() ───▶  Authorized  ── activate() ───▶  Active  ── run_module() ───▶ ...
+                                                                    │
+                                                                    └──── close() ────────────▶  Closed
+```
+
+- **`Discovered`** — session created, no authority yet. Only `authorize()`
+  is available.
+- **`Authorized`** — capability token validated. Only `activate()` is
+  available.
+- **`Active`** — operations may run. `run_module()` exists *only* on this
+  state. `close()` transitions to `Closed`.
+- **`Closed`** — read-only audit/report access only.
+
+### `OpCapability` (unforgeable authority token)
+
+```
+OpCapability {
+    token: String,          // unforgeable, issued at authorization
+    scope_id: String,       // must match the assessment scope
+    max_risk: RiskLevel,    // risk ceiling — operations above it are refused
+    allowed_modules: Vec<String>,  // module whitelist
+    expires_at: SystemTime, // capability expires; session must re-authorize
+}
+```
+
+Every `authorize_operation()` call on an `Active` session:
+
+1. Checks the capability is present and not expired.
+2. Checks the requested module is in `allowed_modules`.
+3. Checks the operation risk is at or below `max_risk`.
+4. Records a `CapEvent` (granted or denied) in the append-only audit log.
+
+This means a session cannot be used for a module or risk level it was not
+explicitly authorized for — even if the code path is reached.
+
 ## What the workspace shows
 
 Assessment name/id, status and remaining validity, the authorized scope,
@@ -94,20 +130,14 @@ table with each operation's category and risk floor.
 | `exploitation/plan` | intrusive | critical | required | structured validation plan + evidence checklist |
 | `kali/available` | passive | low | none | lists the catalogued Kali tools found on `PATH` |
 | `kali/run` | active-discovery | medium | required (tool + target) | runs one catalogued Kali tool with a fixed argv template |
+| `reporting/summary` | passive | low | none | counts findings by severity and status |
+| `reporting/export` | passive | low | none (format arg) | writes md/JSON/SARIF, same renderer as `/hacker report` |
 
 All seven go through `hacker::coordinator::run`: unknown operations never
 execute, the target is authorized *before* any I/O, anything that connects or
 fetches is resolved and every address re-checked (a permitted hostname cannot
 become an SSRF into private/metadata space), and every allow/deny/error is
 audited with a duration.
-
-Phase 4 adds two passive, target-less `reporting` operations. Both read only
-the findings store — they never touch a target:
-
-| operation | category | floor | target | does |
-|---|---|---|---|---|
-| `reporting/summary` | passive | low | none | counts findings by severity and status |
-| `reporting/export` | passive | low | none (format arg) | writes md/JSON/SARIF, same renderer as `/hacker report` |
 
 Execution properties:
 
@@ -137,7 +167,7 @@ installed assessment tools. The rest remain descriptors until their phase lands.
   post-exploitation.
 - No exploit execution of any kind. Confirmation, PoC tooling and any
   potentially disruptive validation stay outside this crate; wire your own
-  authorized framework in as an external tool instead (see the note below).
+  authorized framework in as an external tool instead.
 
 ## Kali bridge (`kali/run`)
 
@@ -160,11 +190,6 @@ Credential-attack, wireless-attack and exploitation-framework tools
 `msfconsole`, `sqlmap`, `bettercap`, …) are intentionally **not** wired into the
 catalogue and are rejected as unknown tools. Use `run_command` or your own
 authorized framework for those.
-
-Detection is by binary name only, so a same-named tool from another project
-(e.g. the Python `httpx` CLI versus ProjectDiscovery `httpx`) is reported as
-installed and may reject the template's flags — check the run output if a tool
-errors unexpectedly.
 
 `/hacker kali list` (or `/hacker run kali available`) reports which catalogued
 tools are installed without running anything.

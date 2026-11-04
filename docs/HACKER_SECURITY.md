@@ -1,13 +1,16 @@
 # HACKER MODE — security model
 
-> Status: **Phase 4, implemented+tested.** Describes only what is implemented.
+> Status: **Phase 4+, advanced capability layer.** Describes only what is
+> implemented. HACKER MODE is separate from `ToolPolicy::Hacker` (a general
+> tool-permission level).
 
 ## Separation from the existing policy
 
 - `ToolPolicy` (`src/agent/policy.rs`) is the general agent permission ladder
   (Plan ⊂ Coder ⊂ Build ⊂ Hacker). It is unchanged.
-- `HackerSession` (`src/hacker/`) is a separate environment with its own
-  `HackerAuthorization` gate. Every security operation must pass **both**.
+- `HackerSession` / `CapabilitySession` (`src/hacker/`) is a separate
+  environment with its own `HackerAuthorization` gate and **typestate
+  capability gate**. Every security operation must pass **both**.
 
 An AI-generated instruction can never authorize an operation, and an
 AI-generated scope can never serve as proof of authorization. The assessment
@@ -36,6 +39,23 @@ from model output.
     (`hacker_target_invalid`) — refused before authorization so it can never be
     parsed as an extra argument by the tool.
 
+## Typestate capability gate (advanced layer)
+
+`CapabilitySession<State>` (`src/hacker/capability.rs`) adds a second,
+typed gate on top of `HackerAuthorization`:
+
+- `authorize_operation()` exists **only** on `CapabilitySession<Active>`.
+- `OpCapability` is an unforgeable token: `scope_id`, `max_risk`,
+  `allowed_modules`, `expires_at`. It cannot be forged by the model or by
+  user input — it is issued only through `authorize()`.
+- Every attempt (granted or denied) records a `CapEvent` in the audit log.
+- Scope + risk ceiling checks run on every operation, so a session cannot
+  exceed its authorized module set or risk ceiling even if the code path is
+  reached.
+
+This means invalid states — e.g., running `network/ports` from `Discovered`,
+or exfiltrating from `Closed` — are unrepresentable in the type system.
+
 ## Operation execution (`src/hacker/coordinator.rs`)
 
 Every module operation goes through one entry point, `coordinator::run`, and
@@ -44,11 +64,11 @@ all. The order is enforced in code:
 
 1. **authorize** the target against the assessment — before any I/O;
 2. **resolve** and re-check every address only for operations that connect
-   (`network/ports`, `web/headers`) — the raw target is checked first, then the
-   resolved set;
+   (`network/ports`, `web/headers`) — the raw target is checked first, then
+   the resolved set;
 3. **execute** the module through injected traits (`Resolver`, `Connector`,
-   `Fetcher`, and for the Kali bridge a `BinaryProbe` + `ProcessRunner`), never
-   via ambient I/O;
+   `Fetcher`, and for the Kali bridge a `BinaryProbe` + `ProcessRunner`),
+   never via ambient I/O;
 4. **audit** allowed/denied/error with a duration.
 
 Bounds: 8 addresses × 32 ports per network run, 32 DNS answers, one HTTP
@@ -68,7 +88,7 @@ shells, persistence, credential attacks, or automation of compromise**, and its
 tests assert those terms are absent from the output. It is still classified
 `Intrusive`/`critical`, so it needs a target inside the assessment.
 
-### Kali bridge (`kali/run`)
+## Kali bridge (`kali/run`)
 
 The Kali bridge (`src/hacker/modules/kali.rs`) runs installed tools without a
 shell, so shell metacharacters have no effect. Two further controls:
@@ -104,18 +124,23 @@ Typed targets and rules in `src/hacker/scope.rs`:
 `OperationCategory` sets a **floor** (`effective_risk`), so a module cannot
 under-declare an intrusive operation as informational.
 
+`OpCapability.max_risk` sets the ceiling for a session — no operation above
+that ceiling can run on that session, regardless of module permissions.
+
 ## Approval — Plan-only confirmation gate (owner decision 2026-11-02)
 
 The interactive confirmation prompt for `Risk::External` tool calls
-(`run_command`, `ssh_run`, `memory_delete`, the browser tools) is consulted only
-in **Plan** mode; Coder, Build and Hacker auto-approve, so an active session is
-never interrupted. A denial in Plan mode returns `user_declined` to the model.
+(`run_command`, `ssh_run`, `memory_delete`, the browser tools) is consulted
+only in **Plan** mode; Coder, Build and Hacker auto-approve, so a working
+session is never interrupted. Plan mode's own policy still refuses command
+execution.
 
 HACKER MODE therefore never prompts. This does not weaken its controls: the
-authorization gate, the scope checks and the audit log run for every operation
-regardless of tool mode. `hacker.auto_approve` and the shared bypass flag are
-retained as defense-in-depth; with the Plan-only gate the confirmer is already
-skipped while HACKER MODE is in force.
+authorization gate, the scope checks, the typestate capability gate and the
+audit log run for every operation regardless of tool mode.
+`hacker.auto_approve` and the shared bypass flag are retained as
+defense-in-depth; with the Plan-only gate the confirmer is already skipped
+while HACKER MODE is in force.
 
 ## Audit
 
@@ -126,6 +151,10 @@ carry metadata only; free-text fields are additionally scrubbed
 (`api_key`, `token`, `password`, `secret`, `authorization` → value redacted)
 so credentials cannot reach disk. A test asserts a `password=hunter2` detail is
 never written verbatim.
+
+`CapEvent`s from the typestate capability gate are appended to the same audit
+log, so every `authorize_operation()` attempt (granted or denied) is recorded
+with the session id, module, operation, risk, and result.
 
 ## Findings & evidence store
 
@@ -140,8 +169,8 @@ records what an already-authorized operation produced.
   value is never stored — only the names of missing flags.
 - **Evidence integrity.** Each finding's detail is stored as an evidence row
   with a SHA-256 (`sha2`) and byte count, so a reader can verify the excerpt is
-  unchanged. `/hacker findings verify <id>` re-computes every digest and reports
-  a mismatch instead of trusting the row.
+  unchanged. `/hacker findings verify <id>` re-computes every digest and
+  reports a mismatch instead of trusting the row.
 - **Display-only on the way out.** `/hacker findings` and `/hacker report`
   render text for the operator. That output is never fed back to a tool and can
   never serve as proof of authorization (the assessment alone is).

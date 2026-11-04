@@ -21,7 +21,8 @@
 
 .DESCRIPTION
     Installs: Rust toolchain (via rustup-init.exe), Visual Studio Build Tools,
-    and nanomite binary. Edge (pre-installed) is used for browse tools.
+    Python toolkit deps (cracking engine), nanomite binary. Edge (pre-installed)
+    is used for browse tools.
 
 .NOTES
     Requires: Windows 10/11, PowerShell 5.1+ or PowerShell 7+
@@ -37,6 +38,7 @@ $REPO           = "ritchegerona/nanomite"
 $INSTALL_DIR    = "$env:USERPROFILE\.cargo\bin"  # standard cargo location
 $BUILD_DIR      = "$env:TEMP\nanomite-build-$PID"
 $MIN_RUST_VER   = [version]"1.75.0"   # MSRV
+$MIN_PYTHON_VER = [version]"3.9.0"
 $RUSTUP_URL     = "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe"
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -52,6 +54,14 @@ function Test-RustVersion {
     try {
         $ver = (cargo --version) -replace '^cargo\s+', ''
         [version]$ver -ge $MIN_RUST_VER
+    } catch { $false }
+}
+
+function Test-PythonVersion {
+    if (-not (HasCmd python)) { return $false }
+    try {
+        $ver = (python --version 2>&1) -replace '^Python\s+', ''
+        [version]$ver -ge $MIN_PYTHON_VER
     } catch { $false }
 }
 
@@ -76,7 +86,17 @@ if (Test-RustVersion) {
     }
 }
 
-# ── 2. Ensure Visual Studio Build Tools (MSVC) ─────────────────────────────
+# ── 2. Python 3.9+ check (needed for cracking toolkit) ─────────────────────
+if (Test-PythonVersion) {
+    $v = (python --version 2>&1) -replace '^Python\s+', ''
+    Log "Python $v OK (≥ $MIN_PYTHON_VER)"
+} else {
+    Warn "Python ≥ $MIN_PYTHON_VER not found — cracking toolkit will not work until installed."
+    Warn "Install from https://www.python.org then run:"
+    Warn "  pip install numpy scikit-learn onnxruntime llama-cpp-python pytest mypy ruff"
+}
+
+# ── 3. Ensure Visual Studio Build Tools (MSVC) ─────────────────────────────
 function Ensure-BuildTools {
     # Check if MSVC is already available (cl.exe in PATH or VS installed)
     if (HasCmd cl) {
@@ -91,7 +111,6 @@ function Ensure-BuildTools {
             $vcVars = Join-Path $vcPath "VC\Auxiliary\Build\vcvars64.bat"
             if (Test-Path $vcVars) {
                 Log "Found Visual Studio at $vcPath — setting up MSVC environment"
-                # We can't persist vcvars in this session easily; cargo will find it via vswhere
                 return
             }
         }
@@ -125,16 +144,16 @@ function Ensure-BuildTools {
 }
 Ensure-BuildTools
 
-# ── 3. Chromium/Edge check ─────────────────────────────────────────────────
+# ── 4. Chromium/Edge check ─────────────────────────────────────────────────
 # Edge is pre-installed on Windows 10/11 and auto-discovered by nanomite
-if (Test-Path "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe") -or
+if (Test-Path "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe`) -or `
    (Test-Path "${env:ProgramFiles}\Microsoft\Edge\Application\msedge.exe") {
     Log "Microsoft Edge found — browse tools will work."
 } else {
     Warn "Edge not found in standard location. Browse tools may not work."
 }
 
-# ── 4. Build nanomite ──────────────────────────────────────────────────────
+# ── 5. Build nanomite ──────────────────────────────────────────────────────
 Log "Cloning $REPO..."
 if (Test-Path $BUILD_DIR) { Remove-Item -Recurse -Force $BUILD_DIR -ErrorAction SilentlyContinue }
 git clone --depth 1 "https://github.com/$REPO.git" $BUILD_DIR
@@ -142,13 +161,13 @@ git clone --depth 1 "https://github.com/$REPO.git" $BUILD_DIR
 Log "Building release binary (this takes ~2-3 min)..."
 Push-Location $BUILD_DIR
 try {
-    cargo build --release --locked
+    cargo build --release
 } catch {
     Die "Build failed: $_"
 }
 Pop-Location
 
-# ── 5. Install binary ──────────────────────────────────────────────────────
+# ── 6. Install binary ──────────────────────────────────────────────────────
 $binSrc = Join-Path $BUILD_DIR "target\release\nanomite.exe"
 if (-not (Test-Path $binSrc)) { Die "Built binary not found at $binSrc" }
 
@@ -156,20 +175,20 @@ New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 Copy-Item -Force $binSrc -Destination (Join-Path $INSTALL_DIR "nanomite.exe")
 Log "Installed to $INSTALL_DIR\nanomite.exe"
 
-# ── 6. PATH check ──────────────────────────────────────────────────────────
+# ── 7. PATH check ──────────────────────────────────────────────────────────
 $pathDirs = ($env:PATH -split ';').Trim()
 if ($pathDirs -notcontains $INSTALL_DIR) {
     Warn "$INSTALL_DIR is not in your PATH."
     Warn "Add it permanently (PowerShell):"
     Warn '  [Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";' + $INSTALL_DIR + '", "User")'
-    Warn "Or add to your shell profile (\$PROFILE):"
+    Warn "Or add to your shell profile ($PROFILE):"
     Warn '  $env:PATH += ";' + $INSTALL_DIR + '"'
 }
 
-# ── 7. Cleanup ─────────────────────────────────────────────────────────────
+# ── 8. Cleanup ─────────────────────────────────────────────────────────────
 Remove-Item -Recurse -Force $BUILD_DIR -ErrorAction SilentlyContinue
 
-# ── 8. Verify ──────────────────────────────────────────────────────────────
+# ── 9. Verify ──────────────────────────────────────────────────────────────
 $binDst = Join-Path $INSTALL_DIR "nanomite.exe"
 if (Test-Path $binDst) {
     $ver = & $binDst --version
@@ -179,7 +198,7 @@ if (Test-Path $binDst) {
     Die "Binary installed but verification failed."
 }
 
-# ── 9. Next steps ──────────────────────────────────────────────────────────
+# ── 10. Next steps ─────────────────────────────────────────────────────────
 @"
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NEXT STEPS
@@ -199,9 +218,12 @@ NEXT STEPS
 3) Browse tools:
    Microsoft Edge is pre-installed on Windows 10/11 — auto-discovered.
 
-4) Keep updated:
+4) Python cracking toolkit (optional, for HACKER MODE password audits):
+   pip install numpy scikit-learn onnxruntime llama-cpp-python pytest mypy ruff
+
+5) Keep updated:
    nanomite update   # git-checkout installs only
    # Or re-run this installer for the latest master
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 "@
