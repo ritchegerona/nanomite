@@ -50,10 +50,7 @@ pub struct HackerSessionTyped<State> {
 impl HackerSessionTyped<Discovered> {
     /// Wraps an existing `HackerSession` in the discovered state.
     pub fn wrap(inner: &HackerSession) -> Self {
-        let _millis = UNIX_EPOCH
-            .elapsed()
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
+        let _millis = UNIX_EPOCH.elapsed().map(|d| d.as_millis()).unwrap_or(0);
         Self {
             session_id: format!("cap-{:x}", _millis),
             target: inner.assessment_id_dbg().to_string(),
@@ -190,7 +187,8 @@ impl HackerSessionTyped<Active> {
                 return Err(CapError::OutOfScope(category.label().to_string()));
             }
             if let Some(host) = target {
-                if super::scope::host_in_scope(host, assessment) == super::scope::ScopeMatch::OutOfScope
+                if super::scope::host_in_scope(host, assessment)
+                    == super::scope::ScopeMatch::OutOfScope
                 {
                     self.events.push(CapEvent {
                         ts: now,

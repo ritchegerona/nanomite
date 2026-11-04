@@ -542,7 +542,10 @@ impl std::fmt::Display for HackerConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HackerConfigError::ScopeRequired => {
-                write!(f, "hacker.enabled = true but no authorized scope configured")
+                write!(
+                    f,
+                    "hacker.enabled = true but no authorized scope configured"
+                )
             }
             HackerConfigError::SessionMinutesZero => {
                 write!(f, "hacker.session_minutes must be greater than zero")
@@ -572,13 +575,8 @@ impl HackerConfig {
             if trimmed.is_empty() {
                 continue;
             }
-            if !trimmed.contains('/')
-                && !is_ip_literal(trimmed)
-                && !is_domain(trimmed)
-            {
-                return Err(HackerConfigError::InvalidScopeEntry(
-                    trimmed.to_string(),
-                ));
+            if !trimmed.contains('/') && !is_ip_literal(trimmed) && !is_domain(trimmed) {
+                return Err(HackerConfigError::InvalidScopeEntry(trimmed.to_string()));
             }
         }
 
@@ -733,7 +731,8 @@ fn parse_stored(text: &str) -> Stored {
                 "store" => stored.hacker_store = Some(parse_bool(&value)),
                 "allowed_modules" => {
                     stored.hacker_allowed_modules = Some(
-                        value.split([',', ' ', '\t', '\n'])
+                        value
+                            .split([',', ' ', '\t', '\n'])
                             .map(str::trim)
                             .filter(|s| !s.is_empty())
                             .map(str::to_string)

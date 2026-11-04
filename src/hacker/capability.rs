@@ -276,8 +276,7 @@ mod tests {
     #[test]
     fn authorize_then_activate_then_authorize_ok() {
         let _now = SystemTime::now();
-        let s =
-            CapabilitySession::<Discovered>::new("10.0.0.1".into(), "eng-001".into());
+        let s = CapabilitySession::<Discovered>::new("10.0.0.1".into(), "eng-001".into());
         let authed = s.authorize("operator", cap_valid()).unwrap();
         let active = authed.activate().unwrap();
         let risk = active

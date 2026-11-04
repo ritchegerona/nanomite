@@ -1,6 +1,6 @@
 # ⬡ nanomite
 
-**A microscopic terminal coding agent.** Runs in your terminal, talks to any
+**Intelligence Without Boundaries.** Runs in your terminal, talks to any
 OpenAI-compatible model, and works your workspace with real tools: files,
 shell, SSH and the web.
 

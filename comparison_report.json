@@ -1,0 +1,46 @@
+{
+  "compared_at": "2026-11-03T05:19:41.363938Z",
+  "baseline_file": "/home/ritche/nanomite/inventory.json",
+  "current_file": "/home/ritche/nanomite/inventory_nonroot.json",
+  "summary": {
+    "baseline_hosts": 4,
+    "current_hosts": 4,
+    "new": 0,
+    "changed": 0,
+    "removed": 0,
+    "unchanged": 4
+  },
+  "new_hosts": [],
+  "changed_hosts": [],
+  "removed_hosts": [],
+  "unchanged_hosts": [
+    {
+      "ip": "192.168.0.10",
+      "mac": "04:03:12:f0:75:aa",
+      "interface": "eno1",
+      "source": "arp_cache",
+      "timestamp": "2026-11-03T05:04:18.909904Z"
+    },
+    {
+      "ip": "192.168.0.1",
+      "mac": "68:7f:f0:69:b9:d4",
+      "interface": "eno1",
+      "source": "arp_cache",
+      "timestamp": "2026-11-03T05:04:18.909940Z"
+    },
+    {
+      "ip": "192.168.0.160",
+      "mac": "54:e1:ad:d2:82:05",
+      "interface": "eno1",
+      "source": "arp_cache",
+      "timestamp": "2026-11-03T05:04:18.909944Z"
+    },
+    {
+      "ip": "192.168.0.215",
+      "mac": "c0:18:03:aa:ea:75",
+      "interface": "eno1",
+      "source": "arp_cache",
+      "timestamp": "2026-11-03T05:04:18.909947Z"
+    }
+  ]
+}

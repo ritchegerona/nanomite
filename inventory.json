@@ -1,0 +1,35 @@
+{
+  "generated_at": "2026-11-03T05:00:30.459631Z",
+  "interface": "eno1",
+  "host_count": 4,
+  "hosts": [
+    {
+      "ip": "192.168.0.10",
+      "mac": "04:03:12:f0:75:aa",
+      "interface": "eno1",
+      "source": "arp_cache",
+      "timestamp": "2026-11-03T05:00:30.459525Z"
+    },
+    {
+      "ip": "192.168.0.1",
+      "mac": "68:7f:f0:69:b9:d4",
+      "interface": "eno1",
+      "source": "arp_cache",
+      "timestamp": "2026-11-03T05:00:30.459556Z"
+    },
+    {
+      "ip": "192.168.0.160",
+      "mac": "54:e1:ad:d2:82:05",
+      "interface": "eno1",
+      "source": "arp_cache",
+      "timestamp": "2026-11-03T05:00:30.459561Z"
+    },
+    {
+      "ip": "192.168.0.215",
+      "mac": "c0:18:03:aa:ea:75",
+      "interface": "eno1",
+      "source": "arp_cache",
+      "timestamp": "2026-11-03T05:00:30.459564Z"
+    }
+  ]
+}

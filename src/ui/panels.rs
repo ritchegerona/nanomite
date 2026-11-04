@@ -173,9 +173,7 @@ pub fn rule(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 /// Status strip on the bottom edge, under the composer. Rebuilt only when
-/// its inputs change.
-/// (The mode badge was removed by owner request 2026-11-04: footer stays clean.)
-
+/// its inputs change. (The mode badge was removed by owner request 2026-11-04: footer stays clean.)
 /// Follow-up suggestions strip (opencode-style): mounts between the prompt
 /// queue and the footer when the model answered a finished turn's suggestion
 /// side-call. Same quiet background-strip language as the prompt queue: no

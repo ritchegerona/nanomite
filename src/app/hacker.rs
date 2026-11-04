@@ -19,8 +19,8 @@
 //! - `/learn <topic>` → daily learning cadence entry point
 
 use crate::app::App;
-use crate::app::EntryRole;
 use crate::app::Entry;
+use crate::app::EntryRole;
 use crate::hacker::coordinator;
 use crate::hacker::store::{FindingsStore, ReportFormat};
 use std::path::PathBuf;
@@ -76,8 +76,7 @@ impl App {
                 );
                 text.push("report: /hacker report [md|json|sarif]".to_string());
                 text.push(
-                    "assessments: /hacker assessment [list|use <id>|complete [<id>]]"
-                        .to_string(),
+                    "assessments: /hacker assessment [list|use <id>|complete [<id>]]".to_string(),
                 );
                 self.entries
                     .push(Entry::new(EntryRole::System, text.join("\n")));
@@ -165,9 +164,7 @@ impl App {
     /// scope, invalid scope) surface as a toast, never a panic.
     pub fn open_hacker(&mut self) {
         if !self.cfg.hacker.enabled {
-            self.toast(
-                "HACKER MODE is disabled - set `hacker_enabled = true` to enable it",
-            );
+            self.toast("HACKER MODE is disabled - set `hacker_enabled = true` to enable it");
             self.mark_dirty();
             return;
         }
@@ -183,9 +180,7 @@ impl App {
                 self.toast(format!("policy switch failed: {err}"));
             }
             self.spawn_hacker_assessment_save();
-            self.toast(
-                "HACKER MODE active - authorized scope enforced, audited",
-            );
+            self.toast("HACKER MODE active - authorized scope enforced, audited");
         }
         self.overlay = Some(crate::app::Overlay::Hacker(
             crate::app::HackerState::default(),
@@ -246,7 +241,11 @@ impl App {
             if let Err(e) = cap.authorize_operation(
                 module,
                 category,
-                if target.is_empty() { None } else { Some(target) },
+                if target.is_empty() {
+                    None
+                } else {
+                    Some(target)
+                },
                 &[],
                 now,
                 ctx,
@@ -347,9 +346,7 @@ impl App {
         let cmd = match crate::app::parse_findings_cmd(args) {
             Ok(cmd) => cmd,
             Err(()) => {
-                self.toast(
-                    "usage: /hacker findings [list|show <id>|triage|accept|close <id>]",
-                );
+                self.toast("usage: /hacker findings [list|show <id>|triage|accept|close <id>]");
                 self.mark_dirty();
                 return;
             }
@@ -422,9 +419,7 @@ impl App {
                         Ok(store) => match store.load_assessment(&id) {
                             Err(err) => format!("assessment use failed: {err}"),
                             Ok(Some(spec)) => {
-                                let _ = tx.send(crate::app::HackerEvent::Resume(
-                                    Box::new(spec),
-                                ));
+                                let _ = tx.send(crate::app::HackerEvent::Resume(Box::new(spec)));
                                 return;
                             }
                             Ok(None) => format!("no assessment `{id}`"),
@@ -438,12 +433,7 @@ impl App {
                 self.toast(format!("loading assessment {label} ..."));
             }
             crate::app::AssessmentCmd::Complete(id) => {
-                let id = id.or_else(|| {
-                    self.hacker
-                        .assessment
-                        .as_ref()
-                        .map(|c| c.id.clone())
-                });
+                let id = id.or_else(|| self.hacker.assessment.as_ref().map(|c| c.id.clone()));
                 let Some(id) = id else {
                     self.toast("no active assessment to complete");
                     self.mark_dirty();
@@ -460,10 +450,7 @@ impl App {
                             return;
                         }
                         Ok(store) => store
-                            .set_assessment_status(
-                                &id,
-                                crate::hacker::AssessmentStatus::Completed,
-                            )
+                            .set_assessment_status(&id, crate::hacker::AssessmentStatus::Completed)
                             .unwrap_or(false),
                     };
                     if done {
@@ -521,8 +508,7 @@ impl App {
                     Ok(report) => report.render().join("\n"),
                     Err(err) => format!("hacker {request} failed: {err}"),
                 };
-                self.entries
-                    .push(Entry::new(EntryRole::System, text));
+                self.entries.push(Entry::new(EntryRole::System, text));
             }
             crate::app::HackerEvent::Lines { request, text } => {
                 self.entries.push(Entry::new(
@@ -551,11 +537,7 @@ impl App {
             } => {
                 let _ = (module, op, target);
             }
-            crate::app::HackerEvent::OperationDenied {
-                module,
-                op,
-                reason,
-            } => {
+            crate::app::HackerEvent::OperationDenied { module, op, reason } => {
                 let _ = (module, op, reason);
             }
         }

@@ -39,6 +39,7 @@ const BOARD_ROUNDS: usize = 2;
 /// Records `/memory` lists: newest first, bounded so the picker stays readable.
 const MEMORY_LIST_ROWS: usize = 100;
 /// Techniques one `/hacker techniques` recall lists.
+#[allow(dead_code)]
 const TECHNIQUE_LIST_ROWS: usize = 50;
 /// Hard cap on the body one `/memory` record overlay will render.
 const MEMORY_BODY_CHARS: usize = 40_000;
@@ -1745,6 +1746,7 @@ fn render_hacker_findings(path: &Path, cmd: FindingsCmd) -> String {
 
 /// A finished `/hacker` background job, delivered on `hacker_rx`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) enum HackerEvent {
     /// A finished module operation.
     Report {
@@ -7571,6 +7573,7 @@ fn on_off(value: bool) -> &'static str {
 /// One search hit as a `/memory` row: summary when the record has one, else
 /// its first non-empty line, with the body carried for the record overlay.
 /// Renders recalled technique records as a compact transcript block.
+#[allow(dead_code)]
 fn render_techniques(items: &[crate::memory::model::MemoryHit]) -> String {
     if items.is_empty() {
         return "no techniques learned yet. The agent records reusable tradecraft \
