@@ -1,6 +1,51 @@
+# Build artifacts
 /target
-.opencode/
-TODO.md
-/learning_material
+/.slim/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+.venv
+
+# Python caches / tooling
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# macOS
+.DS_Store
+
+# Local data / runtime
+.nanomite/
+/pack/
+/report/
+/learning_material
+
+# Logs
+*.log
+log_*.log
+crack_more.log
+
+# Temporary / legacy scratch files
+chunk_*.txt
+*.bak
+
+# Decrypted outputs (do not commit recovered files)
+*.xlsx
+decrypted_*.xlsx
+decrypted_output.xlsx
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
