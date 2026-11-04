@@ -980,6 +980,37 @@ impl Config {
         let env_str = |keys: &[&str]| if use_env { first_env(keys) } else { None };
         let env_one = |key: &str| if use_env { first_env_one(key) } else { None };
         let workspace = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+        // Fail-fast validation of HACKER MODE config: if the user enabled
+        // hacker mode without a valid scope, we never silently guess. We log a
+        // loud error and disable hacker mode for this invocation.
+        let mut hacker = HackerConfig {
+            enabled: stored.hacker_enabled.unwrap_or(false),
+            scope: stored
+                .hacker_scope
+                .clone()
+                .unwrap_or_default()
+                .split([',', ' ', '\t', '\n'])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
+            assessment_id: stored
+                .hacker_assessment_id
+                .clone()
+                .unwrap_or_else(|| "local".to_string()),
+            session_minutes: stored.hacker_session_minutes.unwrap_or(60).max(1),
+            auto_approve: stored.hacker_auto_approve.unwrap_or(true),
+            audit: stored.hacker_audit.unwrap_or(true),
+            store: stored.hacker_store.unwrap_or(true),
+            capability_token: first_env_one("NANOMITE_HACKER_CAPABILITY_TOKEN"),
+            allowed_modules: stored.hacker_allowed_modules.clone(),
+        };
+        if let Err(e) = hacker.validate() {
+            eprintln!("config: invalid HACKER MODE configuration: {e}");
+            eprintln!("config: disabling HACKER MODE until scope is corrected");
+            hacker.enabled = false;
+        }
         let base_env = env_str(&["NANOMITE_BASE_URL", "OPENAI_BASE_URL", "OPENAI_API_BASE"]);
         let mut base_url = base_env
             .clone()
@@ -1129,93 +1160,9 @@ impl Config {
             }
         };
 
-        // HACKER MODE: disabled unless explicitly enabled, and the scope is
-        // the user's authorization input. Env overrides the file, as usual.
-        let hacker = {
-            let enabled = if use_env {
-                first_env_one("NANOMITE_HACKER")
-                    .map(|v| parse_bool(&v))
-                    .unwrap_or_else(|| stored.hacker_enabled.unwrap_or(false))
-            } else {
-                stored.hacker_enabled.unwrap_or(false)
-            };
-            let scope_raw = if use_env {
-                first_env_one("NANOMITE_HACKER_SCOPE")
-            } else {
-                None
-            }
-            .or_else(|| stored.hacker_scope.clone())
-            .unwrap_or_default();
-            let scope: Vec<String> = scope_raw
-                .split([',', ' ', '\t', '\n'])
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect();
-            let assessment_id = if use_env {
-                first_env_one("NANOMITE_HACKER_ASSESSMENT")
-            } else {
-                None
-            }
-            .or_else(|| stored.hacker_assessment_id.clone())
-            .unwrap_or_else(|| "local".to_string());
-            let session_minutes = if use_env {
-                num_env_u64("NANOMITE_HACKER_SESSION_MINUTES", 60)
-            } else {
-                stored.hacker_session_minutes.unwrap_or(60)
-            };
-            let auto_approve = if use_env {
-                match first_env_one("NANOMITE_HACKER_AUTO_APPROVE") {
-                    Some(v) => parse_bool(&v),
-                    None => stored.hacker_auto_approve.unwrap_or(true),
-                }
-            } else {
-                stored.hacker_auto_approve.unwrap_or(true)
-            };
-            let audit = if use_env {
-                match first_env_one("NANOMITE_HACKER_AUDIT") {
-                    Some(v) => parse_bool(&v),
-                    None => stored.hacker_audit.unwrap_or(true),
-                }
-            } else {
-                stored.hacker_audit.unwrap_or(true)
-            };
-            let store = if use_env {
-                match first_env_one("NANOMITE_HACKER_STORE") {
-                    Some(v) => parse_bool(&v),
-                    None => stored.hacker_store.unwrap_or(true),
-                }
-            } else {
-                stored.hacker_store.unwrap_or(true)
-            };
-            let capability_token = if use_env {
-                first_env_one("NANOMITE_HACKER_CAPABILITY_TOKEN")
-            } else {
-                None
-            };
-            let allowed_modules = if use_env {
-                first_env_one("NANOMITE_HACKER_MODULES").map(|raw| {
-                    raw.split([',', ' ', '\t', '\n'])
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                        .collect()
-                })
-            } else {
-                stored.hacker_allowed_modules.clone()
-            };
-            HackerConfig {
-                enabled,
-                scope,
-                assessment_id,
-                session_minutes: session_minutes.max(1),
-                auto_approve,
-                audit,
-                store,
-                capability_token,
-                allowed_modules,
-            }
-        };
+        // HACKER MODE: validated above (fail-fast on bad scope). Env overrides
+        // the file for capability token and allowed modules.
+        let hacker = hacker;
 
         // Custom prompt file: the environment wins over the persisted path, and the
         // default location is always resolved so callers can report it.
@@ -1515,11 +1462,12 @@ mod tests {
             std::env::temp_dir().join(format!("nanomite-hacker-{}.toml", std::process::id()));
         fs::write(
             &path,
-            "model = \"gpt-4o-mini\"\n[hacker]\nenabled = true\nstore = false\naudit = false\n",
+            "model = \"gpt-4o-mini\"\n[hacker]\nenabled = true\nscope = \"127.0.0.1/32\"\nstore = false\naudit = false\n",
         )
         .expect("write config");
         let cfg = Config::load_from(&path);
         assert!(cfg.hacker.enabled);
+        assert_eq!(cfg.hacker.scope, vec!["127.0.0.1/32"]);
         assert!(!cfg.hacker.store, "the file value must be honoured");
         assert!(!cfg.hacker.audit);
 
