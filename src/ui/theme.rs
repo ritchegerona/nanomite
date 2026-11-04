@@ -187,6 +187,35 @@ const UMBRELLA: Palette = Palette {
     quote: (152, 142, 146),
 };
 
+/// Dracula — Popular purple/pink theme: deep purple ground, vibrant pink accent.
+/// High contrast, easy on eyes, beloved by developers.
+const DRACULA: Palette = Palette {
+    neutral: (0, 0, 0),
+    panel_bg: (40, 42, 54),
+    element_bg: (68, 71, 90),
+    text: (248, 248, 242),
+    strong: (255, 255, 255),
+    muted: (98, 114, 164),
+    faint: (68, 71, 90),
+    border: (68, 71, 90),
+    border_focus: (189, 147, 249),
+    border_subtle: (59, 62, 79),
+    accent: (189, 147, 249),
+    accent_soft: (139, 117, 189),
+    success: (80, 250, 123),
+    danger: (255, 85, 85),
+    warn: (241, 250, 140),
+    mode_plan: (255, 184, 108),
+    mode_coder: (139, 233, 253),
+    mode_build: (80, 250, 123),
+    mode_hacker: (255, 85, 85),
+    diff_add: (80, 250, 123),
+    diff_delete: (255, 85, 85),
+    tool: (189, 147, 249),
+    code: (139, 233, 253),
+    quote: (241, 250, 140),
+};
+
 /// Selectable palettes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeId {
@@ -195,14 +224,16 @@ pub enum ThemeId {
     Midnight,
     Graphite,
     Umbrella,
+    Dracula,
 }
 
 impl ThemeId {
-    pub const ALL: [ThemeId; 4] = [
+    pub const ALL: [ThemeId; 5] = [
         ThemeId::Mono,
         ThemeId::Midnight,
         ThemeId::Graphite,
         ThemeId::Umbrella,
+        ThemeId::Dracula,
     ];
 
     pub fn label(self) -> &'static str {
@@ -211,6 +242,7 @@ impl ThemeId {
             ThemeId::Graphite => "graphite",
             ThemeId::Mono => "mono",
             ThemeId::Umbrella => "umbrella",
+            ThemeId::Dracula => "dracula",
         }
     }
 
@@ -221,6 +253,7 @@ impl ThemeId {
             ThemeId::Graphite => &GRAPHITE,
             ThemeId::Mono => &MONO,
             ThemeId::Umbrella => &UMBRELLA,
+            ThemeId::Dracula => &DRACULA,
         }
     }
 
@@ -504,7 +537,7 @@ mod tests {
             assert!(!id.label().is_empty());
             assert!(id.label().chars().all(|c| !c.is_uppercase()));
         }
-        assert_eq!(ThemeId::ALL.len(), 4);
+        assert_eq!(ThemeId::ALL.len(), 5);
     }
 
     #[test]
