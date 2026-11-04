@@ -806,6 +806,22 @@ pub struct PendingImage {
     pub bytes: usize,
 }
 
+/// A document/file attachment resolved from `@filename` syntax.
+/// Carries extracted text content for the model context.
+#[derive(Debug, Clone)]
+pub struct PendingFile {
+    /// Base file name, shown in the transcript badge.
+    pub name: String,
+    /// Extracted text content (bounded).
+    pub text: String,
+    /// Detected format (pdf, docx, txt, md, etc.).
+    pub format: String,
+    /// Raw byte size, for the badge.
+    pub bytes: usize,
+    /// True if extraction was truncated.
+    pub truncated: bool,
+}
+
 /// Extensions `/image` accepts, with their wire MIME types.
 const IMAGE_MIME: &[(&str, &str)] = &[
     ("png", "image/png"),
@@ -821,6 +837,100 @@ const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 
 /// At most this many images may sit queued for one message.
 const MAX_PENDING_IMAGES: usize = 4;
+
+/// Hard cap on one document attachment (extracted text chars).
+const MAX_FILE_TEXT_CHARS: usize = 50 * 1024;
+
+/// At most this many @file references may be resolved per message.
+const MAX_PENDING_FILES: usize = 8;
+
+/// File extensions that are treated as images (base64 encoded).
+fn is_image_extension(ext: &str) -> bool {
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp"
+    )
+}
+
+/// File extensions that are treated as documents (text extracted).
+fn is_document_extension(ext: &str) -> bool {
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "pdf"
+            | "docx"
+            | "doc"
+            | "odt"
+            | "rtf"
+            | "txt"
+            | "md"
+            | "markdown"
+            | "mdown"
+            | "rst"
+            | "html"
+            | "htm"
+            | "xhtml"
+            | "json"
+            | "jsonl"
+            | "ndjson"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "xml"
+            | "svg"
+            | "plist"
+            | "xsl"
+            | "xsd"
+            | "csv"
+            | "tsv"
+            | "xlsx"
+            | "xlsm"
+            | "ods"
+            | "py"
+            | "rs"
+            | "js"
+            | "ts"
+            | "jsx"
+            | "tsx"
+            | "java"
+            | "cpp"
+            | "c"
+            | "h"
+            | "hpp"
+            | "go"
+            | "rb"
+            | "php"
+            | "swift"
+            | "kt"
+            | "scala"
+            | "cs"
+            | "fs"
+            | "vb"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "fish"
+            | "ps1"
+            | "bat"
+            | "cmd"
+            | "css"
+            | "scss"
+            | "sass"
+            | "less"
+            | "sql"
+            | "graphql"
+            | "gql"
+            | "dockerfile"
+            | "makefile"
+            | "cmake"
+            | "gradle"
+            | "ini"
+            | "cfg"
+            | "conf"
+            | "env"
+            | "log"
+            | "text"
+    )
+}
 
 /// Resolves and validates an `/image <path>` argument without touching the
 /// UI thread: extension allow-list, size cap, then read + base64. All I/O
@@ -1060,6 +1170,209 @@ fn build_image_attachment(arg: &str, cwd: &std::path::Path) -> Result<PendingIma
     })
 }
 
+/// Resolves and processes a single `@filename` reference.
+/// Returns a tuple of (images, files) to attach to the message.
+fn process_file_reference(
+    arg: &str,
+    cwd: &std::path::Path,
+) -> Result<(Option<PendingImage>, Option<PendingFile>), String> {
+    let path = arg.trim();
+    if path.is_empty() {
+        return Err("empty file reference".into());
+    }
+    let p = std::path::Path::new(path);
+    let full = if p.is_absolute() {
+        std::path::PathBuf::from(path)
+    } else {
+        cwd.join(path)
+    };
+
+    // Check if file exists
+    let meta = full
+        .metadata()
+        .map_err(|e| format!("cannot read {}: {e}", full.display()))?;
+
+    let name = full
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".into());
+
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    // Image files: encode as base64 data URL
+    if is_image_extension(&ext) {
+        if meta.len() as usize > MAX_IMAGE_BYTES {
+            return Err(format!(
+                "{} is over the {} MB limit",
+                full.display(),
+                MAX_IMAGE_BYTES / (1024 * 1024)
+            ));
+        }
+        let bytes =
+            std::fs::read(&full).map_err(|e| format!("cannot read {}: {e}", full.display()))?;
+        if bytes.len() > MAX_IMAGE_BYTES {
+            return Err(format!(
+                "{} is over the {} MB limit",
+                full.display(),
+                MAX_IMAGE_BYTES / (1024 * 1024)
+            ));
+        }
+        let mime = IMAGE_MIME
+            .iter()
+            .find(|(e, _)| e.eq_ignore_ascii_case(&ext))
+            .map(|(_, m)| *m)
+            .ok_or_else(|| format!("unsupported image format: .{}", ext))?;
+        return Ok((
+            Some(PendingImage {
+                name,
+                data_url: format!("data:{mime};base64,{}", base64_encode(&bytes)),
+                bytes: bytes.len(),
+            }),
+            None,
+        ));
+    }
+
+    // Document files: extract text content
+    if is_document_extension(&ext) {
+        // Use the extract module to get text content
+        use crate::extract::{extract_path, ExtractionLimits};
+
+        let limits = ExtractionLimits::for_tool(200_000); // 200KB file size limit for tool extraction
+        let doc = extract_path(&full, &limits)
+            .map_err(|e| format!("failed to extract {}: {}", full.display(), e))?;
+
+        let text = doc.text;
+        let truncated = doc.truncated;
+
+        // Truncate text if too long
+        let text = if text.chars().count() > MAX_FILE_TEXT_CHARS {
+            let truncated_text: String = text.chars().take(MAX_FILE_TEXT_CHARS).collect();
+            format!(
+                "{truncated_text}\n\n[... truncated at {} chars]",
+                MAX_FILE_TEXT_CHARS
+            )
+        } else {
+            text
+        };
+
+        return Ok((
+            None,
+            Some(PendingFile {
+                name,
+                text,
+                format: doc.format.as_str().to_string(),
+                bytes: doc.size as usize,
+                truncated,
+            }),
+        ));
+    }
+
+    Err(format!(
+        "unsupported file type: .{} (supported: images: png, jpg, jpeg, gif, webp; documents: pdf, docx, odt, rtf, txt, md, html, json, yaml, toml, csv, xlsx, ods, and source code)",
+        ext
+    ))
+}
+
+/// Parses `@filename` references from a prompt string.
+/// Returns the cleaned prompt (with @refs removed) and vectors of resolved images and files.
+fn parse_file_references(
+    prompt: &str,
+    cwd: &std::path::Path,
+) -> Result<(String, Vec<PendingImage>, Vec<PendingFile>), String> {
+    let mut images = Vec::new();
+    let mut files = Vec::new();
+    let mut cleaned = String::new();
+    let mut chars = prompt.chars().peekable();
+    let mut in_at_ref = false;
+    let mut current_ref = String::new();
+
+    while let Some(c) = chars.next() {
+        if in_at_ref {
+            if c.is_whitespace() || c == '@' {
+                // End of @reference
+                if !current_ref.is_empty() {
+                    match process_file_reference(&current_ref, cwd) {
+                        Ok((img, file)) => {
+                            if let Some(img) = img {
+                                if images.len() < MAX_PENDING_IMAGES {
+                                    images.push(img);
+                                }
+                            }
+                            if let Some(file) = file {
+                                if files.len() < MAX_PENDING_FILES {
+                                    files.push(file);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // On error, keep the @ref in the prompt as literal text
+                            cleaned.push('@');
+                            cleaned.push_str(&current_ref);
+                            cleaned.push(c);
+                            // Don't treat the error as a ref, just continue
+                        }
+                    }
+                }
+                current_ref.clear();
+                in_at_ref = false;
+                if c != '@' {
+                    cleaned.push(c);
+                }
+            } else {
+                current_ref.push(c);
+            }
+        } else if c == '@' {
+            // Check if next char starts a valid reference (not @@ for escaping)
+            if let Some(&next) = chars.peek() {
+                if next == '@' {
+                    // Escaped @@ -> single @
+                    chars.next(); // consume the second @
+                    cleaned.push('@');
+                } else if next.is_whitespace() {
+                    // Just a standalone @, keep it
+                    cleaned.push('@');
+                } else {
+                    // Start of a reference
+                    in_at_ref = true;
+                }
+            } else {
+                // @ at end of string
+                cleaned.push('@');
+            }
+        } else {
+            cleaned.push(c);
+        }
+    }
+
+    // Handle trailing @ref at end of string
+    if in_at_ref && !current_ref.is_empty() {
+        match process_file_reference(&current_ref, cwd) {
+            Ok((img, file)) => {
+                if let Some(img) = img {
+                    if images.len() < MAX_PENDING_IMAGES {
+                        images.push(img);
+                    }
+                }
+                if let Some(file) = file {
+                    if files.len() < MAX_PENDING_FILES {
+                        files.push(file);
+                    }
+                }
+            }
+            Err(_) => {
+                cleaned.push('@');
+                cleaned.push_str(&current_ref);
+            }
+        }
+    }
+
+    Ok((cleaned.trim().to_string(), images, files))
+}
+
 /// Human label for the transcript badge: KB below 1 MB, MB above.
 fn image_size_label(bytes: usize) -> String {
     if bytes >= 1024 * 1024 {
@@ -1075,6 +1388,20 @@ fn image_badge(image: &PendingImage) -> String {
         "[image: {} · {}]",
         image.name,
         image_size_label(image.bytes)
+    )
+}
+
+/// Badge line prepended to a user entry carrying a `@file` reference.
+fn file_badge(file: &PendingFile) -> String {
+    let size_label = if file.bytes >= 1024 * 1024 {
+        format!("{:.1} MB", file.bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{} KB", file.bytes.div_ceil(1024))
+    };
+    let trunc = if file.truncated { " · truncated" } else { "" };
+    format!(
+        "[file: {} · {} · {}{}]",
+        file.name, file.format, size_label, trunc
     )
 }
 
@@ -1468,7 +1795,8 @@ pub struct App {
     pub hacker: crate::hacker::HackerSession,
     /// Typestate capability wrapper around `hacker`. `None` until a valid
     /// `OpCapability` is bound; `Some(Active)` gates every `/hacker run`.
-    pub hacker_cap: Option<crate::hacker::typestate::HackerSessionTyped<crate::hacker::typestate::Active>>,
+    pub hacker_cap:
+        Option<crate::hacker::typestate::HackerSessionTyped<crate::hacker::typestate::Active>>,
     pub theme: Theme,
     pub cwd: PathBuf,
     pub entries: Vec<Entry>,
@@ -2361,7 +2689,15 @@ impl App {
         // Drain the prompt queue: the next queued prompt starts immediately
         // as a fresh turn, exactly as if the user had submitted it now.
         if let Some(next) = self.prompt_queue.pop_front() {
-            self.start_turn(next);
+            let (prompt, at_images, at_files) = match parse_file_references(&next, &self.cwd) {
+                Ok(result) => result,
+                Err(e) => {
+                    self.toast(format!("file reference error: {e}"));
+                    self.mark_dirty();
+                    return;
+                }
+            };
+            self.start_turn(prompt, at_images, at_files);
         }
     }
 
@@ -2581,11 +2917,22 @@ impl App {
             return;
         }
 
-        let Some(prompt) = self.composer.submit() else {
+        let Some(raw_prompt) = self.composer.submit() else {
             return;
         };
         // Clear ghost text when user submits a new prompt
         self.composer.clear_ghost();
+
+        // Parse @filename references from the prompt
+        let (prompt, at_images, at_files) = match parse_file_references(&raw_prompt, &self.cwd) {
+            Ok(result) => result,
+            Err(e) => {
+                self.toast(format!("file reference error: {e}"));
+                self.mark_dirty();
+                return;
+            }
+        };
+
         if self.is_busy() {
             // Queue the prompt; the queue drains automatically when the
             // current turn finishes (finish_turn -> start_turn).
@@ -2596,30 +2943,61 @@ impl App {
             return;
         }
 
-        self.start_turn(prompt);
+        self.start_turn(prompt, at_images, at_files);
     }
 
     /// Begins one agent turn: records the user message, spawns the runtime.
     /// Shared by direct submission and by the prompt queue draining after a
     /// finished turn, so queued prompts take exactly the same path.
-    fn start_turn(&mut self, prompt: String) {
+    fn start_turn(
+        &mut self,
+        prompt: String,
+        at_images: Vec<PendingImage>,
+        at_files: Vec<PendingFile>,
+    ) {
         // A new turn invalidates whatever the previous turn suggested.
         self.dismiss_suggestions();
         // Consume any `/image` attachments: they ride on this turn's user
         // message (wire format gets the multimodal parts), and the transcript
         // entry shows a badge line per image.
-        let images = std::mem::take(&mut self.pending_images);
+        let mut images = std::mem::take(&mut self.pending_images);
+        // Also include @filename images
+        images.extend(at_images);
+
+        // Build display text with badges for images and files
         let mut display = prompt.clone();
         for image in &images {
             display = format!("{}\n{display}", image_badge(image));
         }
+        for file in &at_files {
+            let badge = file_badge(file);
+            display = format!("{}\n{display}", badge);
+        }
+
         self.entries
             .push(Entry::new(EntryRole::User, display.clone()));
+
+        // Build the message content with file contents included
+        let mut content = prompt.clone();
+        if !at_files.is_empty() {
+            content.push_str("\n\n--- Referenced files ---\n");
+            for file in &at_files {
+                content.push_str(&format!(
+                    "\n=== {} ({}, {} bytes{}) ===\n{}\n",
+                    file.name,
+                    file.format,
+                    file.bytes,
+                    if file.truncated { ", truncated" } else { "" },
+                    file.text
+                ));
+            }
+        }
+
         let message = if images.is_empty() {
-            ChatMessage::user(prompt.clone())
+            ChatMessage::user(content)
         } else {
             ChatMessage::user_with_images(
-                prompt.clone(),
+                content,
                 images.into_iter().map(|image| image.data_url).collect(),
             )
         };
@@ -4581,7 +4959,6 @@ impl App {
         self.mark_dirty();
     }
 
-
     pub fn open_palette(&mut self) {
         let items = crate::ui::panels::command_items(self);
         self.overlay = Some(Overlay::Picker(Picker::new(PickerMode::Commands, items)));
@@ -6039,10 +6416,18 @@ impl App {
             KeyCode::Char('f') if ctrl => self.open_search(),
             KeyCode::Char('o') if ctrl => self.toggle_tool_details(),
 
-            // Alt+letter runs the matching slash command: every entry in the
-            // menu has a chord (shift variants group related commands).
-            KeyCode::Char('c') if alt => self.run_command(Command::Connect, ""),
-            KeyCode::Char('p') if alt => self.run_command(Command::ProviderMenu, ""),
+            // Paste: Ctrl+V (Linux/Windows), Super+V (Mac)
+            // Actual paste content comes via bracketed paste (Event::Paste -> on_paste)
+            KeyCode::Char('v') if ctrl => {
+                // Ctrl+V - Linux/Windows paste
+                self.mark_dirty();
+            }
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::SUPER) => {
+                // Super+V (Command+V on Mac)
+                self.mark_dirty();
+            }
+
+            // Alt+letter runs the matching slash command
             KeyCode::Char('m') if alt => self.run_command(Command::Models, ""),
             KeyCode::Char('l') if alt => self.run_command(Command::Tools, ""),
             KeyCode::Char('w') if alt => self.run_command(Command::Worktrees, ""),

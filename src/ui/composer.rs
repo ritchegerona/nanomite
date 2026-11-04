@@ -504,27 +504,13 @@ pub fn rows_compact(layout: &Layout) -> u16 {
 }
 
 /// Returns `(first_visible_row, x, y)` for the text cursor.
-/// Title spans for the composer block: workspace path plus the active tool
-/// mode in its dedicated font colour (non-default modes only). The colour
-/// code applies to the mode's text and nothing else.
+/// Title spans for the composer block: workspace path only.
 fn mode_title_spans(app: &App) -> Vec<Span<'static>> {
-    use crate::agent::policy::ToolPolicy;
     let theme = &app.theme;
-    let mut spans = vec![Span::styled(
+    vec![Span::styled(
         format!(" {} ", text::display_path(&app.cwd, 40)),
         theme.faint_style(),
-    )];
-    let (mode_label, mode_color) = match app.cfg.tool_policy {
-        ToolPolicy::Plan => ("plan", theme.mode_plan()),
-        ToolPolicy::Coder => ("coder", theme.mode_coder()),
-        ToolPolicy::Build => return spans,
-        ToolPolicy::Hacker => ("hacker", theme.mode_hacker()),
-    };
-    spans.push(Span::styled(
-        format!("{} {} ", glyph::DOT, mode_label),
-        Style::default().fg(mode_color),
-    ));
-    spans
+    )]
 }
 
 /// Compact composer: a borderless single prompt row (`❯ text`), no hints.

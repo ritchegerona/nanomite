@@ -29,12 +29,6 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
                 .fg(theme.accent())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!(" [{}]", app.theme.id.label()),
-            Style::default()
-                .fg(theme.accent())
-                .add_modifier(Modifier::BOLD),
-        ),
     ];
     let path_budget = width.saturating_sub(24).min(40);
     if path_budget >= 6 {
