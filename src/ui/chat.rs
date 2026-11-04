@@ -472,7 +472,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
     // Title: name + tagline on one line.
     lines.push(Line::from(vec![
         Span::styled("nanomite", theme.bold().fg(theme.accent())),
-        Span::styled("  the microscopic agent", theme.faint_style()),
+        Span::styled("  Intelligence Without Boundaries", theme.faint_style()),
     ]));
     lines.push(Line::default());
 
