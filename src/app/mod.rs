@@ -7496,6 +7496,7 @@ fn theme_descriptor(id: ThemeId) -> &'static str {
         ThemeId::Graphite => "teal · orange on deep charcoal",
         ThemeId::Umbrella => "blood red · clinical white",
         ThemeId::Dracula => "deep purple · vibrant pink",
+        ThemeId::Cyberpunk => "hot pink + cyan · neon noir",
     }
 }
 

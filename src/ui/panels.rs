@@ -362,9 +362,26 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     }
 
-    // Right side: prompt / completion token counts (context meter moved to
-    // the header); the perf hud appends frame timing and transcript stats.
+    // Right side: mode name (plan/coder/build/hacker) + prompt / completion token counts
+    let mode_label = match app.cfg.tool_policy {
+        crate::agent::policy::ToolPolicy::Plan => "plan",
+        crate::agent::policy::ToolPolicy::Coder => "coder",
+        crate::agent::policy::ToolPolicy::Build => "build",
+        crate::agent::policy::ToolPolicy::Hacker => "hacker",
+    };
+    let mode_color = match app.cfg.tool_policy {
+        crate::agent::policy::ToolPolicy::Plan => theme.mode_plan(),
+        crate::agent::policy::ToolPolicy::Coder => theme.mode_coder(),
+        crate::agent::policy::ToolPolicy::Build => theme.mode_build(),
+        crate::agent::policy::ToolPolicy::Hacker => theme.mode_hacker(),
+    };
+
     let mut right_spans = vec![
+        Span::styled(
+            mode_label,
+            Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
         Span::styled(format!("{} ", glyph::ARROW_UP), theme.faint_style()),
         Span::styled(
             text::format_tokens(app.usage.prompt_tokens as u64),
@@ -890,7 +907,7 @@ fn footer_key(app: &App) -> String {
         None => String::from("none"),
     };
     format!(
-        "{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}",
         app.usage.prompt_tokens,
         app.usage.completion_tokens,
         app.usage.total_tokens,
@@ -898,6 +915,8 @@ fn footer_key(app: &App) -> String {
         app.turn_started
             .map(|t| t.elapsed().as_millis() / 100)
             .unwrap_or(0),
+        // Mode affects the footer (mode name on right), so include it in the key.
+        app.cfg.tool_policy.as_str(),
         search,
     )
 }

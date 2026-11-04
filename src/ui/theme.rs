@@ -216,6 +216,35 @@ const DRACULA: Palette = Palette {
     quote: (241, 250, 140),
 };
 
+/// Cyberpunk — Neon-drenched dark theme: hot pink + cyan on near-black.
+/// High contrast, futuristic aesthetic.
+const CYBERPUNK: Palette = Palette {
+    neutral: (0, 0, 0),
+    panel_bg: (16, 16, 32),
+    element_bg: (28, 28, 52),
+    text: (220, 255, 255),
+    strong: (255, 255, 255),
+    muted: (120, 180, 220),
+    faint: (80, 100, 130),
+    border: (80, 40, 120),
+    border_focus: (255, 0, 128),
+    border_subtle: (40, 20, 60),
+    accent: (0, 255, 200),
+    accent_soft: (255, 0, 128),
+    success: (0, 255, 128),
+    danger: (255, 0, 128),
+    warn: (255, 255, 0),
+    mode_plan: (255, 255, 0),
+    mode_coder: (0, 255, 200),
+    mode_build: (0, 255, 128),
+    mode_hacker: (255, 0, 128),
+    diff_add: (0, 255, 128),
+    diff_delete: (255, 0, 128),
+    tool: (255, 0, 128),
+    code: (0, 255, 200),
+    quote: (255, 255, 0),
+};
+
 /// Selectable palettes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeId {
@@ -225,15 +254,17 @@ pub enum ThemeId {
     Graphite,
     Umbrella,
     Dracula,
+    Cyberpunk,
 }
 
 impl ThemeId {
-    pub const ALL: [ThemeId; 5] = [
+    pub const ALL: [ThemeId; 6] = [
         ThemeId::Mono,
         ThemeId::Midnight,
         ThemeId::Graphite,
         ThemeId::Umbrella,
         ThemeId::Dracula,
+        ThemeId::Cyberpunk,
     ];
 
     pub fn label(self) -> &'static str {
@@ -243,6 +274,7 @@ impl ThemeId {
             ThemeId::Mono => "mono",
             ThemeId::Umbrella => "umbrella",
             ThemeId::Dracula => "dracula",
+            ThemeId::Cyberpunk => "cyberpunk",
         }
     }
 
@@ -254,6 +286,7 @@ impl ThemeId {
             ThemeId::Mono => &MONO,
             ThemeId::Umbrella => &UMBRELLA,
             ThemeId::Dracula => &DRACULA,
+            ThemeId::Cyberpunk => &CYBERPUNK,
         }
     }
 
@@ -537,7 +570,7 @@ mod tests {
             assert!(!id.label().is_empty());
             assert!(id.label().chars().all(|c| !c.is_uppercase()));
         }
-        assert_eq!(ThemeId::ALL.len(), 5);
+        assert_eq!(ThemeId::ALL.len(), 6);
     }
 
     #[test]

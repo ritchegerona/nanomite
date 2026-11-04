@@ -2321,17 +2321,20 @@ async fn shift_tab_cycles_all_four_modes() {
 }
 
 #[tokio::test]
-async fn footer_hides_the_mode_badge() {
+async fn footer_shows_mode_name_on_right() {
     use crate::agent::policy::ToolPolicy;
     let mut app = test_app().await;
 
-    // The footer stays clean in every mode: no "plan mode"/"coder mode"/
-    // "build mode"/"hacker mode" badge text (owner request 2026-11-04).
-    for mode in [
-        ToolPolicy::Plan,
-        ToolPolicy::Coder,
-        ToolPolicy::Build,
-        ToolPolicy::Hacker,
+    // Add an entry so the footer renders (welcome state has no footer)
+    app.entries.push(Entry::new(EntryRole::User, "test"));
+
+    // The footer shows just the mode name (plan/coder/build/hacker) on the
+    // right side, not "plan mode"/"coder mode"/etc.
+    for (mode, expected) in [
+        (ToolPolicy::Plan, "plan"),
+        (ToolPolicy::Coder, "coder"),
+        (ToolPolicy::Build, "build"),
+        (ToolPolicy::Hacker, "hacker"),
     ] {
         app.cfg.tool_policy = mode;
         let mut terminal = ratatui::Terminal::new(TestBackend::new(100, 24)).expect("terminal");
@@ -2346,10 +2349,16 @@ async fn footer_hides_the_mode_badge() {
                 line
             })
             .collect();
-        let badge = format!("{} mode", mode.label());
+        // Should contain the mode name
+        assert!(
+            text.contains(expected),
+            "{expected} should render in the footer for {mode:?}:\n{text}"
+        );
+        // Should NOT contain "mode" suffix
+        let badge = format!("{} mode", expected);
         assert!(
             !text.contains(&badge),
-            "{badge} should not render in the footer for {mode:?}:\n{text}"
+            "{badge} should NOT render in the footer for {mode:?}:\n{text}"
         );
     }
     app.cfg.tool_policy = ToolPolicy::Build;
