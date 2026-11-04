@@ -174,19 +174,7 @@ pub fn rule(frame: &mut Frame, area: Rect, theme: &Theme) {
 
 /// Status strip on the bottom edge, under the composer. Rebuilt only when
 /// its inputs change.
-/// The footer badge for the active tool mode: `(label, color)`. Every mode
-/// gets its dedicated palette colour - amber plan, blue coder, green build,
-/// red hacker - so the mode is recognisable by colour alone in any theme.
-fn mode_badge(app: &App) -> (String, Color) {
-    use crate::agent::policy::ToolPolicy;
-    let theme = &app.theme;
-    match app.cfg.tool_policy {
-        ToolPolicy::Plan => ("plan mode".into(), theme.mode_plan()),
-        ToolPolicy::Coder => ("coder mode".into(), theme.mode_coder()),
-        ToolPolicy::Build => ("build mode".into(), theme.mode_build()),
-        ToolPolicy::Hacker => ("hacker mode".into(), theme.mode_hacker()),
-    }
-}
+/// (The mode badge was removed by owner request 2026-11-04: footer stays clean.)
 
 /// Follow-up suggestions strip (opencode-style): mounts between the prompt
 /// queue and the footer when the model answered a finished turn's suggestion
@@ -316,13 +304,6 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
         if let Some(hint) = app.memory_hint().or_else(|| app.prompt_hint()) {
             left.push(Span::styled(format!("  {hint}"), theme.faint_style()));
         }
-        if !app.view.follow {
-            // `end` (or clicking the scrollbar's bottom) re-follows the live tail.
-            left.push(Span::styled(
-                format!("  {} scrolled up (end)", glyph::ARROW_UP),
-                Style::default().fg(theme.warn()),
-            ));
-        }
     }
 
     // Pending tool confirmation: modal, so it takes the footer until answered.
@@ -361,16 +342,7 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
         ));
     }
 
-    // Mode badge: every mode shows its dedicated colour - amber plan, blue
-    // coder, green build, red hacker - applied to the mode's font only.
-    let (badge, badge_color) = mode_badge(app);
-    left.push(Span::styled("  ", theme.faint_style()));
-    left.push(Span::styled(badge, Style::default().fg(badge_color)));
-    if app.cfg.tool_policy == crate::agent::policy::ToolPolicy::Plan {
-        if let Some(latest) = app.latest_plan_name() {
-            left.push(Span::styled(format!(" · {latest}"), theme.faint_style()));
-        }
-    }
+    // Mode badge removed by owner request (2026-11-04): keep the footer clean.
 
     // Visual selection indicator
     if let Some(sel) = &app.selection {
@@ -918,7 +890,7 @@ fn footer_key(app: &App) -> String {
         None => String::from("none"),
     };
     format!(
-        "{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         app.usage.prompt_tokens,
         app.usage.completion_tokens,
         app.usage.total_tokens,
@@ -926,9 +898,6 @@ fn footer_key(app: &App) -> String {
         app.turn_started
             .map(|t| t.elapsed().as_millis() / 100)
             .unwrap_or(0),
-        // The mode badge changes the footer content; without this in the key
-        // a cached build-mode footer would render after a mode switch.
-        app.cfg.tool_policy.as_str(),
         search,
     )
 }

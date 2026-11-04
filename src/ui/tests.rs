@@ -2321,17 +2321,17 @@ async fn shift_tab_cycles_all_four_modes() {
 }
 
 #[tokio::test]
-async fn footer_shows_mode_badge_for_non_default_modes() {
+async fn footer_hides_the_mode_badge() {
     use crate::agent::policy::ToolPolicy;
     let mut app = test_app().await;
 
-    // Every mode shows its badge with its dedicated palette colour:
-    // amber plan, blue coder, green build, red hacker.
-    for (mode, badge, color) in [
-        (ToolPolicy::Plan, "plan mode", app.theme.mode_plan()),
-        (ToolPolicy::Coder, "coder mode", app.theme.mode_coder()),
-        (ToolPolicy::Build, "build mode", app.theme.mode_build()),
-        (ToolPolicy::Hacker, "hacker mode", app.theme.mode_hacker()),
+    // The footer stays clean in every mode: no "plan mode"/"coder mode"/
+    // "build mode"/"hacker mode" badge text (owner request 2026-11-04).
+    for mode in [
+        ToolPolicy::Plan,
+        ToolPolicy::Coder,
+        ToolPolicy::Build,
+        ToolPolicy::Hacker,
     ] {
         app.cfg.tool_policy = mode;
         let mut terminal = ratatui::Terminal::new(TestBackend::new(100, 24)).expect("terminal");
@@ -2346,25 +2346,10 @@ async fn footer_shows_mode_badge_for_non_default_modes() {
                 line
             })
             .collect();
+        let badge = format!("{} mode", mode.label());
         assert!(
-            text.contains(badge),
-            "{badge} missing for {mode:?}:
-{text}"
-        );
-
-        // The badge must draw the mode's dedicated colour, not a borrowed
-        // role colour.
-        let mut saw_mode_color = false;
-        for y in 0..buffer.area.height {
-            for x in 0..buffer.area.width {
-                if buffer[(x, y)].style().fg == Some(color) {
-                    saw_mode_color = true;
-                }
-            }
-        }
-        assert!(
-            saw_mode_color,
-            "{mode:?}: dedicated mode colour {color:?} not drawn"
+            !text.contains(&badge),
+            "{badge} should not render in the footer for {mode:?}:\n{text}"
         );
     }
     app.cfg.tool_policy = ToolPolicy::Build;
