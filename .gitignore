@@ -2,3 +2,5 @@
 .opencode/
 TODO.md
 /learning_material
+__pycache__/
+*.pyc
