@@ -634,7 +634,11 @@ pub fn render(
     // hints on the bottom one. The border itself separates transcript from
     // input, so every inner row belongs to the prompt text.
     let hint_text = if busy {
-        format!("esc interrupts {} type to queue the next turn", glyph::DOT)
+        format!(
+            "esc interrupts {} esc esc force stop {} type to queue the next turn",
+            glyph::DOT,
+            glyph::DOT
+        )
     } else {
         format!(
             "enter send {} ctrl+j newline {} ctrl+o details",

@@ -3261,6 +3261,44 @@ async fn esc_interrupts_during_initial_streaming() {
 }
 
 #[tokio::test]
+async fn double_esc_escalates_to_a_force_stop() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    let esc = || KeyEvent {
+        code: KeyCode::Esc,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: ratatui::crossterm::event::KeyEventState::NONE,
+    };
+
+    let mut app = test_app().await;
+    app.composer.insert_str("hello");
+    app.submit();
+    assert!(app.is_busy(), "turn should be running");
+
+    // First Esc is a cooperative interrupt only.
+    app.on_key(esc());
+    let cancel = app.cancel.as_ref().expect("cancel set");
+    assert!(cancel.is_cancelled(), "first esc must request a stop");
+    assert!(!cancel.is_forced(), "first esc must not kill the process");
+
+    // Second Esc escalates: force flag set, so a running tool is killed.
+    app.on_key(esc());
+    let cancel = app.cancel.as_ref().expect("cancel set");
+    assert!(cancel.is_forced(), "double esc must force-stop");
+
+    for _ in 0..100 {
+        app.pump_engine();
+        if !app.is_busy() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(!app.is_busy(), "force stop did not end the turn");
+    assert_eq!(app.entries[1].phase, Phase::Interrupted);
+}
+
+#[tokio::test]
 async fn suggestion_strip_renders_above_the_composer() {
     let mut app = test_app().await;
     app.entries.push(Entry::new(EntryRole::User, "fix the bug"));

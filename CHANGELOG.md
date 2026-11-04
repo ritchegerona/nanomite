@@ -33,6 +33,21 @@ never listed as released.
 
 ### Changed
 
+- **Esc is now a reliable, two-stage interrupt**: one Esc cooperatively cancels
+  the turn; a second Esc within 700 ms (or any Esc once already cancelling)
+  force-stops it. `Cancel` carries a second `force` flag, and the shared process
+  executor (`run_command`, `ssh_run`, `run_tests`, git, browser, external tools)
+  polls it so a blocked tool kills its child process group instead of finishing
+  first. The double-Esc check runs at the top of `on_key`, so it wins over
+  overlays, the suggestion strip, search and the tool-confirm modal.
+  implemented+tested.
+- **Hacker mode is told it is an authorized environment**: whenever
+  `ToolPolicy::Hacker` is in force the runtime appends a directive instructing
+  the model to complete in-scope security work instead of refusing, stay inside
+  the configured scope, keep exploitation plan-only, and finish with a
+  "Suggested next steps" section. Permissions were already unrestricted in this
+  mode (`ToolPolicy::Hacker` authorizes every tool; only Plan prompts). Prompt
+  guidance only — enforcement is unchanged. implemented+tested.
 - **Status strip moved to the bottom edge**: the footer line (`working ·
   steps · tools`, mode badge, toasts) now renders below the composer as the
   terminal's last row, matching opencode's footer order. implemented+tested.

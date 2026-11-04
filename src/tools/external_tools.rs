@@ -225,10 +225,17 @@ pub(crate) fn run_bounded(
     });
 
     let mut timed_out = false;
+    let mut interrupted = false;
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break Some(st),
             Ok(None) => {
+                if crate::tools::exec_tools::force_cancelled() {
+                    interrupted = true;
+                    crate::tools::exec_tools::kill_process_group(&child);
+                    let _ = child.wait();
+                    break None;
+                }
                 if started.elapsed() >= timeout {
                     timed_out = true;
                     crate::tools::exec_tools::kill_process_group(&child);
@@ -240,6 +247,9 @@ pub(crate) fn run_bounded(
             Err(e) => return Err(format!("{label} wait failed: {e}")),
         }
     };
+    if interrupted {
+        return Err("interrupted by user".into());
+    }
 
     let stdout = String::from_utf8_lossy(&out_handle.join().unwrap_or_default())
         .chars()

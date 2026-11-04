@@ -115,6 +115,13 @@ impl TestTools {
         timeout: Duration,
         label: &str,
     ) -> Result<(String, String, i32, bool), String> {
+        // Own process group so an interrupt/timeout reaps the runner's
+        // grandchildren (compilers, test binaries) too.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("{label} failed to spawn: {e}"))?;
@@ -134,13 +141,20 @@ impl TestTools {
 
         let started = Instant::now();
         let mut timed_out = false;
+        let mut interrupted = false;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(st)) => break Some(st),
                 Ok(None) => {
+                    if crate::tools::exec_tools::force_cancelled() {
+                        interrupted = true;
+                        crate::tools::exec_tools::kill_process_group(&child);
+                        let _ = child.wait();
+                        break None;
+                    }
                     if started.elapsed() >= timeout {
                         timed_out = true;
-                        let _ = child.kill();
+                        crate::tools::exec_tools::kill_process_group(&child);
                         let _ = child.wait();
                         break None;
                     }
@@ -152,6 +166,9 @@ impl TestTools {
 
         let stdout = out_handle.join().unwrap_or_default();
         let stderr = err_handle.join().unwrap_or_default();
+        if interrupted {
+            return Err("interrupted by user".into());
+        }
 
         let cap = |v: Vec<u8>| -> String {
             String::from_utf8_lossy(&v)

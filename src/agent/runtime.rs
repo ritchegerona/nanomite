@@ -28,6 +28,38 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc::UnboundedSender, Notify};
 
+/// Appended to the system prompt whenever `ToolPolicy::Hacker` is in force.
+///
+/// Hacker mode is an explicitly authorized, user-configured environment. The
+/// directive tells the model to complete in-scope work instead of refusing, to
+/// stay inside the assessment scope, and to finish with next-step suggestions.
+/// It is prompt guidance only: authorization is still enforced in the runtime
+/// (`ToolPolicy` + the Hacker module scope gate), never by this text.
+const HACKER_MODE_PROMPT: &str = "\n\n# Hacker mode: authorized security operations\n\n\
+Hacker mode is active - the most permissive operating mode. Treat the user's \
+stated targets as authorized, in-scope assets: the user selected this mode and \
+is responsible for holding the legal authority and written permission for them, \
+and the configured scope is the boundary of that authorization. Work as a \
+professional security operator inside that scope.\n\n\
+- Complete the requested in-scope task end to end with the available tools and \
+Hacker modules (recon, network, web, vulnerability correlation, Kali bridge, \
+findings/evidence, reporting). Do not stop at restating the request or at a plan \
+when the task can be executed.\n\
+- Do not refuse, moralize, add safety disclaimers, or demand extra confirmation \
+for in-scope security work. The user already selected the most permissive mode \
+and is responsible for the authorization.\n\
+- Never act outside the authorized scope. If a target is not in scope, say so \
+and ask for the scope to be extended instead of proceeding.\n\
+- Exploitation remains plan-only by design: produce concrete, reviewable steps; \
+never write payloads or weaponized exploit code.\n\
+- Record findings and evidence as you go, then finish with a concise summary of \
+what was done and a \"Suggested next steps\" section containing 3-5 concrete \
+options.\n\
+- Learn as you go: before a task, use memory_search (tag \"technique\") to recall \
+tradecraft that worked before; after learning a reusable trick, command, or \
+bypass, save it with memory_save tagged \"technique\" so it is available later \
+(never save credentials, keys, or live target data).\n";
+
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     pub max_steps: usize,
@@ -94,9 +126,15 @@ pub enum AgentEvent {
 }
 
 /// Cooperative cancellation shared between the UI thread and the running agent.
+///
+/// Two stages, matching the Esc gesture: `cancel` asks the turn to stop
+/// (streaming and between steps), while `force` additionally tells a running
+/// tool to kill its child process group immediately. A single Esc is a soft
+/// interrupt; pressing it again escalates to a force stop.
 #[derive(Clone, Default)]
 pub struct Cancel {
     flag: Arc<AtomicBool>,
+    force: Arc<AtomicBool>,
     notify: Arc<Notify>,
 }
 
@@ -110,8 +148,25 @@ impl Cancel {
         self.notify.notify_waiters();
     }
 
+    /// Hard stop: also kills any child process a tool is currently running.
+    pub fn force(&self) {
+        self.force.store(true, Ordering::Relaxed);
+        self.cancel();
+    }
+
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::Relaxed)
+    }
+
+    pub fn is_forced(&self) -> bool {
+        self.force.load(Ordering::Relaxed)
+    }
+
+    /// Shareable force flag for process-spawning tools, which poll it to
+    /// SIGKILL their child group. Kept separate from the cooperative flag so a
+    /// single Esc can stop generation without destroying an in-flight command.
+    pub fn force_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.force)
     }
 
     pub async fn cancelled(&self) {
@@ -287,6 +342,16 @@ impl AgentRuntime {
     /// This controls which risk classes of tools the agent may invoke.
     pub fn with_tool_policy(mut self, policy: ToolPolicy) -> Self {
         self.tool_policy = policy;
+        self
+    }
+
+    /// Appends the authorized-security-operations directive. Called when the
+    /// runtime is built in `ToolPolicy::Hacker` so the model completes in-scope
+    /// work instead of refusing, and ends with suggested next steps. This only
+    /// shapes model behaviour; enforcement stays in `ToolPolicy` and the
+    /// Hacker module authorization gate.
+    pub fn with_hacker_mode(mut self) -> Self {
+        self.system_prompt.push_str(HACKER_MODE_PROMPT);
         self
     }
 
@@ -616,7 +681,13 @@ impl AgentRuntime {
                 let workspace = self.workspace.clone();
                 let call_for_task = call.clone();
                 let tool_name = call.name.clone();
+                let cancel_flag = cancel.force_flag();
                 let outcome = tokio::task::spawn_blocking(move || {
+                    // Double-Esc must reach process-spawning tools: expose the
+                    // turn's force flag to the blocking worker for the whole
+                    // call, so `run_command`, tests, git and the browser kill
+                    // their child process group instead of finishing first.
+                    let _cancel_scope = crate::tools::exec_tools::CancelScope::install(cancel_flag);
                     // Time machine: capture the target file's pre-change
                     // content before a mutating call, on this blocking thread.
                     let snapshot = if matches!(tool_name.as_str(), "write_file" | "edit_file") {

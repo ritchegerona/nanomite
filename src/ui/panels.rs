@@ -657,6 +657,7 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .skip(start)
         .take(visible)
+        .filter(|item| !item.is_header())
         .map(|item| {
             let check = if item.current { glyph::CHECK } else { " " };
             text::width(&format!("{check} {}", item.label))
@@ -670,6 +671,16 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
         .add_modifier(Modifier::BOLD);
 
     for (i, item) in picker.items.iter().enumerate().skip(start).take(visible) {
+        // A provider title: rendered as a section heading, never selected.
+        if item.is_header() {
+            lines.push(Line::from(Span::styled(
+                text::truncate(&format!(" {} ", item.label), inner_w),
+                Style::default()
+                    .fg(theme.accent_soft())
+                    .add_modifier(Modifier::BOLD),
+            )));
+            continue;
+        }
         let selected = i == picker.cursor;
         let check = if item.current { glyph::CHECK } else { " " };
         let label = format!("{check} {}", item.label);
@@ -747,15 +758,18 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
                 // now instead of being a fixed table.
                 if picker.loading || picker.source.is_empty() {
                     format!(" {} ", picker.title())
-                } else if picker.items.len() == picker.source.len() {
-                    format!(" {} · {} ", picker.title(), picker.source.len())
                 } else {
-                    format!(
-                        " {} · {}/{} ",
-                        picker.title(),
-                        picker.items.len(),
-                        picker.source.len()
-                    )
+                    // Count models, not provider section titles.
+                    let count = |rows: &[crate::app::PickerItem]| {
+                        rows.iter().filter(|i| !i.is_header()).count()
+                    };
+                    let shown = count(&picker.items);
+                    let total = count(&picker.source);
+                    if shown == total {
+                        format!(" {} · {} ", picker.title(), total)
+                    } else {
+                        format!(" {} · {}/{} ", picker.title(), shown, total)
+                    }
                 },
                 Style::default().fg(theme.accent()),
             ))

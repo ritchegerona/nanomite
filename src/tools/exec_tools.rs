@@ -4,10 +4,50 @@
 //! `tokio::task::spawn_blocking`, so blocking here never stalls the UI.
 
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+thread_local! {
+    /// Cancel flag for the tool call currently running on this thread. The
+    /// agent runtime installs it around `run_tool`, which executes on a
+    /// `spawn_blocking` worker; process-spawning tools poll it and kill their
+    /// child process group when the user presses Esc. A thread-local keeps the
+    /// signal out of every tool signature (git, browser and tests all share
+    /// the same executor).
+    static ACTIVE_CANCEL: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+}
+
+/// RAII scope that exposes a cancel flag to the tools running on this thread.
+/// Dropping it (when the tool call finishes) clears the flag, so a reused
+/// blocking worker never sees a stale turn's cancellation.
+pub struct CancelScope;
+
+impl CancelScope {
+    pub fn install(flag: Arc<AtomicBool>) -> Self {
+        ACTIVE_CANCEL.with(|cell| *cell.borrow_mut() = Some(flag));
+        Self
+    }
+}
+
+impl Drop for CancelScope {
+    fn drop(&mut self) {
+        ACTIVE_CANCEL.with(|cell| *cell.borrow_mut() = None);
+    }
+}
+
+/// True when the active tool call has been interrupted by the user.
+pub(crate) fn force_cancelled() -> bool {
+    ACTIVE_CANCEL.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    })
+}
 
 /// Largest stdout/stderr payload returned to the model (chars, not bytes).
 pub(crate) const MAX_OUTPUT: usize = 16 * 1024;
@@ -420,10 +460,19 @@ pub(crate) fn run_with_timeout(
 
     let started = Instant::now();
     let mut timed_out = false;
+    let mut interrupted = false;
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break Some(st),
             Ok(None) => {
+                // Esc wins over the wall-clock cap: kill the whole group so
+                // the pipes close and the reader threads can join promptly.
+                if force_cancelled() {
+                    interrupted = true;
+                    kill_process_group(&child);
+                    let _ = child.wait();
+                    break None;
+                }
                 if started.elapsed() >= timeout {
                     timed_out = true;
                     kill_process_group(&child);
@@ -438,6 +487,9 @@ pub(crate) fn run_with_timeout(
 
     let stdout = out_handle.join().unwrap_or_default();
     let stderr = err_handle.join().unwrap_or_default();
+    if interrupted {
+        return Err("interrupted by user".into());
+    }
     let cap = |v: Vec<u8>| -> String {
         String::from_utf8_lossy(&v)
             .chars()
@@ -475,10 +527,17 @@ pub(crate) fn run_with_timeout_child(
 
     let started = Instant::now();
     let mut timed_out = false;
+    let mut interrupted = false;
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break Some(st),
             Ok(None) => {
+                if force_cancelled() {
+                    interrupted = true;
+                    kill_process_group(&child);
+                    let _ = child.wait();
+                    break None;
+                }
                 if started.elapsed() >= timeout {
                     timed_out = true;
                     kill_process_group(&child);
@@ -493,6 +552,9 @@ pub(crate) fn run_with_timeout_child(
 
     let stdout = out_handle.join().unwrap_or_default();
     let stderr = err_handle.join().unwrap_or_default();
+    if interrupted {
+        return Err("interrupted by user".into());
+    }
     let cap = |v: Vec<u8>| -> String {
         String::from_utf8_lossy(&v)
             .chars()
@@ -509,6 +571,53 @@ pub(crate) fn run_with_timeout_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancel_scope_exposes_the_force_flag_only_while_installed() {
+        assert!(!force_cancelled(), "no scope means never cancelled");
+        let flag = Arc::new(AtomicBool::new(false));
+        {
+            let _scope = CancelScope::install(Arc::clone(&flag));
+            assert!(!force_cancelled());
+            flag.store(true, Ordering::Relaxed);
+            assert!(
+                force_cancelled(),
+                "force flag must be visible inside the scope"
+            );
+        }
+        assert!(!force_cancelled(), "dropping the scope clears the flag");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn force_cancel_kills_a_running_command() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let setter = Arc::clone(&flag);
+        let trigger = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            setter.store(true, Ordering::Relaxed);
+        });
+
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("sleep 5")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let started = Instant::now();
+        let result = {
+            let _scope = CancelScope::install(flag);
+            run_with_timeout(&mut cmd, "sh", Duration::from_secs(30), "sleep 5")
+        };
+        trigger.join().unwrap();
+
+        assert_eq!(result.unwrap_err(), "interrupted by user");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "cancel must not wait for the command's own timeout"
+        );
+    }
 
     #[test]
     fn runs_and_captures_output() {

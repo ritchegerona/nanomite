@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -522,6 +523,11 @@ pub struct Config {
     pub preset: String,
     pub base_url: String,
     pub api_key: Option<String>,
+    /// Per-provider API keys, keyed by preset id. The active preset's key is
+    /// mirrored in `api_key`, so several providers can stay configured at once
+    /// and switching presets restores that provider's key. Persisted as the
+    /// `[providers]` section.
+    pub provider_keys: BTreeMap<String, String>,
     pub model: String,
     /// Model used when switching back to a preset that has one.
     pub default_model: String,
@@ -576,6 +582,8 @@ struct Stored {
     provider: Option<String>,
     base_url: Option<String>,
     api_key: Option<String>,
+    /// `[providers]` section: preset id -> API key.
+    provider_keys: BTreeMap<String, String>,
     model: Option<String>,
     reasoning: Option<String>,
     theme: Option<String>,
@@ -621,6 +629,12 @@ fn parse_stored(text: &str) -> Stored {
         }
         let key = key.trim();
         match section.as_str() {
+            "providers" => {
+                let id = key.trim().to_ascii_lowercase();
+                if !id.is_empty() {
+                    stored.provider_keys.insert(id, value);
+                }
+            }
             "hacker" => match key {
                 "enabled" => stored.hacker_enabled = Some(parse_bool(&value)),
                 "scope" => stored.hacker_scope = Some(value),
@@ -759,6 +773,16 @@ fn stored_text(cfg: &Config) -> String {
         lines.push("confirm_external = false".to_string());
     }
     lines.push(String::new());
+    // Per-provider keys. Kept as a section so several providers stay configured
+    // at once; the active provider's key is also mirrored in the top-level
+    // `api_key` above for older readers.
+    if !cfg.provider_keys.is_empty() {
+        lines.push("[providers]".to_string());
+        for (id, key) in &cfg.provider_keys {
+            lines.push(format!("{id} = {}", quote(key)));
+        }
+        lines.push(String::new());
+    }
     // HACKER MODE: written as a section so the knobs are discoverable. Disabled
     // by default; enabling and set the authorized scope explicitly.
     lines.push("[hacker]".to_string());
@@ -866,6 +890,9 @@ impl Config {
             .unwrap_or_else(|| "custom".to_string());
         let generic_key = env_str(&["NANOMITE_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"])
             .or_else(|| stored.api_key.clone());
+        // Per-provider keys saved so far; the active preset's entry is kept in
+        // sync with `api_key` below, which also migrates the legacy single key.
+        let mut provider_keys = stored.provider_keys.clone();
 
         let (provider, preset, model, api_key, mut notice): (
             ProviderKind,
@@ -887,6 +914,7 @@ impl Config {
                     .or_else(|| (!p.default_model.is_empty()).then(|| p.default_model.to_string()))
                     .unwrap_or_else(|| default_model.clone());
                 let key = env_str(&[p.key_env.unwrap_or("NANOMITE_API_KEY"), "NANOMITE_API_KEY"])
+                    .or_else(|| provider_keys.get(p.id).cloned())
                     .or_else(|| stored.api_key.clone());
                 let note = if key.is_none() && !p.offline {
                     Some(format!("{}: no API key set", p.label))
@@ -917,6 +945,14 @@ impl Config {
                 )
             }
         };
+
+        // Keep the active provider in the map so its key survives a save, and
+        // so a legacy top-level `api_key` migrates into per-provider storage.
+        if let Some(key) = &api_key {
+            if !preset.is_empty() {
+                provider_keys.insert(preset.clone(), key.clone());
+            }
+        }
 
         if let Some(p) = find_preset(&preset) {
             if p.offline {
@@ -1064,6 +1100,7 @@ impl Config {
             preset,
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
+            provider_keys,
             model,
             default_model,
             reasoning,
@@ -1186,6 +1223,32 @@ impl Config {
         }
     }
 
+    /// Stores an API key for one provider (preset id). An empty key removes it.
+    /// The active preset's key is mirrored in `api_key` so the running client
+    /// keeps working; other providers keep theirs for later switches.
+    pub fn set_provider_key(&mut self, provider: &str, key: &str) {
+        let id = provider.trim().to_ascii_lowercase();
+        if id.is_empty() {
+            return;
+        }
+        let key = key.trim();
+        if key.is_empty() {
+            self.provider_keys.remove(&id);
+        } else {
+            self.provider_keys.insert(id.clone(), key.to_string());
+        }
+        if id == self.preset {
+            self.api_key = (!key.is_empty()).then(|| key.to_string());
+        }
+    }
+
+    /// The saved key for one provider, if any.
+    pub fn provider_key(&self, provider: &str) -> Option<String> {
+        self.provider_keys
+            .get(&provider.trim().to_ascii_lowercase())
+            .cloned()
+    }
+
     /// Switches endpoint, key source and default model in one move.
     pub fn apply_preset(&mut self, id: &str) -> bool {
         let Some(preset) = find_preset(id) else {
@@ -1200,10 +1263,17 @@ impl Config {
             self.default_model = preset.default_model.to_string();
             self.model = preset.default_model.to_string();
         }
+        // Key precedence: this provider's env var, the generic env var, the key
+        // saved for this provider, then the legacy active key.
         self.api_key = preset
             .key_env
             .and_then(first_env_one)
-            .or_else(|| first_env_one("NANOMITE_API_KEY"));
+            .or_else(|| first_env_one("NANOMITE_API_KEY"))
+            .or_else(|| self.provider_key(preset.id));
+        if let Some(key) = &self.api_key {
+            self.provider_keys
+                .insert(preset.id.to_string(), key.clone());
+        }
         self.notice = if self.api_key.is_none() && !preset.offline {
             Some(format!("{}: no API key set", preset.label))
         } else {
@@ -1356,6 +1426,51 @@ mod tests {
         assert_eq!(loaded.api_key.as_deref(), Some("sk-test-123"));
         assert_eq!(loaded.reasoning, Reasoning::High);
         assert_eq!(loaded.provider_label(), "DeepSeek");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn multiple_provider_keys_roundtrip_and_migrate() {
+        let mut cfg = Config::from_env();
+        cfg.apply_preset("deepseek");
+        cfg.set_provider_key("deepseek", "sk-deepseek");
+        cfg.set_provider_key("openai", "sk-openai");
+        cfg.set_provider_key("zhipu", "sk-zhipu");
+        assert_eq!(cfg.api_key.as_deref(), Some("sk-deepseek"));
+
+        let path = std::env::temp_dir().join(format!("nanomite-keys-{}.toml", std::process::id()));
+        cfg.save_to(&path);
+        let loaded = Config::load_from(&path);
+        assert_eq!(
+            loaded.provider_key("deepseek").as_deref(),
+            Some("sk-deepseek")
+        );
+        assert_eq!(loaded.provider_key("openai").as_deref(), Some("sk-openai"));
+        assert_eq!(loaded.provider_key("zhipu").as_deref(), Some("sk-zhipu"));
+
+        // Switching providers restores that provider's saved key, unless an
+        // environment variable overrides it (env wins by design).
+        if first_env_one("NANOMITE_API_KEY").is_none() && first_env_one("ZHIPUAI_API_KEY").is_none()
+        {
+            let mut switched = loaded.clone();
+            assert!(switched.apply_preset("zhipu"));
+            assert_eq!(switched.api_key.as_deref(), Some("sk-zhipu"));
+            assert_eq!(switched.base_url, "https://open.bigmodel.cn/api/paas/v4");
+        }
+
+        // A legacy file with a single top-level key migrates into the active
+        // provider's per-provider entry.
+        fs::write(
+            &path,
+            "provider = \"deepseek\"\napi_key = \"sk-legacy\"\nmodel = \"deepseek-chat\"\n",
+        )
+        .unwrap();
+        let migrated = Config::load_from(&path);
+        assert_eq!(migrated.api_key.as_deref(), Some("sk-legacy"));
+        assert_eq!(
+            migrated.provider_key("deepseek").as_deref(),
+            Some("sk-legacy")
+        );
         let _ = fs::remove_file(&path);
     }
 

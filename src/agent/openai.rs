@@ -19,6 +19,36 @@ pub struct OpenAiProvider {
 }
 
 impl OpenAiProvider {
+    /// Client for an explicit endpoint and key, independent of the active
+    /// config. Used to enumerate models across every configured provider (the
+    /// `/model` picker). `model`/`reasoning` are irrelevant to `list_models`
+    /// and left empty.
+    pub fn with_endpoint(
+        base_url: impl Into<String>,
+        api_key: Option<String>,
+    ) -> Result<Self, DynError> {
+        let base_url = base_url.into();
+        let trimmed = base_url.trim_end_matches('/').to_string();
+        let endpoint = if trimmed.ends_with("/chat/completions") {
+            trimmed.clone()
+        } else {
+            format!("{trimmed}/chat/completions")
+        };
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .user_agent(concat!("nanomite/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+        Ok(Self {
+            client,
+            endpoint,
+            base_url: trimmed,
+            api_key,
+            model: String::new(),
+            reasoning: None,
+        })
+    }
+
     pub fn new(cfg: &Config) -> Result<Self, DynError> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))

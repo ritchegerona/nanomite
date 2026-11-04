@@ -28,6 +28,9 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 const MAX_HISTORY_MESSAGES: usize = 40;
+/// Two Esc presses within this window are a force stop: the turn is cancelled
+/// and any child process a tool is blocked on is killed immediately.
+const DOUBLE_ESC_WINDOW: Duration = Duration::from_millis(700);
 /// Follow-up suggestions one finished turn shows above the composer.
 const SUGGESTION_COUNT: usize = 3;
 const TOAST_TTL: Duration = Duration::from_secs(2);
@@ -35,6 +38,8 @@ const TOAST_TTL: Duration = Duration::from_secs(2);
 const BOARD_ROUNDS: usize = 2;
 /// Records `/memory` lists: newest first, bounded so the picker stays readable.
 const MEMORY_LIST_ROWS: usize = 100;
+/// Techniques one `/hacker techniques` recall lists.
+const TECHNIQUE_LIST_ROWS: usize = 50;
 /// Hard cap on the body one `/memory` record overlay will render.
 const MEMORY_BODY_CHARS: usize = 40_000;
 /// Proposals one `/improve` list shows; the engine listing is already bounded.
@@ -198,6 +203,13 @@ pub enum PickerValue {
     Action(Action),
     Command(Command),
     Model(String),
+    /// A model from a specific provider: picking it switches provider + key too.
+    ProviderModel {
+        provider: String,
+        model: String,
+    },
+    /// A non-selectable section title (the provider name above its models).
+    Header(String),
     Session(std::path::PathBuf),
     Theme(crate::ui::theme::ThemeId),
     Memory(MemoryRow),
@@ -287,6 +299,20 @@ impl PickerItem {
             current: false,
         }
     }
+
+    /// A non-selectable section title (opencode-style provider heading).
+    pub fn header(label: &str) -> Self {
+        Self {
+            label: label.to_string(),
+            hint: String::new(),
+            value: PickerValue::Header(label.to_string()),
+            current: false,
+        }
+    }
+
+    pub fn is_header(&self) -> bool {
+        matches!(self.value, PickerValue::Header(_))
+    }
 }
 
 /// Overlay list with a filter box. Commands, `/provider` and `/model` all use it.
@@ -372,6 +398,10 @@ impl Picker {
                         item.hint,
                         match &item.value {
                             PickerValue::Model(m) => m.clone(),
+                            PickerValue::ProviderModel { provider, model } => {
+                                format!("{provider} {model}")
+                            }
+                            PickerValue::Header(title) => title.clone(),
                             PickerValue::Session(path) => path.display().to_string(),
                             PickerValue::Theme(t) => t.label().to_string(),
                             PickerValue::Memory(row) => {
@@ -401,12 +431,35 @@ impl Picker {
                 .cloned()
                 .collect()
         };
+        // Section titles only make sense in the grouped view; once a query is
+        // typed the list is a flat match set.
+        if !query.is_empty() {
+            self.items.retain(|item| !item.is_header());
+        }
         self.cursor = self.cursor.min(self.items.len().saturating_sub(1));
+        self.normalize_cursor();
+    }
+
+    /// Moves the cursor off a section title onto the nearest model.
+    fn normalize_cursor(&mut self) {
+        if self.items.is_empty() {
+            self.cursor = 0;
+            return;
+        }
+        if self.items.get(self.cursor).is_some_and(|i| !i.is_header()) {
+            return;
+        }
+        if let Some(idx) = self.items.iter().position(|i| !i.is_header()) {
+            self.cursor = idx;
+        }
     }
 
     /// The value that `enter` should commit.
     pub fn selection(&self) -> Option<PickerValue> {
         if let Some(item) = self.items.get(self.cursor) {
+            if item.is_header() {
+                return None;
+            }
             return Some(item.value.clone());
         }
         if self.accepts_free_text() {
@@ -424,7 +477,24 @@ impl Picker {
             return;
         }
         let n = self.items.len() as isize;
-        self.cursor = (self.cursor as isize + delta).clamp(0, n - 1) as usize;
+        let step = delta.signum();
+        let mut remaining = delta.abs().max(1);
+        while remaining > 0 {
+            let mut idx = self.cursor as isize + step;
+            let mut moved = false;
+            while (0..n).contains(&idx) {
+                if !self.items[idx as usize].is_header() {
+                    self.cursor = idx as usize;
+                    moved = true;
+                    break;
+                }
+                idx += step;
+            }
+            if !moved {
+                break;
+            }
+            remaining -= 1;
+        }
     }
 }
 
@@ -1115,7 +1185,31 @@ pub enum Control {
 
 enum ModelsResult {
     Ok(Vec<String>),
+    /// `/model`: models grouped by provider, in the picker's display order.
+    /// Providers that could not be reached (or returned nothing) are absent.
+    Grouped(Vec<ProviderModels>),
     Err(String),
+}
+
+/// One provider's working models, as returned by its `/models` endpoint.
+#[derive(Debug, Clone)]
+struct ProviderModels {
+    /// Preset id, used to switch provider when a model is picked.
+    id: String,
+    /// Human label shown as the section title.
+    label: String,
+    models: Vec<String>,
+}
+
+/// A provider the `/model` picker should query.
+struct ProviderTarget {
+    id: String,
+    label: String,
+    base_url: String,
+    key: Option<String>,
+    /// The currently active preset: queried through the runtime provider, so
+    /// test doubles and the live client both work.
+    active: bool,
 }
 
 /// Result of the background `/memory` query, delivered on `memory_rx`.
@@ -1407,7 +1501,10 @@ pub struct App {
     improve_tx: UnboundedSender<(u64, ImproveEvent)>,
     /// Bumped on every `/improve` open and on every decision inside it.
     improve_gen: u64,
-    cancel: Option<Cancel>,
+    pub(crate) cancel: Option<Cancel>,
+    /// When the last bare Esc landed: two in quick succession force-stop the
+    /// running turn and kill any child process a tool is blocked on.
+    last_esc: Option<Instant>,
     rx: UnboundedReceiver<AgentEvent>,
     tx: UnboundedSender<AgentEvent>,
     models_rx: UnboundedReceiver<ModelsResult>,
@@ -1600,6 +1697,7 @@ impl App {
             improve_tx,
             improve_gen: 0,
             cancel: None,
+            last_esc: None,
             rx,
             tx,
             models_rx,
@@ -1967,7 +2065,7 @@ impl App {
         confirmer: Option<Arc<dyn crate::agent::policy::Confirmer>>,
         tool_policy: crate::agent::policy::ToolPolicy,
     ) -> AgentRuntime {
-        let runtime = AgentRuntime::new(
+        let mut runtime = AgentRuntime::new(
             provider,
             cwd.to_path_buf(),
             cfg.max_file_bytes,
@@ -1995,6 +2093,13 @@ impl App {
         .with_external_tools(Arc::new(crate::tools::external_tools::ExternalTools::load(
             &crate::tools::external_tools::tools_dir(),
         )));
+        // Hacker mode is the authorized security-operations environment: tell
+        // the model to complete in-scope work instead of refusing, and to end
+        // with suggested next steps. Enforcement is unchanged (ToolPolicy +
+        // the Hacker module scope gate); this is prompt guidance only.
+        if tool_policy == crate::agent::policy::ToolPolicy::Hacker {
+            runtime = runtime.with_hacker_mode();
+        }
         match confirmer {
             Some(confirmer) => runtime.with_confirmer(confirmer),
             None => runtime,
@@ -2228,6 +2333,7 @@ impl App {
         self.fire_hook(crate::hooks::HookEvent::TurnEnd { summary });
         self.active = None;
         self.cancel = None;
+        self.last_esc = None;
         self.turn_started = None;
         self.view.scroll_from_bottom = 0;
         self.mark_dirty();
@@ -3532,7 +3638,6 @@ impl App {
 
         self.cfg.base_url = base_url.clone();
         let key = form.api_key.value().trim().to_string();
-        self.cfg.api_key = (!key.is_empty()).then_some(key);
 
         // The model is not edited here; `/model` owns it.
 
@@ -3542,6 +3647,10 @@ impl App {
             .find(|p| p.base_url.trim_end_matches('/') == self.cfg.base_url)
             .map(|p| p.id.to_string())
             .unwrap_or_else(|| "custom".to_string());
+        // Keep this provider's key so it survives switching to another provider
+        // and back: the active key is mirrored, all others are retained.
+        let preset_id = self.cfg.preset.clone();
+        self.cfg.set_provider_key(&preset_id, &key);
 
         // The setup is accepted: persist it before the connection check, so a
         // temporarily unreachable endpoint does not lose the user's work.
@@ -3579,26 +3688,131 @@ impl App {
         });
     }
 
+    /// Every provider worth querying for `/model`: the active one plus any
+    /// other provider that has a saved key (or is a keyless local runtime).
+    /// Providers with no key are left out so the list only shows usable ones.
+    fn provider_targets(&self) -> Vec<ProviderTarget> {
+        let mut targets = Vec::new();
+        for p in self.cfg.presets() {
+            let active = p.id == self.cfg.preset;
+            let key = if active {
+                self.cfg.api_key.clone()
+            } else {
+                self.cfg.provider_key(p.id).or_else(|| {
+                    p.key_env
+                        .and_then(|env| std::env::var(env).ok())
+                        .filter(|k| !k.trim().is_empty())
+                })
+            };
+            // Include the active provider unconditionally (its models are what
+            // the user is on); include others only when keyed or keyless-local.
+            if !active && key.is_none() && !p.offline {
+                continue;
+            }
+            let base_url = if active {
+                self.cfg.base_url.clone()
+            } else {
+                p.base_url.to_string()
+            };
+            if base_url.trim().is_empty() && !active {
+                continue;
+            }
+            targets.push(ProviderTarget {
+                id: p.id.to_string(),
+                label: p.label.to_string(),
+                base_url,
+                key,
+                active,
+            });
+        }
+        targets
+    }
+
     pub fn open_model_picker(&mut self) {
         let mut picker = Picker::new(PickerMode::Model, self.model_items(Vec::new()));
         picker.loading = true;
         self.overlay = Some(Overlay::Picker(picker));
 
-        // Ask the endpoint what it serves; failure just leaves free-text entry available.
-        let provider = Arc::clone(self.runtime.provider());
+        // Query every configured provider in parallel and group the results by
+        // provider. A provider that fails or returns nothing is dropped, so the
+        // list never shows a dead endpoint's models.
+        let active_id = self.cfg.preset.clone();
+        let active = Arc::clone(self.runtime.provider());
+        let targets = self.provider_targets();
         let tx = self.models_tx.clone();
         self.handle.spawn(async move {
-            let result = match provider.list_models().await {
-                Ok(mut models) => {
+            let fetches = targets.into_iter().map(|target| {
+                let active = Arc::clone(&active);
+                let active_id = active_id.clone();
+                async move {
+                    let models = if target.active && target.id == active_id {
+                        active.list_models().await.ok()
+                    } else {
+                        match OpenAiProvider::with_endpoint(target.base_url, target.key) {
+                            Ok(provider) => provider.list_models().await.ok(),
+                            Err(_) => None,
+                        }
+                    };
+                    let mut models = models?;
                     models.sort();
                     models.dedup();
-                    ModelsResult::Ok(models)
+                    if models.is_empty() {
+                        None
+                    } else {
+                        Some(ProviderModels {
+                            id: target.id,
+                            label: target.label,
+                            models,
+                        })
+                    }
                 }
-                Err(e) => ModelsResult::Err(e.to_string()),
-            };
-            let _ = tx.send(result);
+            });
+            let groups: Vec<ProviderModels> = futures_util::future::join_all(fetches)
+                .await
+                .into_iter()
+                .flatten()
+                .collect();
+            let _ = tx.send(ModelsResult::Grouped(groups));
         });
         self.mark_dirty();
+    }
+
+    /// Rows for the grouped model picker: a provider title followed by its
+    /// models. The active model always appears, even if its provider failed.
+    fn grouped_model_items(&self, groups: Vec<ProviderModels>) -> Vec<PickerItem> {
+        let mut items = Vec::new();
+        for group in groups {
+            items.push(PickerItem::header(&group.label));
+            for model in group.models {
+                let current = group.id == self.cfg.preset && model == self.cfg.model;
+                items.push(PickerItem {
+                    current,
+                    label: model.clone(),
+                    hint: if group.id == self.cfg.preset {
+                        "current provider".into()
+                    } else {
+                        String::new()
+                    },
+                    value: PickerValue::ProviderModel {
+                        provider: group.id.clone(),
+                        model,
+                    },
+                });
+            }
+        }
+        if !items.iter().any(|i| i.current) {
+            items.push(PickerItem::header(&self.cfg.provider_label()));
+            items.push(PickerItem {
+                current: true,
+                label: self.cfg.model.clone(),
+                hint: "current".into(),
+                value: PickerValue::ProviderModel {
+                    provider: self.cfg.preset.clone(),
+                    model: self.cfg.model.clone(),
+                },
+            });
+        }
+        items
     }
 
     fn model_items(&self, models: Vec<String>) -> Vec<PickerItem> {
@@ -3634,6 +3848,15 @@ impl App {
             Some(Overlay::Picker(p)) if p.mode == PickerMode::Model
         );
         match result {
+            ModelsResult::Grouped(groups) if for_picker => {
+                let rows = self.grouped_model_items(groups);
+                if let Some(Overlay::Picker(picker)) = &mut self.overlay {
+                    picker.set_source(rows, None);
+                }
+            }
+            // A grouped result can only come from the model picker; a stale one
+            // that lands after the overlay closed is dropped.
+            ModelsResult::Grouped(_) => {}
             ModelsResult::Ok(models) if for_picker => {
                 let rows = self.model_items(models);
                 if let Some(Overlay::Picker(picker)) = &mut self.overlay {
@@ -4128,6 +4351,26 @@ impl App {
             PickerValue::Session(path) => self.restore_session(&path),
             PickerValue::Theme(id) => self.apply_theme(id),
             PickerValue::Memory(row) => self.open_memory_record(row),
+            // A section title is never committed; Enter on one does nothing.
+            PickerValue::Header(_) => {}
+            PickerValue::ProviderModel { provider, model } => {
+                // Switching provider also swaps endpoint + key (apply_preset
+                // restores the key saved for that provider, if any).
+                let switched = self.cfg.apply_preset(&provider);
+                self.cfg.model = model.clone();
+                if let Err(err) = self.rebuild_runtime() {
+                    self.toast(format!("model switch failed: {err}"));
+                    self.mark_dirty();
+                    return;
+                }
+                // The model is part of the setup: persist it.
+                self.cfg.save();
+                self.toast(if switched {
+                    format!("model: {model} · {}", self.cfg.provider_label())
+                } else {
+                    format!("model: {model}")
+                });
+            }
             PickerValue::Model(model) => {
                 if model == self.cfg.model {
                     self.toast(format!("model: {model}"));
@@ -4155,7 +4398,23 @@ impl App {
     pub fn interrupt(&mut self) {
         if let Some(cancel) = &self.cancel {
             cancel.cancel();
-            self.toast("interrupting…");
+            self.toast("interrupting… press esc again to force stop");
+            self.mark_dirty();
+        }
+    }
+
+    /// Hard stop: cancels the turn and makes the running tool kill its child
+    /// process group. Reached from the second Esc press.
+    pub fn force_interrupt(&mut self) {
+        if let Some(cancel) = &self.cancel {
+            cancel.force();
+            self.toast("force stopping…");
+            self.mark_dirty();
+        }
+        // A board convene has no tool process to kill, but the second Esc
+        // should still stop it rather than being swallowed.
+        if let Some(board) = &self.board_cancel {
+            board.cancel();
             self.mark_dirty();
         }
     }
@@ -4407,12 +4666,45 @@ impl App {
             "findings" | "finding" => self.run_hacker_findings(rest),
             "assessment" | "assessments" => self.run_hacker_assessment(rest),
             "report" => self.run_hacker_report(rest),
+            // Learned hacking tricks/techniques, recalled from memory.
+            "techniques" | "tricks" | "tradecraft" => self.run_hacker_techniques(rest),
             other => {
                 self.toast(format!(
-                    "unknown /hacker subcommand `{other}` - try help, run, kali, findings, report, status, modules, scope, audit, exit"
+                    "unknown /hacker subcommand `{other}` - try help, run, kali, findings, report, techniques, status, modules, scope, audit, exit"
                 ));
             }
         }
+    }
+
+    /// `/hacker techniques [query]`: recalls saved hacking tricks/techniques
+    /// from persistent memory (records tagged `technique`). The agent saves
+    /// reusable tradecraft with `memory_save`; this surfaces it on demand.
+    fn run_hacker_techniques(&mut self, query: &str) {
+        let Some(engine) = self.memory.clone() else {
+            self.toast("memory not available - techniques are stored in memory");
+            self.mark_dirty();
+            return;
+        };
+        let query = query.trim().to_string();
+        let tx = self.hacker_tx.clone();
+        self.handle.spawn_blocking(move || {
+            let search = crate::memory::model::SearchQuery {
+                tags: vec!["technique".to_string()],
+                text: if query.is_empty() { None } else { Some(query) },
+                limit: Some(TECHNIQUE_LIST_ROWS),
+                ..Default::default()
+            };
+            let text = match engine.search(&search, true) {
+                Ok((list, _)) => render_techniques(&list.items),
+                Err(e) => format!("techniques unavailable: {e}"),
+            };
+            let _ = tx.send(HackerEvent::Lines {
+                request: "techniques".into(),
+                text,
+            });
+        });
+        self.toast("loading techniques ...");
+        self.mark_dirty();
     }
 
     /// Runs one operation on the blocking pool through the coordinator (which
@@ -6099,6 +6391,29 @@ impl App {
     pub fn on_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
 
+        // Double-Esc is a global force stop and must win over everything that
+        // normally consumes Esc (overlays, the suggestions strip, transcript
+        // search, a pending tool confirmation). One Esc is a cooperative
+        // interrupt; a second within the window - or any Esc once the turn is
+        // already cancelling - hard-kills a tool's child process group.
+        if key.code == KeyCode::Esc {
+            let now = Instant::now();
+            let repeated = self
+                .last_esc
+                .is_some_and(|t| now.duration_since(t) <= DOUBLE_ESC_WINDOW);
+            self.last_esc = Some(now);
+            let already_cancelling = self
+                .cancel
+                .as_ref()
+                .is_some_and(|cancel| cancel.is_cancelled());
+            if self.is_busy() && (repeated || already_cancelling) {
+                self.force_interrupt();
+                return;
+            }
+        } else {
+            self.last_esc = None;
+        }
+
         // Overlay captures input first.
         if self.overlay.is_some() {
             self.on_key_overlay(key);
@@ -7351,6 +7666,40 @@ fn on_off(value: bool) -> &'static str {
 
 /// One search hit as a `/memory` row: summary when the record has one, else
 /// its first non-empty line, with the body carried for the record overlay.
+/// Renders recalled technique records as a compact transcript block.
+fn render_techniques(items: &[crate::memory::model::MemoryHit]) -> String {
+    if items.is_empty() {
+        return "no techniques learned yet. The agent records reusable tradecraft \
+                with memory_save (tag: \"technique\")."
+            .to_string();
+    }
+    let mut lines = vec![format!("{} technique(s):", items.len())];
+    for hit in items {
+        let record = &hit.record;
+        let title = record
+            .summary
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                record
+                    .content
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+                    .map(|line| line.trim().to_string())
+            })
+            .unwrap_or_else(|| record.id.clone());
+        let mut head = format!("• {}", crate::ui::text::truncate(&title, 96));
+        if !record.tags.is_empty() {
+            head.push_str(&format!("  [{}]", record.tags.join(", ")));
+        }
+        lines.push(head);
+        for line in record.content.chars().take(280).collect::<String>().lines() {
+            lines.push(format!("    {}", line.trim_end()));
+        }
+    }
+    lines.join("\n")
+}
+
 fn memory_row(hit: crate::memory::model::MemoryHit) -> MemoryRow {
     let record = hit.record;
     let title = record
@@ -8459,5 +8808,119 @@ mod tests {
         app.on_key(key(KeyCode::Esc));
         assert!(app.suggestions.is_none(), "esc dismisses");
         assert_eq!(app.composer.value(), "x", "esc must not clear the composer");
+    }
+
+    /// Picker headers are non-selectable; move_by skips over them.
+    #[test]
+    fn picker_headers_are_skipped_by_navigation() {
+        let mut picker = Picker::new(
+            PickerMode::Model,
+            vec![
+                PickerItem::header("OpenAI"),
+                PickerItem {
+                    current: false,
+                    label: "gpt-4o".into(),
+                    hint: "".into(),
+                    value: PickerValue::Model("gpt-4o".into()),
+                },
+                PickerItem::header("Anthropic"),
+                PickerItem {
+                    current: true,
+                    label: "claude-3".into(),
+                    hint: "".into(),
+                    value: PickerValue::Model("claude-3".into()),
+                },
+            ],
+        );
+        // Cursor starts on the first selectable (index 1).
+        assert_eq!(picker.cursor, 1);
+        // Down once moves to index 3 (skips header at 2).
+        picker.move_by(1);
+        assert_eq!(picker.cursor, 3);
+        // Up from there goes back to index 1.
+        picker.move_by(-1);
+        assert_eq!(picker.cursor, 1);
+        // Selection is never a header.
+        assert!(!picker
+            .selection()
+            .is_some_and(|v| matches!(v, PickerValue::Header(_))));
+    }
+
+    /// Picker filtering drops headers, leaving a flat match list.
+    #[test]
+    fn picker_filter_drops_headers() {
+        let mut picker = Picker::new(
+            PickerMode::Model,
+            vec![
+                PickerItem::header("OpenAI"),
+                PickerItem {
+                    current: false,
+                    label: "gpt-4o".into(),
+                    hint: "".into(),
+                    value: PickerValue::Model("gpt-4o".into()),
+                },
+                PickerItem::header("Anthropic"),
+                PickerItem {
+                    current: false,
+                    label: "claude-3".into(),
+                    hint: "".into(),
+                    value: PickerValue::Model("claude-3".into()),
+                },
+            ],
+        );
+        // Before filtering: 4 items (2 headers + 2 models).
+        assert_eq!(picker.source.len(), 4);
+        // Type a query that matches both models.
+        picker.filter.insert_str("4o");
+        picker.apply_filter();
+        // Headers dropped, only matching model remains.
+        assert_eq!(picker.items.len(), 1);
+        assert_eq!(picker.items[0].label, "gpt-4o");
+    }
+
+    /// Grouped model items render headers + ProviderModel entries.
+    #[tokio::test]
+    async fn grouped_model_items_builds_headers_and_provider_models() {
+        let mut app = test_app().await;
+        // Match the test app's current provider/model so no fallback is added.
+        app.cfg.preset = "openai".into();
+        app.cfg.model = "gpt-4o".into();
+        let groups = vec![
+            ProviderModels {
+                id: "openai".into(),
+                label: "OpenAI".into(),
+                models: vec!["gpt-4o".into(), "gpt-4o-mini".into()],
+            },
+            ProviderModels {
+                id: "anthropic".into(),
+                label: "Anthropic".into(),
+                models: vec!["claude-3".into()],
+            },
+        ];
+        let items = app.grouped_model_items(groups);
+        assert_eq!(items.len(), 5); // 2 headers + 3 models
+        assert!(items[0].is_header());
+        assert!(
+            items[1].value
+                == PickerValue::ProviderModel {
+                    provider: "openai".into(),
+                    model: "gpt-4o".into()
+                }
+        );
+        assert!(
+            items[2].value
+                == PickerValue::ProviderModel {
+                    provider: "openai".into(),
+                    model: "gpt-4o-mini".into()
+                }
+        );
+        assert!(items[3].is_header());
+        assert!(
+            items[4].value
+                == PickerValue::ProviderModel {
+                    provider: "anthropic".into(),
+                    model: "claude-3".into()
+                }
+        );
     }
 }
