@@ -163,6 +163,11 @@ async fn main() -> io::Result<()> {
         }
     };
 
+    // Auto-update check on startup (like opencode's autoupdate)
+    if !matches!(app.cfg.autoupdate.as_str(), "false") {
+        let _ = app.check_for_updates_on_startup();
+    }
+
     let (control_tx, mut control_rx) = tokio::sync::mpsc::unbounded_channel::<Control>();
     app.set_control_channel(control_tx);
     let mut ticker = tokio::time::interval(ANIMATION_TICK);

@@ -73,9 +73,11 @@ async fn renders_welcome_state() {
     app.resume_hint = Some("last time: the streaming audit · 3h ago".into());
     let text = frame_text(&mut app, 92, 24);
     println!("{text}");
-    assert!(text.contains("nanomite"), "title missing:\n{text}");
     assert!(
-        text.contains("the microscopic agent"),
+        text.contains("nanomite"), "title missing:\n{text}"
+    );
+    assert!(
+        text.contains("Intelligence Without Boundaries"),
         "tagline missing:\n{text}"
     );
     assert!(

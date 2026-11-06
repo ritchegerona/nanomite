@@ -656,6 +656,9 @@ pub struct Config {
     pub learning_daily: bool,
     /// Pinned learning topic. `None` rotates through [`crate::learn::DEFAULT_TOPICS`].
     pub learning_topic: Option<String>,
+    /// Auto-update behavior: "notify" = check and notify on startup, "true" = check and prompt, "false" = disabled.
+    /// Environment variable: NANOMITE_AUTOUPDATE (values: "notify", "true", "false")
+    pub autoupdate: String,
 }
 
 /// The subset of settings persisted to disk; everything else stays env-driven.
@@ -688,6 +691,8 @@ struct Stored {
     // `[learn]` section.
     learning_daily: Option<bool>,
     learning_topic: Option<String>,
+    // auto-update setting
+    autoupdate: Option<String>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
@@ -760,6 +765,7 @@ fn parse_stored(text: &str) -> Stored {
                 "suggestions" => stored.suggestions = parse_bool_opt(&value),
                 "compact" => stored.compact = parse_bool_opt(&value),
                 "confirm_external" => stored.confirm_external = parse_bool_opt(&value),
+                "autoupdate" => stored.autoupdate = Some(value),
                 _ => {}
             },
             _ => {}
@@ -912,6 +918,9 @@ fn stored_text(cfg: &Config) -> String {
     if let Some(topic) = &cfg.learning_topic {
         lines.push(format!("topic = {}", quote(topic)));
     }
+    lines.push(String::new());
+    // Auto-update behavior
+    lines.push(format!("autoupdate = {}", quote(&cfg.autoupdate)));
     lines.push(String::new());
     lines.join("\n")
 }
@@ -1259,6 +1268,13 @@ impl Config {
             .or_else(|| stored.learning_topic.clone())
             .map(|topic| topic.trim().to_string())
             .filter(|topic| !topic.is_empty()),
+            // Auto-update behavior: "notify" = check and notify, "true" = check and prompt, "false" = disabled
+            autoupdate: if use_env {
+                first_env_one("NANOMITE_AUTOUPDATE")
+                    .unwrap_or_else(|| "notify".to_string())
+            } else {
+                stored.autoupdate.as_ref().cloned().unwrap_or_else(|| "notify".to_string())
+            },
             hacker,
         }
     }

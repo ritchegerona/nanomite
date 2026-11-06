@@ -2867,6 +2867,81 @@ impl App {
         self.resume_checked = true;
     }
 
+    /// Checks for updates on startup if autoupdate is enabled.
+    /// This runs once on startup, similar to opencode's autoupdate behavior.
+    pub fn check_for_updates_on_startup(&mut self) -> Result<(), String> {
+        // Only check if autoupdate is not disabled
+        if matches!(self.cfg.autoupdate.as_str(), "false") {
+            return Ok(());
+        }
+
+        let current = env!("CARGO_PKG_VERSION");
+        let Some(repo) = crate::update::locate_checkout() else {
+            return Ok(()); // Silently skip if not a git checkout
+        };
+
+        let branch = match crate::update::git_out(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]) {
+            Ok(b) => b,
+            Err(_) => return Ok(()),
+        };
+
+        if let Err(_) = crate::update::git_out(&repo, &["fetch", "origin", "--tags", "--quiet"]) {
+            return Ok(()); // Silently skip on fetch failure
+        }
+
+        let behind: usize = crate::update::git_out(
+            &repo,
+            &["rev-list", "--count", &format!("HEAD..origin/{branch}")],
+        ).unwrap_or("0".to_string()).parse().unwrap_or(0);
+
+        let latest_tag = crate::update::git_opt(
+            &repo,
+            &[
+                "describe",
+                "--tags",
+                "--abbrev=0",
+                &format!("origin/{branch}"),
+            ],
+        );
+        let tag_newer = latest_tag
+            .as_deref()
+            .and_then(crate::update::parse_tag)
+            .is_some_and(|tag| tag > crate::update::parse_tag(current).unwrap_or((0, 0, 0)));
+
+        if behind == 0 && !tag_newer {
+            // Up to date - no notification needed
+            return Ok(());
+        }
+
+        // Update available - notify or prompt based on autoupdate setting
+        let mut msg = String::new();
+        if behind > 0 {
+            msg.push_str(&format!("{behind} commit(s) behind origin/{branch}"));
+        }
+        if tag_newer {
+            if !msg.is_empty() { msg.push_str(" · "); }
+            msg.push_str("new release tag available");
+        }
+
+        match self.cfg.autoupdate.as_str() {
+            "notify" => {
+                // Just notify in the transcript
+                self.entries.push(crate::app::Entry::new(
+                    crate::app::EntryRole::System,
+                    format!("🔄 update available: {msg} — run /update to apply")
+                ));
+            }
+            "true" => {
+                // Prompt the user with a toast
+                self.toast(format!("update available: {msg} — run /update to apply"));
+            }
+            _ => {}
+        }
+
+        self.mark_dirty();
+        Ok(())
+    }
+
     pub fn on_tick(&mut self) {
         if self.is_busy() {
             self.mark_dirty();
@@ -3088,8 +3163,171 @@ impl App {
             Command::Prev => self.prev_turn(),
             Command::Next => self.next_turn(),
             Command::Learn => self.run_learn(args),
+            Command::Update => self.handle_update(args),
         }
         self.mark_dirty();
+    }
+
+    /// `/update [check]`: check for updates and rebuild, or just check.
+    /// Uses the existing `crate::update::run()` logic under the hood.
+    fn handle_update(&mut self, args: &str) {
+        let trimmed = args.trim().to_ascii_lowercase();
+        match trimmed.as_str() {
+            "check" => {
+                // Just check without updating - run the git fetch part
+                let current = env!("CARGO_PKG_VERSION");
+                println!("nanomite v{current} — checking for updates");
+                
+                let Some(repo) = crate::update::locate_checkout() else {
+                    self.toast("update requires a git checkout install: no .git found above the running binary");
+                    return;
+                };
+                
+                let branch = match crate::update::git_out(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        self.toast(format!("git error: {e}"));
+                        return;
+                    }
+                };
+                
+                if let Err(e) = crate::update::git_out(&repo, &["fetch", "origin", "--tags", "--quiet"]) {
+                    self.toast(format!("fetch failed: {e}"));
+                    return;
+                }
+                
+                let behind: usize = crate::update::git_out(
+                    &repo,
+                    &["rev-list", "--count", &format!("HEAD..origin/{branch}")],
+                ).unwrap_or("0".to_string()).parse().unwrap_or(0);
+                
+                let latest_tag = crate::update::git_opt(
+                    &repo,
+                    &[
+                        "describe",
+                        "--tags",
+                        "--abbrev=0",
+                        &format!("origin/{branch}"),
+                    ],
+                );
+                let tag_newer = latest_tag
+                    .as_deref()
+                    .and_then(crate::update::parse_tag)
+                    .is_some_and(|tag| tag > crate::update::parse_tag(current).unwrap_or((0, 0, 0)));
+                
+                if behind == 0 && !tag_newer {
+                    self.toast(format!("nanomite v{current} is up to date"));
+                } else {
+                    let mut msg = String::new();
+                    if behind > 0 {
+                        msg.push_str(&format!("{behind} commit(s) behind origin/{branch}"));
+                    }
+                    if tag_newer {
+                        if !msg.is_empty() { msg.push_str(" · "); }
+                        msg.push_str("new release tag available");
+                    }
+                    self.toast(format!("update available: {msg} — run /update to apply"));
+                }
+            }
+            "" => {
+                // Full update - reuse the existing update::run() logic but adapted for TUI
+                self.toast("checking for updates...");
+                let _ = self.update_and_rebuild();
+            }
+            other => {
+                self.toast(format!("usage: /update [check] (got `{other}`)"));
+            }
+        }
+    }
+
+    /// Performs the full update: fetch, pull, rebuild.
+    fn update_and_rebuild(&mut self) -> Result<(), String> {
+        let current = env!("CARGO_PKG_VERSION");
+        let Some(repo) = crate::update::locate_checkout() else {
+            return Err("update requires a git checkout install: no .git found above the running binary".into());
+        };
+        
+        let branch = crate::update::git_out(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .map_err(|e| format!("git error: {e}"))?;
+        
+        crate::update::git_out(&repo, &["fetch", "origin", "--tags", "--quiet"])
+            .map_err(|e| format!("fetch failed: {e}"))?;
+        
+        let behind: usize = crate::update::git_out(
+            &repo,
+            &["rev-list", "--count", &format!("HEAD..origin/{branch}")],
+        ).unwrap_or("0".to_string()).parse().unwrap_or(0);
+        
+        let latest_tag = crate::update::git_opt(
+            &repo,
+            &[
+                "describe",
+                "--tags",
+                "--abbrev=0",
+                &format!("origin/{branch}"),
+            ],
+        );
+        let tag_newer = latest_tag
+            .as_deref()
+            .and_then(crate::update::parse_tag)
+            .is_some_and(|tag| tag > crate::update::parse_tag(current).unwrap_or((0, 0, 0)));
+        
+        if behind == 0 && !tag_newer {
+            self.toast(format!("nanomite v{current} is up to date"));
+            return Ok(());
+        }
+        
+        if behind > 0 {
+            let incoming = crate::update::git_out(
+                &repo,
+                &[
+                    "log",
+                    "--oneline",
+                    &format!("HEAD..origin/{branch}"),
+                    &format!("-{}", crate::update::MAX_INCOMING_LOG),
+                ],
+            ).unwrap_or_default();
+            self.toast(format!("updating {branch}: {behind} new commit(s)"));
+            for line in incoming.lines() {
+                self.entries.push(crate::app::Entry::new(crate::app::EntryRole::System, format!("  {line}")));
+            }
+        } else {
+            self.toast("new release tag available");
+        }
+        
+        crate::update::git_out(&repo, &["pull", "--ff-only", "--quiet"])
+            .map_err(|e| format!("pull failed: {e}"))?;
+        
+        let new_version = crate::update::read_version(&repo).unwrap_or_else(|| current.to_string());
+        self.toast("rebuilding (release) — this can take a minute");
+        
+        // Run cargo build --release on the blocking pool
+        let repo_path = repo.clone();
+        let control_tx = self.control_tx.clone();
+        let handle = self.handle.clone();
+        
+        handle.spawn_blocking(move || {
+            let build = std::process::Command::new("cargo")
+                .current_dir(&repo_path)
+                .args(["build", "--release"])
+                .status();
+            
+            let result = match build {
+                Ok(status) if status.success() => {
+                    Ok(format!("updated to v{new_version} — restart nanomite to switch"))
+                }
+                Ok(status) => Err(format!("cargo build --release failed with exit code: {:?}", status.code())),
+                Err(e) => Err(format!("cargo failed to start: {e}")),
+            };
+            
+            if let Some(tx) = control_tx {
+                let _ = tx.send(crate::app::Control::SudoResult(
+                    result.unwrap_or_else(|e| format!("update failed: {e}"))
+                ));
+            }
+        });
+        
+        Ok(())
     }
 
     /// Opens the sudo password modal for a command that failed on elevation.

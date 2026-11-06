@@ -93,11 +93,11 @@ pub fn run() -> io::Result<()> {
 }
 
 /// Cap on the incoming-commit summary so a huge pull does not flood the page.
-const MAX_INCOMING_LOG: usize = 10;
+pub const MAX_INCOMING_LOG: usize = 10;
 
 /// Locates the source checkout from the running binary: `current_exe`
 /// resolves symlinks, then the first ancestor containing `.git` wins.
-fn locate_checkout() -> Option<PathBuf> {
+pub fn locate_checkout() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
     exe.ancestors()
         .skip(1)
@@ -105,7 +105,7 @@ fn locate_checkout() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-fn git_out(repo: &Path, args: &[&str]) -> Result<String, io::Error> {
+pub fn git_out(repo: &Path, args: &[&str]) -> Result<String, io::Error> {
     let out = run_git(repo, args)?;
     if !out.status.success() {
         return Err(io::Error::other(format!(
@@ -117,7 +117,7 @@ fn git_out(repo: &Path, args: &[&str]) -> Result<String, io::Error> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn git_opt(repo: &Path, args: &[&str]) -> Option<String> {
+pub fn git_opt(repo: &Path, args: &[&str]) -> Option<String> {
     let out = run_git(repo, args).ok()?;
     if !out.status.success() {
         return None;
@@ -170,7 +170,7 @@ fn timeout_runner(
     }
 }
 
-fn read_version(repo: &Path) -> Option<String> {
+pub fn read_version(repo: &Path) -> Option<String> {
     let manifest = std::fs::read_to_string(repo.join("Cargo.toml")).ok()?;
     for line in manifest.lines() {
         if let Some(rest) = line.trim().strip_prefix("version") {
@@ -186,7 +186,7 @@ fn read_version(repo: &Path) -> Option<String> {
 }
 
 /// Parses `v0.7.0` / `0.7.0` into a comparable tuple.
-fn parse_tag(tag: &str) -> Option<(u64, u64, u64)> {
+pub fn parse_tag(tag: &str) -> Option<(u64, u64, u64)> {
     let digits: String = tag
         .chars()
         .filter(|c| c.is_ascii_digit() || *c == '.')

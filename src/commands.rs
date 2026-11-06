@@ -50,6 +50,7 @@ pub enum Command {
     Density,
     Hacker,
     Learn,
+    Update,
 }
 
 pub struct Entry {
@@ -286,6 +287,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "write the session to markdown - /export html for a web page (alt+j)",
         kind: Command::Export,
+    },
+    Entry {
+        command: "/update",
+        aliases: &["/upgrade"],
+        hint: "check for updates and rebuild - /update check to only check (alt+shift+u)",
+        kind: Command::Update,
     },
     Entry {
         command: "/share",
