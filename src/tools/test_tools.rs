@@ -100,11 +100,8 @@ impl TestTools {
                 } else {
                     self.root.join(p)
                 };
-                let normalized = crate::tools::file_tools::normalize(&joined);
-                if !normalized.starts_with(&self.root) {
-                    return Err("refused: cwd escapes the workspace".into());
-                }
-                Ok(normalized)
+                crate::tools::file_tools::resolve_within(&self.root, &joined)
+                    .ok_or_else(|| "refused: cwd escapes the workspace".to_string())
             }
         }
     }

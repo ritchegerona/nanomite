@@ -116,11 +116,9 @@ impl FileTools {
         } else {
             self.root.join(raw)
         };
-        let normalized = normalize(&joined);
-        if !normalized.starts_with(&self.root) {
-            return Err("refused: path escapes the workspace".into());
-        }
-        Ok(normalized)
+        resolve_within(&self.root, &joined).ok_or_else(|| -> Box<dyn Error + Send + Sync> {
+            "refused: path escapes the workspace".into()
+        })
     }
 
     pub fn relative(&self, path: &Path) -> String {
@@ -431,6 +429,46 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// Resolves an already-joined path inside `root`, refusing escapes.
+///
+/// The lexical pass strips `..`; canonicalising the deepest existing
+/// ancestor then makes both sides comparable when `root` sits behind a
+/// symlink (macOS `/var` → `/private/var`) and catches an in-workspace
+/// symlink that points out of it. A non-existent tail stays lexical so
+/// create/write targets still resolve. Returns the canonical path so
+/// `strip_prefix(root)` display keeps working.
+pub(crate) fn resolve_within(root: &Path, joined: &Path) -> Option<PathBuf> {
+    let normalized = normalize(joined);
+    let resolved = canonicalize_deepest(&normalized);
+    resolved
+        .starts_with(canonicalize_deepest(root))
+        .then_some(resolved)
+}
+
+/// `fs::canonicalize` on the deepest ancestor that exists, re-appending the
+/// missing tail unchanged (it cannot contain symlinks yet).
+fn canonicalize_deepest(path: &Path) -> PathBuf {
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path.to_path_buf();
+    loop {
+        if let Ok(canon) = fs::canonicalize(&cur) {
+            let mut out = canon;
+            for part in tail.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        let Some(name) = cur.file_name().map(|n| n.to_os_string()) else {
+            return normalize(path);
+        };
+        let Some(parent) = cur.parent().map(|p| p.to_path_buf()) else {
+            return normalize(path);
+        };
+        tail.push(name);
+        cur = parent;
+    }
+}
+
 fn is_noise_dir(name: &str) -> bool {
     matches!(
         name,
@@ -542,6 +580,62 @@ mod tests {
         let tools = FileTools::new(std::env::temp_dir(), 1024);
         let err = tools.resolve(Some("../etc/passwd")).unwrap_err();
         assert!(err.to_string().contains("escapes the workspace"));
+    }
+
+    /// A workspace addressed through a symlink alias (macOS `/var` →
+    /// `/private/var`) must accept absolute paths in either spelling: the
+    /// root is canonicalised at construction, so the alias form used to be
+    /// refused outright — that is what crashed `cargo bench`.
+    #[test]
+    fn accepts_absolute_paths_through_a_root_symlink_alias() {
+        let base = std::env::temp_dir().join(format!("nm-alias-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let real = base.join("real");
+        fs::create_dir_all(&real).expect("real workspace");
+        let alias = base.join("alias");
+        std::os::unix::fs::symlink(&real, &alias).expect("alias symlink");
+
+        let tools = FileTools::new(&alias, 1024); // root canonicalises to `real`
+        fs::write(alias.join("f.rs"), "fn main() {}").expect("fixture");
+
+        let abs_alias = alias.join("f.rs").display().to_string();
+        let got = tools
+            .resolve(Some(&abs_alias))
+            .expect("alias-spelled absolute path must resolve");
+        assert!(
+            got.starts_with(&tools.root),
+            "resolved path must land inside the canonical root"
+        );
+
+        let abs_real = real.join("f.rs").display().to_string();
+        tools
+            .resolve(Some(&abs_real))
+            .expect("canonical absolute path must resolve");
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A symlink inside the workspace pointing out of it must be refused:
+    /// the lexical check alone let `link/secret` pass while the open
+    /// followed the link outside the root.
+    #[test]
+    fn refuses_a_workspace_symlink_that_points_outside() {
+        let base = std::env::temp_dir().join(format!("nm-slink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let ws = base.join("ws");
+        let outside = base.join("outside");
+        fs::create_dir_all(&ws).expect("ws");
+        fs::create_dir_all(&outside).expect("outside");
+        fs::write(outside.join("secret.txt"), "s").expect("secret");
+        std::os::unix::fs::symlink(&outside, ws.join("link")).expect("link");
+
+        let tools = FileTools::new(&ws, 1024);
+        let err = tools
+            .resolve(Some("link/secret.txt"))
+            .expect_err("symlink escape must be refused");
+        assert!(err.to_string().contains("escapes the workspace"));
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     /// The allocation-free ASCII matcher must agree with the old

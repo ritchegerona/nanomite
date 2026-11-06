@@ -7,7 +7,7 @@
 //! resolved against the workspace root and anything that escapes is refused.
 
 use crate::extract::{ExtractionLimits, ExtractorRegistry};
-use crate::tools::file_tools::normalize;
+use crate::tools::file_tools::resolve_within;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
@@ -57,19 +57,17 @@ impl DocumentTools {
 
     /// Resolves a user-supplied path and refuses anything outside the
     /// workspace. Mirrors `FileTools::resolve`: absolute paths are taken as
-    /// given, relative paths join the root, then lexical normalisation must
-    /// land inside the root.
+    /// given, relative paths join the root, then [`resolve_within`] must land
+    /// inside the root (canonicalised, so a symlinked root alias still matches).
     fn resolve(&self, path: &str) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
         let joined = if Path::new(path).is_absolute() {
             PathBuf::from(path)
         } else {
             self.root.join(path)
         };
-        let normalized = normalize(&joined);
-        if !normalized.starts_with(&self.root) {
-            return Err("refused: path escapes the workspace".into());
-        }
-        Ok(normalized)
+        resolve_within(&self.root, &joined).ok_or_else(|| -> Box<dyn Error + Send + Sync> {
+            "refused: path escapes the workspace".into()
+        })
     }
 
     /// Detects the format and extracts bounded text from one document.

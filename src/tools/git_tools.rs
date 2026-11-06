@@ -150,11 +150,8 @@ impl GitTools {
                 } else {
                     self.root.join(p)
                 };
-                let normalized = crate::tools::file_tools::normalize(&joined);
-                if !normalized.starts_with(&self.root) {
-                    return Err("refused: path escapes the workspace".into());
-                }
-                Ok(normalized)
+                crate::tools::file_tools::resolve_within(&self.root, &joined)
+                    .ok_or_else(|| "refused: path escapes the workspace".to_string())
             }
         }
     }

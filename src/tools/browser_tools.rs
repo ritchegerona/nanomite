@@ -169,11 +169,7 @@ impl BrowserTools {
                 if rel.contains("..") || rel.starts_with('/') {
                     return Err("refused: output must be a workspace-relative path".into());
                 }
-                let full = self.workspace.join(rel);
-                if let Some(parent) = full.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                full
+                self.workspace.join(rel)
             }
             None => {
                 let stamp = std::time::SystemTime::now()
@@ -183,9 +179,13 @@ impl BrowserTools {
                 self.workspace.join(format!("screenshot-{stamp}.png"))
             }
         };
-        let output = output.canonicalize().unwrap_or_else(|_| output.clone());
-        if !output.starts_with(&self.workspace) {
-            return Err("refused: output escapes the workspace".into());
+        // Canonicalised confinement: the parent may not exist yet (a fresh
+        // screenshot name), so the deepest existing ancestor is what gets
+        // compared — and a symlinked rel must not land outside the workspace.
+        let output = crate::tools::file_tools::resolve_within(&self.workspace, &output)
+            .ok_or("refused: output escapes the workspace")?;
+        if let Some(parent) = output.parent() {
+            let _ = std::fs::create_dir_all(parent);
         }
 
         let mut cmd = std::process::Command::new(&browser);
