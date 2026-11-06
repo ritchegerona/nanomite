@@ -352,6 +352,14 @@ pub fn plural(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
+/// `HH:MM` wall-clock for a transcript entry stamp. `Instant` is monotonic and
+/// must never be formatted as a clock time; entries carry a `SystemTime` too.
+pub fn clock(at: std::time::SystemTime) -> String {
+    chrono::DateTime::<chrono::Local>::from(at)
+        .format("%H:%M")
+        .to_string()
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct MarkdownStyles {
     pub link: Style,
@@ -367,6 +375,10 @@ pub struct MarkdownStyles {
     pub code_string: Style,
     pub code_comment: Style,
     pub code_number: Style,
+    /// Draw fenced blocks as rail frames (`├─ lang`, `│ code`, `╰─ n lines`)
+    /// instead of self-contained boxes. The transcript supplies the leading
+    /// `├`/`│`/`╰` prefix; this only changes the lines those prefixes join.
+    pub rail: bool,
 }
 
 impl MarkdownStyles {
@@ -390,6 +402,7 @@ impl MarkdownStyles {
             code_string: Style::default().fg(theme.success()),
             code_comment: Style::default().fg(theme.faint()),
             code_number: Style::default().fg(theme.warn()),
+            rail: false,
         }
     }
 }
@@ -458,42 +471,80 @@ pub fn markdown_with_blocks(
                 let source = std::mem::take(&mut fence_lines);
                 let lang = std::mem::take(&mut fence_lang);
                 fence_start = 0;
-                // Box interior: the code column, capped to the viewport.
-                let inner = max_width.saturating_sub(6).max(8);
-                let code_w = source
-                    .iter()
-                    .map(|l| width(l))
-                    .max()
-                    .unwrap_or(0)
-                    .min(inner);
-                let label = if lang.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", lang)
-                };
-                out.push(box_rule("╭", "╮", code_w, &label, st));
-                let lang = code_lang(&lang);
-                let mut in_block = false;
-                for content in &source {
-                    let shown = if width(content) > code_w {
-                        format!("{}…", truncate(content, code_w.saturating_sub(1)))
+                if st.rail {
+                    // Rail frame: the transcript owns the leading `├`/`│`/`╰`,
+                    // so these lines only draw the rule, the code column and
+                    // the closing summary. No right border, so the full width
+                    // stays available for the code itself.
+                    let code_w = max_width.saturating_sub(1).max(8);
+                    let head = if lang.is_empty() {
+                        String::new()
                     } else {
-                        content.clone()
+                        format!(" {lang} ")
                     };
-                    let mut spans = vec![Span::styled("│ ", st.fence)];
-                    let mut hl = highlight_code(&shown, lang, st, &mut in_block);
-                    // Keep the right border aligned: pad the visible width.
-                    let w: usize = hl.iter().map(|s| width(s.content.as_ref())).sum();
-                    if w < code_w {
-                        hl.push(Span::styled(" ".repeat(code_w - w), st.code));
+                    let mut rule = String::from("─");
+                    rule.push_str(&head);
+                    let fill = max_width.saturating_sub(width(&rule)).max(1);
+                    rule.push_str(&"─".repeat(fill));
+                    out.push(Line::from(Span::styled(rule, st.fence)));
+                    let kind = code_lang(&lang);
+                    let mut in_block = false;
+                    for content in &source {
+                        let shown = if width(content) > code_w {
+                            format!("{}…", truncate(content, code_w.saturating_sub(1)))
+                        } else {
+                            content.clone()
+                        };
+                        let mut spans = vec![Span::raw(" ".to_string())];
+                        let mut hl = highlight_code(&shown, kind, st, &mut in_block);
+                        spans.append(&mut hl);
+                        out.push(Line::from(spans));
                     }
-                    spans.append(&mut hl);
-                    spans.push(Span::styled(" │", st.fence));
-                    out.push(Line::from(spans));
+                    let end = out.len();
+                    let count = source.len();
+                    out.push(Line::from(Span::styled(
+                        format!("─ {} · click to copy", plural(count, "line")),
+                        st.fence,
+                    )));
+                    blocks.push((start, end, source.join("\n")));
+                } else {
+                    // Box interior: the code column, capped to the viewport.
+                    let inner = max_width.saturating_sub(6).max(8);
+                    let code_w = source
+                        .iter()
+                        .map(|l| width(l))
+                        .max()
+                        .unwrap_or(0)
+                        .min(inner);
+                    let label = if lang.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {}", lang)
+                    };
+                    out.push(box_rule("╭", "╮", code_w, &label, st));
+                    let lang = code_lang(&lang);
+                    let mut in_block = false;
+                    for content in &source {
+                        let shown = if width(content) > code_w {
+                            format!("{}…", truncate(content, code_w.saturating_sub(1)))
+                        } else {
+                            content.clone()
+                        };
+                        let mut spans = vec![Span::styled("│ ", st.fence)];
+                        let mut hl = highlight_code(&shown, lang, st, &mut in_block);
+                        // Keep the right border aligned: pad the visible width.
+                        let w: usize = hl.iter().map(|s| width(s.content.as_ref())).sum();
+                        if w < code_w {
+                            hl.push(Span::styled(" ".repeat(code_w - w), st.code));
+                        }
+                        spans.append(&mut hl);
+                        spans.push(Span::styled(" │", st.fence));
+                        out.push(Line::from(spans));
+                    }
+                    let end = out.len(); // the bottom border line
+                    out.push(box_rule("╰", "╯", code_w, "", st));
+                    blocks.push((start, end, source.join("\n")));
                 }
-                let end = out.len(); // the bottom border line
-                out.push(box_rule("╰", "╯", code_w, "", st));
-                blocks.push((start, end, source.join("\n")));
             } else {
                 flush(&mut paragraph, &mut out);
                 in_fence = true;
@@ -634,18 +685,33 @@ pub fn markdown_with_blocks(
 
     if in_fence {
         // Mid-stream block: render unboxed so live code stays visible; the
-        // box appears once the closing fence lands.
-        let label = if fence_lang.is_empty() {
-            String::new()
+        // frame appears once the closing fence lands.
+        if st.rail {
+            let label = if fence_lang.is_empty() {
+                "─".to_string()
+            } else {
+                format!("─ {} ", fence_lang)
+            };
+            out.push(Line::from(Span::styled(label, st.fence)));
+            for line in &fence_lines {
+                out.push(Line::from(vec![
+                    Span::raw(" ".to_string()),
+                    Span::styled(line.clone(), st.code),
+                ]));
+            }
         } else {
-            format!(" {}", fence_lang)
-        };
-        out.push(Line::from(Span::styled(format!("▏{label}"), st.fence)));
-        for line in &fence_lines {
-            out.push(Line::from(vec![
-                Span::styled("▏ ", st.fence),
-                Span::styled(line.clone(), st.code),
-            ]));
+            let label = if fence_lang.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", fence_lang)
+            };
+            out.push(Line::from(Span::styled(format!("▏{label}"), st.fence)));
+            for line in &fence_lines {
+                out.push(Line::from(vec![
+                    Span::styled("▏ ", st.fence),
+                    Span::styled(line.clone(), st.code),
+                ]));
+            }
         }
     }
     if in_table {

@@ -11,6 +11,16 @@ use ratatui::Frame;
 /// Width of the left gutter reserved for role badges.
 pub const GUTTER: usize = 4;
 
+/// Rail that groups an assistant turn in cozy density. Exactly `GUTTER` cells
+/// wide so every body row shares one text column.
+const RAIL: &str = "  │ ";
+/// Branch marker for one tool call on the rail.
+const BRANCH: &str = "  ├ ";
+/// Fence header: the rule glyph itself completes the branch.
+const FENCE_HEAD: &str = "  ├";
+/// Fence footer closes the frame.
+const FENCE_FOOT: &str = "  ╰";
+
 /// Transcripts up to this many entries get measured exactly before drawing.
 pub const WARM_LIMIT: usize = 400;
 
@@ -42,7 +52,7 @@ fn tool_icon(name: &str) -> &'static str {
 }
 
 /// The active tool mode as `(colour, title-cased label)`. opencode keys the
-/// user-message bar and the assistant footer to the agent colour; nanomite's
+/// user-turn node and the assistant footer to the agent colour; nanomite's
 /// equivalent of an agent is the tool mode.
 pub(crate) fn mode_parts(
     policy: crate::agent::policy::ToolPolicy,
@@ -204,8 +214,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
         }
 
         let status_rows = entries[idx].status_rows() as usize;
-        let status =
-            status_line(&entries[idx], &theme, view.spinner, turn_eta).filter(|_| show_thinking);
+        let status = status_line(&entries[idx], &theme, view.spinner, turn_eta, !compact)
+            .filter(|_| show_thinking);
         let entry = &mut entries[idx];
         let cached = entry.ensure_rendered(&theme, width, tool_display, compact, mode);
 
@@ -541,18 +551,25 @@ fn status_line(
     theme: &Theme,
     spinner: usize,
     eta: Option<std::time::Duration>,
+    rail: bool,
 ) -> Option<Line<'static>> {
     if entry.phase != Phase::Streaming {
         return None;
     }
     let elapsed = entry.elapsed.unwrap_or_else(|| entry.started.elapsed());
+    let running_tools = entry.tools.iter().filter(|t| t.running).count();
+    let label = if running_tools > 0 {
+        format!("running {}", text::plural(running_tools, "tool"))
+    } else {
+        "thinking".to_string()
+    };
     let mut spans = vec![
-        Span::raw("   ".to_string()),
+        Span::raw(if rail { RAIL } else { "   " }.to_string()),
         Span::styled(
             format!("{} ", glyph::SPINNER[spinner % glyph::SPINNER.len()]),
             Style::default().fg(theme.accent()),
         ),
-        Span::styled("thinking", Style::default().fg(theme.muted())),
+        Span::styled(label, Style::default().fg(theme.muted())),
         Span::styled(
             format!("  {}", text::format_duration(elapsed)),
             Style::default().fg(theme.faint()),
@@ -569,16 +586,6 @@ fn status_line(
             spans.push(Span::styled(
                 format!(" · {}", text::plural(done_tools, "tool")),
                 Style::default().fg(theme.faint()),
-            ));
-        }
-    }
-    // Streaming token counter
-    if let Some(usage) = &entry.usage {
-        let tokens = usage.completion_tokens.saturating_add(usage.prompt_tokens);
-        if tokens > 0 {
-            spans.push(Span::styled(
-                format!("  \u{258b} {} tok", text::format_tokens(tokens as u64)),
-                Style::default().fg(theme.accent_soft()),
             ));
         }
     }
@@ -628,8 +635,8 @@ impl Entry {
                     }
                     return rows.max(1) as u16;
                 }
-                let wrap_w = inner.saturating_sub(2).max(8);
-                let mut rows = 2usize; // raised-block padding above and below
+                let wrap_w = inner.saturating_sub(4).max(8);
+                let mut rows = 0usize;
                 for line in self.text.lines() {
                     let w = text::width(line) as u16;
                     rows += w.div_ceil(wrap_w as u16).max(1) as usize;
@@ -637,7 +644,8 @@ impl Entry {
                 (self.tools.len() as u16) + rows.max(1) as u16
             }
             _ => {
-                let text_w = inner.saturating_sub(3).max(8);
+                let indent = if compact { 3 } else { 4 };
+                let text_w = inner.saturating_sub(indent).max(8);
                 let mut h = self.tools.len() as u16 + if compact { 0 } else { 1 }; // message footer
                 if !self.tools.is_empty() {
                     h += 1; // gap between tool rows and the body
@@ -715,6 +723,7 @@ impl Entry {
         tool: &crate::app::ToolRow,
         theme: &Theme,
         inner: usize,
+        rail: bool,
         with_previews: bool,
         lines: &mut Vec<Line<'static>>,
     ) {
@@ -730,24 +739,46 @@ impl Entry {
         } else {
             format!("{} {}", tool.name, tool.detail)
         };
-        let budget = inner.saturating_sub(5).max(8);
+        let prefix = if rail { BRANCH } else { "   " };
+        // Duration is right-aligned into a calm metric column; a failed row
+        // carries a short reason instead, so it explains itself in place.
+        let duration = tool
+            .elapsed
+            .filter(|_| !tool.running)
+            .map(text::format_duration);
+        let reason = tool
+            .error
+            .as_deref()
+            .map(|e| format!("failed: {}", text::truncate(e, 48)));
+        let tail = duration.as_ref().map(|d| text::width(d) + 2).unwrap_or(0)
+            + reason.as_ref().map(|r| text::width(r) + 3).unwrap_or(0);
+        let budget = inner.saturating_sub(text::width(prefix) + 2 + tail).max(8);
         let mut spans = vec![
-            Span::raw("   ".to_string()),
+            Span::raw(prefix.to_string()),
             Span::styled(format!("{icon} "), style),
             Span::styled(text::truncate(&label, budget), style),
         ];
-        if !tool.running {
-            if let Some(elapsed) = tool.elapsed {
-                spans.push(Span::styled(
-                    format!(" · {}", text::format_duration(elapsed)),
-                    Style::default().fg(theme.faint()),
-                ));
+        if let Some(reason) = reason {
+            spans.push(Span::styled(
+                format!("  · {reason}"),
+                Style::default().fg(theme.danger()),
+            ));
+        }
+        if let Some(duration) = duration {
+            let used: usize = spans.iter().map(|s| text::width(s.content.as_ref())).sum();
+            let pad = inner.saturating_sub(used + text::width(&duration));
+            if pad > 0 {
+                spans.push(Span::raw(" ".repeat(pad)));
             }
+            spans.push(Span::styled(duration, Style::default().fg(theme.faint())));
         }
         lines.push(Line::from(spans));
 
         // Completed block bodies: output or patch, shown once the tool has
-        // finished (opencode keeps running rows bare).
+        // finished (running rows stay bare). Previews hang under the rail so
+        // the branch never breaks.
+        let preview_prefix = if rail { "  │   " } else { "     " };
+        let preview_w = inner.saturating_sub(text::width(preview_prefix));
         if with_previews && !tool.running {
             if let Some(preview) = &tool.preview {
                 if tool.name == "edit_file" {
@@ -758,9 +789,8 @@ impl Entry {
                     // Side-by-side: old left / new right with line numbers;
                     // degrades to unified inside `styled_split_lines` when
                     // the column is too narrow for two readable panels.
-                    let width = inner.saturating_sub(5);
-                    for line in diff.styled_split_lines(width) {
-                        let mut spans: Vec<Span> = vec![Span::raw("     ".to_string())];
+                    for line in diff.styled_split_lines(preview_w) {
+                        let mut spans: Vec<Span> = vec![Span::raw(preview_prefix.to_string())];
                         spans.extend(
                             line.spans
                                 .into_iter()
@@ -775,11 +805,14 @@ impl Entry {
                         } else {
                             Style::default().fg(theme.muted())
                         };
-                        let shown = text::truncate(raw, inner.saturating_sub(5));
+                        let shown = text::truncate(raw, preview_w);
                         if shown.is_empty() {
-                            lines.push(Line::from(Span::raw("     ")));
+                            lines.push(Line::from(Span::raw(preview_prefix.to_string())));
                         } else {
-                            lines.push(Line::from(Span::styled(format!("     {shown}"), style)));
+                            lines.push(Line::from(Span::styled(
+                                format!("{preview_prefix}{shown}"),
+                                style,
+                            )));
                         }
                     }
                 }
@@ -802,7 +835,7 @@ impl Entry {
         let mut lines = Vec::new();
         let mut code_blocks = Vec::new();
         let (mode_color, mode_label) = mode;
-        let _ = compact;
+        let rail = !compact && self.role == EntryRole::Assistant;
 
         match self.role {
             EntryRole::System => {
@@ -843,112 +876,63 @@ impl Entry {
                     }
                     return finish_build(lines, code_blocks);
                 }
-                // opencode-style prompt block: a mode-coloured bar down the
-                // left edge of a raised background, plain text inside. No
-                // badge, no timestamp.
-                let bg = theme.element_bg();
-                let bar = Style::default().fg(mode_color);
-                let pad = Style::default().bg(bg);
-                let text_style = Style::default().fg(theme.strong()).bg(bg);
-                let wrap_w = inner.saturating_sub(2).max(8);
-
-                let bar_row = |lines: &mut Vec<Line<'static>>| {
-                    let mut spans = vec![Span::styled(glyph::GUTTER.to_string(), bar)];
-                    if width > 1 {
-                        spans.push(Span::styled(" ".repeat(width - 1), pad));
-                    }
-                    lines.push(Line::from(spans));
-                };
-                bar_row(&mut lines);
-
+                // Rail-node prompt: a mode-coloured `◆` marks the user turn on
+                // the same left rail the assistant uses. No fill, no badge;
+                // wrapped lines hang under the text column.
+                let node = Style::default().fg(mode_color);
+                let text_style = Style::default().fg(theme.strong());
+                let stamp = text::clock(self.at);
+                let wrap_w = inner.saturating_sub(4).max(8);
+                let mut first = true;
                 for raw in self.text.split('\n') {
                     if raw.trim().is_empty() {
-                        // Blank rows stay inside the raised block.
-                        bar_row(&mut lines);
+                        lines.push(Line::default());
                         continue;
                     }
                     for seg in wrap_spans(vec![Span::raw(raw.to_string())], wrap_w) {
                         let content: String =
                             seg.spans.iter().map(|s| s.content.as_ref()).collect();
-                        let w = text::width(&content);
-                        let mut spans = vec![
-                            Span::styled(glyph::GUTTER.to_string(), bar),
-                            Span::styled(" ".to_string(), pad),
-                            Span::styled(content, text_style),
-                        ];
-                        if width > 2 + w {
-                            spans.push(Span::styled(" ".repeat(width - 2 - w), pad));
+                        let mut spans = if first {
+                            vec![
+                                Span::raw("  ".to_string()),
+                                Span::styled(format!("{} ", glyph::NODE), node),
+                                Span::styled(content, text_style),
+                            ]
+                        } else {
+                            vec![
+                                Span::raw("    ".to_string()),
+                                Span::styled(content, text_style),
+                            ]
+                        };
+                        if first {
+                            // Right-align the wall-clock stamp when it fits.
+                            let used: usize =
+                                spans.iter().map(|s| text::width(s.content.as_ref())).sum();
+                            let stamp_w = text::width(&stamp);
+                            if used + 2 + stamp_w <= inner {
+                                spans.push(Span::raw(" ".repeat(inner - used - stamp_w)));
+                                spans.push(Span::styled(
+                                    stamp.clone(),
+                                    Style::default().fg(theme.faint()),
+                                ));
+                            }
+                            first = false;
                         }
                         lines.push(Line::from(spans));
                     }
                 }
-
-                bar_row(&mut lines);
+                if first {
+                    lines.push(Line::default());
+                }
             }
             EntryRole::Assistant => {
-                let st = text::MarkdownStyles::new(theme);
-
-                // Reasoning models stream their thoughts in a separate
-                // channel. A dim live tail (last few lines) keeps a long
-                // reasoning phase visibly alive; once done it collapses to
-                // one marker line so it never floods the transcript.
-                if !self.reasoning.is_empty() {
-                    let reasoning_display = text::professionalize(&self.reasoning);
-                    match self.phase {
-                        Phase::Streaming if compact => {
-                            lines.push(Line::from(Span::styled(
-                                format!(
-                                    "   {} thinking · {}",
-                                    glyph::DOT,
-                                    text::plural(reasoning_display.chars().count(), "char")
-                                ),
-                                st.quote,
-                            )));
-                            lines.push(Line::default());
-                        }
-                        Phase::Streaming => {
-                            const TAIL: usize = 6;
-                            let all: Vec<&str> = reasoning_display.lines().collect();
-                            let skip = all.len().saturating_sub(TAIL);
-                            if skip > 0 {
-                                lines.push(Line::from(Span::styled(
-                                    format!(
-                                        "   {} {} earlier",
-                                        glyph::DOT,
-                                        text::plural(skip, "line")
-                                    ),
-                                    st.quote,
-                                )));
-                            }
-                            for raw in all.into_iter().skip(skip) {
-                                for wrapped in text::wrap_spans(
-                                    vec![Span::raw(raw.to_string())],
-                                    inner.saturating_sub(3).max(8),
-                                ) {
-                                    let mut spans = vec![Span::raw("   ".to_string())];
-                                    spans.extend(wrapped.spans);
-                                    for span in spans.iter_mut() {
-                                        span.style = span.style.patch(st.quote);
-                                    }
-                                    lines.push(Line::from(spans));
-                                }
-                            }
-                        }
-                        Phase::Done | Phase::Interrupted | Phase::Failed => {
-                            lines.push(Line::from(Span::styled(
-                                format!(
-                                    "   {} Thought · {}",
-                                    glyph::DOT,
-                                    text::plural(reasoning_display.chars().count(), "char")
-                                ),
-                                Style::default().fg(theme.faint()),
-                            )));
-                        }
-                    }
-                    if self.phase == Phase::Streaming {
-                        lines.push(Line::default());
-                    }
-                }
+                // Cozy density draws the turn on a left rail; compact stays a
+                // flat three-column log.
+                let lead = if rail { RAIL } else { "   " };
+                let mut st = text::MarkdownStyles::new(theme);
+                st.rail = rail;
+                // The model's reasoning lives in the left thinking panel; the
+                // transcript carries only the answer and the tool activity.
 
                 // opencode-style rows: everything indented three columns.
                 // Tool activity renders per the display level: hidden (just
@@ -956,7 +940,7 @@ impl Entry {
                 if display != ToolDisplay::Hidden {
                     let with_previews = display == ToolDisplay::Full;
                     for tool in &self.tools {
-                        self.tool_row(tool, theme, inner, with_previews, &mut lines);
+                        self.tool_row(tool, theme, inner, rail, with_previews, &mut lines);
                     }
                     if !self.tools.is_empty() {
                         lines.push(Line::default());
@@ -968,14 +952,25 @@ impl Entry {
                 } else {
                     let base = lines.len();
                     let display_text = text::professionalize(&self.text);
-                    let (md_lines, blocks) = text::markdown_with_blocks(
-                        &display_text,
-                        inner.saturating_sub(3).max(8),
-                        &st,
-                    );
-                    for mut line in md_lines {
+                    let md_w = inner.saturating_sub(text::width(lead)).max(8);
+                    let (md_lines, blocks) = text::markdown_with_blocks(&display_text, md_w, &st);
+                    let opens: Vec<usize> = blocks.iter().map(|(s, _, _)| *s).collect();
+                    let closes: Vec<usize> = blocks.iter().map(|(_, e, _)| *e).collect();
+                    for (idx, mut line) in md_lines.into_iter().enumerate() {
+                        // Fence frames borrow the rail: the header hangs off a
+                        // branch and the footer closes it, so a code block
+                        // reads as part of the turn rather than a second box.
+                        let prefix: &str = if !rail {
+                            "   "
+                        } else if opens.contains(&idx) {
+                            FENCE_HEAD
+                        } else if closes.contains(&idx) {
+                            FENCE_FOOT
+                        } else {
+                            RAIL
+                        };
                         let mut spans = Vec::with_capacity(line.spans.len() + 1);
-                        spans.push(Span::raw("   ".to_string()));
+                        spans.push(Span::raw(prefix.to_string()));
                         spans.append(&mut line.spans);
                         lines.push(Line::from(spans));
                     }
@@ -1014,42 +1009,58 @@ impl Entry {
                     }
                 }
 
-                // opencode-style message footer: Mode · model · duration ·
-                // tok/s, with `· interrupted` appended when cut short.
+                // Message footer: Mode · time · model · duration · tok/s ·
+                // ↑prompt ↓completion, with the terminal state appended.
                 // Compact density drops it: the header carries the model and
                 // the /hud carries timing.
-                if !compact && matches!(self.phase, Phase::Done | Phase::Interrupted) {
+                if !compact
+                    && matches!(self.phase, Phase::Done | Phase::Interrupted | Phase::Failed)
+                {
+                    let faint = Style::default().fg(theme.faint());
                     let mut spans = vec![
-                        Span::raw("   ".to_string()),
+                        Span::raw("  ".to_string()),
                         Span::styled(mode_label.to_string(), Style::default().fg(mode_color)),
+                        Span::styled(format!(" · {}", text::clock(self.at)), faint),
                     ];
                     if let Some(model) = &self.model {
                         spans.push(Span::styled(
                             format!(" · {}", text::truncate_head(model, 32)),
-                            Style::default().fg(theme.faint()),
+                            faint,
                         ));
                     }
                     if let Some(elapsed) = self.elapsed {
                         spans.push(Span::styled(
                             format!(" · {}", text::format_duration(elapsed)),
-                            Style::default().fg(theme.faint()),
+                            faint,
                         ));
                         if let Some(usage) = &self.usage {
                             let secs = elapsed.as_secs_f64();
                             if secs >= 1.0 && usage.completion_tokens > 0 {
                                 let rate = f64::from(usage.completion_tokens) / secs;
-                                spans.push(Span::styled(
-                                    format!(" · {rate:.1} tok/s"),
-                                    Style::default().fg(theme.faint()),
-                                ));
+                                spans.push(Span::styled(format!(" · {rate:.1} tok/s"), faint));
                             }
                         }
                     }
-                    if self.phase == Phase::Interrupted {
+                    if let Some(usage) = &self.usage {
                         spans.push(Span::styled(
+                            format!(
+                                " · ↑{} ↓{}",
+                                text::format_tokens(u64::from(usage.prompt_tokens)),
+                                text::format_tokens(u64::from(usage.completion_tokens))
+                            ),
+                            faint,
+                        ));
+                    }
+                    match self.phase {
+                        Phase::Interrupted => spans.push(Span::styled(
                             " · interrupted",
                             Style::default().fg(theme.muted()),
-                        ));
+                        )),
+                        Phase::Failed => spans.push(Span::styled(
+                            " · failed",
+                            Style::default().fg(theme.danger()),
+                        )),
+                        _ => {}
                     }
                     lines.push(Line::from(spans));
                 }
@@ -1058,17 +1069,23 @@ impl Entry {
 
         if let Some(err) = &self.error {
             lines.push(Line::default());
+            let (err_prefix, err_cont) = if rail {
+                ("  │ Error: ", "  │        ")
+            } else {
+                ("   Error: ", "          ")
+            };
+            let hint_prefix = if rail { "  │ " } else { "   " };
             let wrapped = text::wrap_prefixed(
                 err,
-                "   Error: ",
+                err_prefix,
                 Style::default().fg(theme.danger()),
                 inner,
-                "          ",
+                err_cont,
             );
             if self.error_expanded {
                 lines.extend(wrapped);
                 lines.push(Line::from(Span::styled(
-                    "   … click to collapse",
+                    format!("{hint_prefix}… click to collapse"),
                     Style::default().fg(theme.faint()),
                 )));
             } else {
@@ -1082,7 +1099,7 @@ impl Entry {
                 if remaining > 0 {
                     lines.push(Line::from(Span::styled(
                         format!(
-                            "   … {} · click to expand",
+                            "{hint_prefix}… {} · click to expand",
                             text::plural(remaining, "more line")
                         ),
                         Style::default().fg(theme.faint()),

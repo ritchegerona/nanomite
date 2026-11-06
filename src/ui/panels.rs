@@ -555,6 +555,12 @@ pub fn help(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
+    // Clamp the scroll so `End` can never push the sheet past its last row:
+    // the app clamps against the full content height, but the viewport is
+    // only the overlay's inner height.
+    let inner_h = inner.height.max(1) as usize;
+    let max_offset = lines.len().saturating_sub(inner_h);
+    let offset = offset.min(max_offset);
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(ratatui::widgets::Wrap { trim: false })
@@ -1868,21 +1874,21 @@ fn improve_block(
 
 pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
     let (w_pct, max_h) = match kind {
-        OverlayKind::Picker => (72, 18),
-        OverlayKind::Providers => (72, 22),
-        OverlayKind::Connect => (70, 10),
-        OverlayKind::Help => (76, 40),
-        OverlayKind::Tools => (76, 48),
-        OverlayKind::Board => (84, 40),
-        OverlayKind::Memory => (76, 40),
-        OverlayKind::Improve => (80, 34),
-        OverlayKind::SudoPassword => (60, 12),
-        OverlayKind::Hacker => (84, 40),
+        OverlayKind::Picker => (100, 18),
+        OverlayKind::Providers => (100, 22),
+        OverlayKind::Connect => (100, 10),
+        OverlayKind::Help => (100, 40),
+        OverlayKind::Tools => (100, 48),
+        OverlayKind::Board => (100, 40),
+        OverlayKind::Memory => (100, 40),
+        OverlayKind::Improve => (100, 34),
+        OverlayKind::SudoPassword => (100, 12),
+        OverlayKind::Hacker => (100, 40),
     };
     let width = (area.width * w_pct / 100).clamp(40.min(area.width), 100.min(area.width));
     let height = (content_rows + 2).clamp(7.min(area.height), max_h.min(area.height));
     Rect {
-        x: area.x + (area.width.saturating_sub(width)) / 2,
+        x: area.x,
         y: area.y + (area.height.saturating_sub(height)) / 2,
         width,
         height,
@@ -2225,4 +2231,106 @@ pub fn sudo_password(frame: &mut Frame, area: Rect, app: &App) {
     if !state.submitting {
         frame.set_cursor_position((password_x, password_y));
     }
+}
+
+/// Left thinking panel: a rolling tail of the model's reasoning. New
+/// sentences append themselves; as the window fills, the oldest lines drop
+/// off and fade — the panel never scrolls, it always shows the latest
+/// thoughts. Final answers, tool activity and code live in the main window.
+pub fn draw_thinking_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    if area.width < 16 || area.height < 3 {
+        return;
+    }
+    let busy = app.is_busy();
+    let title = if busy {
+        let spin = glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()];
+        format!(" {spin} thinking ")
+    } else {
+        " thinking ".to_string()
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(theme.faint_style())
+        .title(Line::from(Span::styled(title, theme.faint_style())));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    let wrap_w = inner.width.saturating_sub(2).max(4) as usize;
+    let visible = inner.height as usize;
+
+    // The most recent reasoning in the transcript: the live turn while it
+    // streams, the previous turn's thoughts afterwards.
+    let Some(entry) = app.entries.iter().rev().find(|e| !e.reasoning.is_empty()) else {
+        let hint = if busy {
+            "thinking..."
+        } else {
+            "no thoughts yet"
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(format!("\u{b7} {hint}"), theme.faint_style())),
+            inner,
+        );
+        return;
+    };
+
+    let reasoning = text::professionalize(&entry.reasoning);
+    // Wrap only as much as the window can show: walk the reasoning from its
+    // last line backwards until the tail fills the panel.
+    let mut tail: Vec<Line<'static>> = Vec::new();
+    for raw in reasoning.lines().rev() {
+        let segs = text::wrap_spans(vec![Span::raw(raw.to_string())], wrap_w);
+        if segs.len() + tail.len() >= visible {
+            // This line's own tail completes the window.
+            let need = visible - tail.len();
+            tail.splice(0..0, segs[segs.len() - need..].to_vec());
+            break;
+        }
+        let mut segs = segs;
+        segs.reverse();
+        for seg in segs {
+            tail.insert(0, seg);
+        }
+    }
+
+    // Fresh thoughts read as prose; older lines fade out.
+    let fresh = Style::default()
+        .fg(theme.quote())
+        .add_modifier(Modifier::ITALIC);
+    let faded = theme.faint_style().add_modifier(Modifier::ITALIC);
+    let total = tail.len();
+    let mut out: Vec<Line<'static>> = Vec::with_capacity(total);
+    for (i, line) in tail.into_iter().enumerate() {
+        let style = if i + 3 >= total { fresh } else { faded };
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len() + 1);
+        spans.push(Span::raw(" ".to_string()));
+        for mut span in line.spans {
+            span.style = span.style.patch(style);
+            spans.push(span);
+        }
+        out.push(Line::from(spans));
+    }
+    // Anchor the tail to the bottom edge of the window: the newest thought
+    // always sits flush against the bottom border and the stream grows
+    // upward, so no space is wasted below the text.
+    while out.len() < visible {
+        out.insert(0, Line::default());
+    }
+
+    // Live caret on the newest thought while the turn streams.
+    if app
+        .entries
+        .last()
+        .is_some_and(|e| e.phase == crate::app::Phase::Streaming)
+    {
+        if let Some(last_line) = out.last_mut() {
+            last_line.spans.push(Span::styled(
+                glyph::CURSOR.to_string(),
+                Style::default()
+                    .fg(theme.accent())
+                    .add_modifier(Modifier::SLOW_BLINK),
+            ));
+        }
+    }
+    frame.render_widget(Paragraph::new(out), inner);
 }

@@ -1478,20 +1478,32 @@ fn describe_args(call: &ToolCall) -> String {
     let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.arguments) else {
         return String::new();
     };
-    args.get("path")
-        .and_then(|p| p.as_str())
-        .map(|p| shorten(p, 48))
-        .or_else(|| {
-            args.get("query")
-                .and_then(|q| q.as_str())
-                .map(|q| format!("\"{}\"", shorten(q, 32)))
-        })
-        .or_else(|| {
-            args.get("id")
-                .and_then(|i| i.as_str())
-                .map(|i| shorten(i, 20))
-        })
-        .unwrap_or_default()
+    let text = |key: &str| args.get(key).and_then(|v| v.as_str());
+    let first_line = |s: &str| s.lines().next().unwrap_or(s).to_string();
+
+    match call.name.as_str() {
+        "run_command" => text("command")
+            .map(|c| shorten(&first_line(c), 64))
+            .unwrap_or_default(),
+        "ssh_run" => match (text("host"), text("command")) {
+            (Some(host), Some(cmd)) => shorten(&format!("{host}: {}", first_line(cmd)), 64),
+            (Some(host), None) => shorten(host, 48),
+            _ => String::new(),
+        },
+        "browse" | "browse_screenshot" | "web_fetch" => {
+            text("url").map(|u| shorten(u, 64)).unwrap_or_default()
+        }
+        "web_search" | "search" => text("query")
+            .map(|q| format!("\"{}\"", shorten(q, 32)))
+            .or_else(|| text("path").map(|p| shorten(p, 48)))
+            .unwrap_or_default(),
+        "run_tests" => text("runner").map(|r| shorten(r, 24)).unwrap_or_default(),
+        _ => text("path")
+            .map(|p| shorten(p, 48))
+            .or_else(|| text("query").map(|q| format!("\"{}\"", shorten(q, 32))))
+            .or_else(|| text("id").map(|i| shorten(i, 20)))
+            .unwrap_or_default(),
+    }
 }
 
 /// Shared with the tool layer: shortens a string to `max` characters with an

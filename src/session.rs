@@ -153,6 +153,7 @@ impl StoredSession {
                         preview: None,
                         started: Instant::now(),
                         elapsed: None,
+                        error: None,
                     });
                 }
                 entry
@@ -515,6 +516,7 @@ mod tests {
                 preview: None,
                 started: Instant::now(),
                 elapsed: None,
+                error: None,
             });
             a
         }];

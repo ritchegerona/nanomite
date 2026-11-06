@@ -86,6 +86,22 @@ pub struct ToolRow {
     pub started: Instant,
     /// Set once the tool finishes; pills show this, not the turn total.
     pub elapsed: Option<Duration>,
+    /// One-line failure reason captured from `ToolEnd` when `ok` is false, so
+    /// a failed call explains itself on the row without expanding details.
+    pub error: Option<String>,
+}
+
+/// First line of a tool failure, flattened and bounded: a long stack trace
+/// must never paint across the transcript row.
+fn short_tool_error(detail: &str) -> String {
+    let flat: String = detail
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    crate::agent::runtime::shorten(flat.trim(), 96)
 }
 
 /// Cached, width-dependent rendering of one transcript entry.
@@ -97,7 +113,7 @@ pub struct Rendered {
     pub tool_display: ToolDisplay,
     /// Density the cache was built for.
     pub compact: bool,
-    /// Tool-mode colour the cache was built for: the user-message bar and the
+    /// Tool-mode colour the cache was built for: the user-turn node and the
     /// assistant footer follow the active mode, like opencode's per-agent
     /// colouring.
     pub mode_color: ratatui::style::Color,
@@ -122,9 +138,9 @@ pub struct Entry {
     pub tools: Vec<ToolRow>,
     pub error: Option<String>,
     pub started: Instant,
-    /// Wall-clock creation time; the YOU/AI badges render this as HH:MM.
-    /// `started` is a monotonic `Instant` and must never be formatted as a
-    /// clock time.
+    /// Wall-clock creation time; the user-turn node and the assistant footer
+    /// render this as HH:MM. `started` is a monotonic `Instant` and must never
+    /// be formatted as a clock time.
     pub at: SystemTime,
     pub elapsed: Option<Duration>,
     pub usage: Option<Usage>,
@@ -717,11 +733,12 @@ pub struct TurnStat {
 /// How tool activity renders in the transcript (`/details`, `ctrl+o`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ToolDisplay {
-    /// No tool rows at all - just the response text. The default: the
-    /// status strip still shows live step/tool progress while working.
-    #[default]
+    /// No tool rows at all - just the response text. One toggle away for a
+    /// quiet read; the status strip still shows live progress while working.
     Hidden,
-    /// One muted row per tool call, no preview bodies.
+    /// One muted row per tool call, no preview bodies. The default: a coding
+    /// turn should show what it touched without needing `ctrl+o`.
+    #[default]
     Rows,
     /// Tool rows with their preview bodies (code, command output, diffs).
     Full,
@@ -2073,7 +2090,7 @@ impl App {
             selection: None,
             scrollbar_drag: false,
             hud: false,
-            tool_display: ToolDisplay::Hidden,
+            tool_display: ToolDisplay::Rows,
             compact: cfg.compact,
             turn_stats: VecDeque::new(),
             snapshots: Vec::new(),
@@ -2246,6 +2263,7 @@ impl App {
     }
 
     /// Quiet footer hint when memory is not attached, so the reason is visible
+    /// once without a toast the user would have to catch., so the reason is visible
     /// once without a toast the user would have to catch.
     pub fn memory_hint(&self) -> Option<&str> {
         if self.memory.is_some() {
@@ -2533,6 +2551,7 @@ impl App {
                         preview,
                         started: Instant::now(),
                         elapsed: None,
+                        error: None,
                     });
                     entry.touch();
                 }
@@ -2569,6 +2588,11 @@ impl App {
                         row.running = false;
                         row.ok = ok;
                         row.elapsed = Some(row.started.elapsed());
+                        row.error = if ok {
+                            None
+                        } else {
+                            Some(short_tool_error(&detail))
+                        };
                         // For edit_file, parse replacements count from detail "X replacements made"
                         if name == "edit_file" {
                             if let Some(count) = detail
@@ -2583,6 +2607,11 @@ impl App {
                         }
                         // edit_path from ToolStart is already stored in the row
                     } else {
+                        let err = if ok {
+                            None
+                        } else {
+                            Some(short_tool_error(&detail))
+                        };
                         entry.tools.push(ToolRow {
                             name,
                             detail,
@@ -2593,6 +2622,7 @@ impl App {
                             preview: None,
                             started: Instant::now(),
                             elapsed: None,
+                            error: err,
                         });
                     }
                     entry.touch();
@@ -7765,6 +7795,9 @@ fn theme_descriptor(id: ThemeId) -> &'static str {
         ThemeId::Umbrella => "blood red · clinical white",
         ThemeId::Dracula => "deep purple · vibrant pink",
         ThemeId::Cyberpunk => "hot pink + cyan · neon noir",
+        ThemeId::Hacker => "phosphor green · terminal noir",
+        ThemeId::MrRobot => "fsociety red · cable static",
+        ThemeId::Anonymous => "grey hat · silver on black",
     }
 }
 

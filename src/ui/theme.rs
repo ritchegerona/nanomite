@@ -245,6 +245,90 @@ const CYBERPUNK: Palette = Palette {
     quote: (255, 255, 0),
 };
 
+/// Hacker — phosphor green on black: classic terminal-noir, matrix green.
+const HACKER: Palette = Palette {
+    neutral: (0, 0, 0),
+    panel_bg: (6, 14, 6),
+    element_bg: (10, 20, 10),
+    text: (168, 255, 168),
+    strong: (214, 255, 214),
+    muted: (110, 190, 110),
+    faint: (58, 120, 58),
+    border: (24, 72, 24),
+    border_focus: (0, 255, 102),
+    border_subtle: (16, 48, 16),
+    accent: (0, 255, 102),
+    accent_soft: (0, 190, 80),
+    success: (0, 230, 110),
+    danger: (255, 72, 72),
+    warn: (255, 204, 0),
+    mode_plan: (200, 180, 60),
+    mode_coder: (90, 200, 255),
+    mode_build: (0, 230, 110),
+    mode_hacker: (255, 72, 72),
+    diff_add: (0, 220, 110),
+    diff_delete: (255, 80, 80),
+    tool: (140, 230, 140),
+    code: (150, 255, 150),
+    quote: (90, 160, 90),
+};
+
+/// Mr. Robot — fsociety red on warm charcoal: cable-static darks, sharp red.
+const MR_ROBOT: Palette = Palette {
+    neutral: (0, 0, 0),
+    panel_bg: (16, 13, 13),
+    element_bg: (24, 19, 19),
+    text: (214, 208, 204),
+    strong: (244, 240, 236),
+    muted: (150, 138, 134),
+    faint: (94, 84, 82),
+    border: (56, 46, 44),
+    border_focus: (237, 28, 36),
+    border_subtle: (38, 30, 28),
+    accent: (237, 28, 36),
+    accent_soft: (178, 26, 32),
+    success: (104, 200, 120),
+    danger: (244, 64, 64),
+    warn: (228, 168, 72),
+    mode_plan: (206, 160, 240),
+    mode_coder: (96, 168, 232),
+    mode_build: (104, 200, 120),
+    mode_hacker: (244, 64, 64),
+    diff_add: (104, 200, 120),
+    diff_delete: (244, 64, 64),
+    tool: (196, 152, 148),
+    code: (170, 196, 150),
+    quote: (146, 134, 130),
+};
+
+/// Anonymous — grey-hat monochrome: silver on black, cold and faceless.
+const ANONYMOUS: Palette = Palette {
+    neutral: (0, 0, 0),
+    panel_bg: (10, 10, 11),
+    element_bg: (17, 17, 18),
+    text: (216, 216, 220),
+    strong: (250, 250, 252),
+    muted: (148, 148, 156),
+    faint: (92, 92, 98),
+    border: (52, 52, 58),
+    border_focus: (196, 196, 208),
+    border_subtle: (34, 34, 38),
+    accent: (196, 196, 208),
+    accent_soft: (140, 140, 152),
+    success: (120, 220, 130),
+    danger: (236, 80, 80),
+    warn: (222, 190, 110),
+    mode_plan: (196, 160, 255),
+    mode_coder: (140, 170, 230),
+    mode_build: (120, 220, 130),
+    mode_hacker: (236, 80, 80),
+    diff_add: (120, 220, 130),
+    diff_delete: (236, 80, 80),
+    tool: (170, 170, 180),
+    code: (170, 200, 170),
+    quote: (136, 136, 144),
+};
+
 /// Selectable palettes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeId {
@@ -255,16 +339,25 @@ pub enum ThemeId {
     Umbrella,
     Dracula,
     Cyberpunk,
+    /// Phosphor green on black — terminal noir.
+    Hacker,
+    /// fsociety red on warm charcoal.
+    MrRobot,
+    /// Grey-hat silver on black.
+    Anonymous,
 }
 
 impl ThemeId {
-    pub const ALL: [ThemeId; 6] = [
+    pub const ALL: [ThemeId; 9] = [
         ThemeId::Mono,
         ThemeId::Midnight,
         ThemeId::Graphite,
         ThemeId::Umbrella,
         ThemeId::Dracula,
         ThemeId::Cyberpunk,
+        ThemeId::Hacker,
+        ThemeId::MrRobot,
+        ThemeId::Anonymous,
     ];
 
     pub fn label(self) -> &'static str {
@@ -275,6 +368,9 @@ impl ThemeId {
             ThemeId::Umbrella => "umbrella",
             ThemeId::Dracula => "dracula",
             ThemeId::Cyberpunk => "cyberpunk",
+            ThemeId::Hacker => "hacker",
+            ThemeId::MrRobot => "mr-robot",
+            ThemeId::Anonymous => "anonymous",
         }
     }
 
@@ -287,14 +383,26 @@ impl ThemeId {
             ThemeId::Umbrella => &UMBRELLA,
             ThemeId::Dracula => &DRACULA,
             ThemeId::Cyberpunk => &CYBERPUNK,
+            ThemeId::Hacker => &HACKER,
+            ThemeId::MrRobot => &MR_ROBOT,
+            ThemeId::Anonymous => &ANONYMOUS,
         }
     }
 
     /// Resolves a saved label (config `theme = "umbrella"`) back to a theme.
-    /// Unknown labels fall through to `None`, letting the caller keep the default.
+    /// Unknown labels fall through to `None`, letting the caller keep the
+    /// default. Comparison strips punctuation and case, so display names like
+    /// `Mr. Robot` resolve to the same theme as the saved `mr-robot` label.
     pub fn from_label(label: &str) -> Option<ThemeId> {
-        let label = label.trim().to_ascii_lowercase();
-        Self::ALL.into_iter().find(|id| id.label() == label)
+        let norm = |s: &str| {
+            s.trim()
+                .to_ascii_lowercase()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
+        };
+        let want = norm(label);
+        Self::ALL.into_iter().find(|id| norm(id.label()) == want)
     }
 }
 
@@ -468,6 +576,8 @@ pub mod glyph {
     /// Filled hexagon, used by the welcome-card molecule mark.
     pub const HEX_FILL: &str = "⬣";
     pub const GUTTER: &str = "▌";
+    /// Node on the conversation rail marking a user turn.
+    pub const NODE: &str = "◆";
     pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     pub const CHECK: &str = "✓";
     pub const CROSS: &str = "✗";
@@ -503,6 +613,17 @@ mod tests {
         assert_eq!(ThemeId::from_label("  UMBRELLA "), Some(ThemeId::Umbrella));
         assert_eq!(ThemeId::from_label("nope"), None);
         assert_eq!(ThemeId::from_label(""), None);
+    }
+
+    #[test]
+    fn hacker_family_labels_resolve_display_names() {
+        // Display names resolve to the saved label: punctuation and case are
+        // stripped, so `Mr. Robot` and friends find their theme.
+        assert_eq!(ThemeId::from_label("Mr. Robot"), Some(ThemeId::MrRobot));
+        assert_eq!(ThemeId::from_label("mr robot"), Some(ThemeId::MrRobot));
+        assert_eq!(ThemeId::from_label("MR_ROBOT"), Some(ThemeId::MrRobot));
+        assert_eq!(ThemeId::from_label("Hacker"), Some(ThemeId::Hacker));
+        assert_eq!(ThemeId::from_label("Anonymous"), Some(ThemeId::Anonymous));
     }
 
     #[test]
@@ -570,7 +691,7 @@ mod tests {
             assert!(!id.label().is_empty());
             assert!(id.label().chars().all(|c| !c.is_uppercase()));
         }
-        assert_eq!(ThemeId::ALL.len(), 6);
+        assert_eq!(ThemeId::ALL.len(), 9);
     }
 
     #[test]

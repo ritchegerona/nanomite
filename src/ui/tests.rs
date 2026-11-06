@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::{
     App, Entry, EntryRole, HackerState, Overlay, OverlayKind, Phase, PickerMode, SudoPasswordState,
-    SuggestionStrip, ToolDisplay, ToolRow,
+    ToolDisplay, ToolRow,
 };
 use crate::commands;
 use crate::commands::Command;
@@ -64,6 +64,7 @@ fn with_tool(name: &str, detail: &str, ok: bool) -> ToolRow {
         preview: None,
         started: std::time::Instant::now(),
         elapsed: None,
+        error: None,
     }
 }
 
@@ -123,8 +124,48 @@ async fn composer_paints_all_measured_rows() {
 async fn composer_layout_width_tracks_terminal() {
     let mut app = test_app().await;
     frame_text(&mut app, 100, 24);
-    // margin(2) + border(2) + prompt gutter(2) — the width wrapping is measured at.
-    assert_eq!(app.composer_layout_width, 94);
+    // Left tile is 30% of terminal width (30 cols at 100); the prompt wraps
+    // at the tile's inner text width: borders (2) + `❯ ` gutter (2).
+    assert_eq!(app.composer_layout_width, 26);
+}
+
+#[tokio::test]
+async fn composer_tile_hugs_five_rows_and_grows() {
+    let mut app = test_app().await;
+    let _ = frame_text(&mut app, 92, 24);
+    let rects = app.view.layout.expect("layout cached").2;
+    assert_eq!(
+        rects.left_input.height, 5,
+        "empty composer rests at 5 rows:\n{rects:?}"
+    );
+
+    // A multiline prompt grows the tile (bounded by the composer's own max).
+    for text in [
+        "alpha bravo charlie delta echo foxtrot golf hotel india juliet",
+        "second line",
+        "third line",
+    ] {
+        app.composer.insert_str(text);
+        app.composer.newline();
+    }
+    let _ = frame_text(&mut app, 92, 24);
+    let rects = app.view.layout.expect("layout cached").2;
+    assert!(
+        rects.left_input.height > 5,
+        "composer must grow with input: {}",
+        rects.left_input.height
+    );
+    assert!(
+        rects.left_input.height <= 10,
+        "composer capped at 10 rows: {}",
+        rects.left_input.height
+    );
+    // The info panel keeps the rest of the left column.
+    assert_eq!(
+        rects.left_info.height + rects.left_input.height,
+        rects.main_chat.height,
+        "info + input must fill the column"
+    );
 }
 
 #[tokio::test]
@@ -156,8 +197,8 @@ async fn renders_a_turn_with_tools_and_markdown() {
     // goes red with `✗`.
     assert!(text.contains("→"), "tool read marker missing:\n{text}");
     assert!(text.contains("✗"), "tool failure marker missing:\n{text}");
-    // The user turn is a left-bar block, like opencode's coloured prompt.
-    assert!(text.contains('▌'), "user bar missing:\n{text}");
+    // The user turn uses a rail node `◆` in the new layout.
+    assert!(text.contains('◆'), "user rail node missing:\n{text}");
 }
 
 #[tokio::test]
@@ -229,7 +270,8 @@ async fn user_message_renders_as_a_raised_block() {
 
     let text = frame_text(&mut app, 92, 24);
     assert!(text.contains("list the files"), "text missing:\n{text}");
-    assert!(text.contains('▌'), "left bar missing:\n{text}");
+    // Rail node `◆` replaces the old `▌` bar.
+    assert!(text.contains('◆'), "rail node missing:\n{text}");
     // opencode drops the YOU/AI badges and timestamps entirely.
     assert!(!text.contains("YOU"), "badge should be gone:\n{text}");
 }
@@ -674,23 +716,23 @@ async fn mouse_selection_lands_on_the_clicked_character() {
         modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
     };
 
-    // Body row 1 of the user block renders `▌ hello world`; the 'w' of
-    // "world" sits at display column 8. The old mapping subtracted a
-    // hard-coded gutter, dragging every anchor 4 chars out of place.
+    // Body row 0 renders `  ◆ hello world` (rail-node prefix is 4 cells);
+    // the 'w' of "world" sits at display column 10. The old mapping
+    // subtracted a hard-coded gutter, dragging every anchor out of place.
     app.on_mouse(mouse(
         MouseEventKind::Down(MouseButton::Left),
-        rect.x + 8,
-        rect.y + 1,
+        rect.x + 10,
+        rect.y,
     ));
     app.on_mouse(mouse(
         MouseEventKind::Drag(MouseButton::Left),
-        rect.x + 13,
-        rect.y + 1,
+        rect.x + 15,
+        rect.y,
     ));
 
     let sel = app.selection.as_ref().expect("selection active");
-    assert_eq!(sel.start, (0, 1, 8), "anchor lands on the clicked char");
-    assert_eq!(sel.end, (0, 1, 13));
+    assert_eq!(sel.start, (0, 0, 10), "anchor lands on the clicked char");
+    assert_eq!(sel.end, (0, 0, 15));
     let text = app.get_selected_text(sel);
     assert_eq!(text, "world", "selection text matches the drag: {text:?}");
 
@@ -700,21 +742,21 @@ async fn mouse_selection_lands_on_the_clicked_character() {
     let mut terminal = Terminal::new(TestBackend::new(92, 24)).unwrap();
     terminal.draw(|f| render(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
-    let row = rect.y + 1;
+    let row = rect.y;
     let highlighted: Vec<usize> = (0..buffer.area.width)
         .filter(|x| buffer[(*x, row)].bg == accent)
         .map(|x| usize::from(x - rect.x))
         .collect();
     assert_eq!(
         highlighted,
-        vec![8, 9, 10, 11, 12],
+        vec![10, 11, 12, 13, 14],
         "highlight must paint exactly on the anchored cells: {highlighted:?}"
     );
 
     app.on_mouse(mouse(
         MouseEventKind::Up(MouseButton::Left),
-        rect.x + 13,
-        rect.y + 1,
+        rect.x + 15,
+        rect.y,
     ));
 }
 
@@ -734,22 +776,23 @@ async fn mouse_selection_snaps_inside_wide_glyphs() {
         modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
     };
 
-    // Body row 1 renders `▌ 日本語テスト`: 日 occupies columns 2-3, 本 4-5,
-    // 語 6-7, テ 8-9. A click inside a wide glyph snaps to that glyph.
+    // Body row 0 renders `  ◆ 日本語テスト` (4-cell prefix): 日 occupies
+    // columns 4-5, 本 6-7, 語 8-9, テ 10-11. A click inside a wide glyph
+    // snaps to that glyph.
     app.on_mouse(mouse(
         MouseEventKind::Down(MouseButton::Left),
-        rect.x + 3,
-        rect.y + 1,
+        rect.x + 4,
+        rect.y,
     ));
     app.on_mouse(mouse(
         MouseEventKind::Drag(MouseButton::Left),
-        rect.x + 8,
-        rect.y + 1,
+        rect.x + 10,
+        rect.y,
     ));
 
     let sel = app.selection.as_ref().expect("selection active");
-    assert_eq!(sel.start, (0, 1, 2), "click inside 日 snaps to 日");
-    assert_eq!(sel.end, (0, 1, 5), "click inside テ snaps to テ");
+    assert_eq!(sel.start, (0, 0, 4), "click inside 日 snaps to 日");
+    assert_eq!(sel.end, (0, 0, 7), "click inside テ snaps to テ");
     let text = app.get_selected_text(sel);
     assert_eq!(text, "日本語", "wide-glyph selection: {text:?}");
 }
@@ -770,26 +813,26 @@ async fn mouse_selection_survives_blank_gap_rows() {
         modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
     };
 
-    // The user block is bar/text/bar (3 rows) + 1 separator row. A press on
-    // the separator (row 4) starts unanchored — the highlight must never
+    // Each user turn is one rail-node row plus one separator row. A press on
+    // the separator (row 1) starts unanchored — the highlight must never
     // begin above the pointer — and the anchor is taken from the first text
     // row the drag reaches.
     app.on_mouse(mouse(
         MouseEventKind::Down(MouseButton::Left),
         rect.x + 4,
-        rect.y + 3, // the gap row of entry 0
+        rect.y + 1, // the gap row of entry 0
     ));
     app.on_mouse(mouse(
         MouseEventKind::Drag(MouseButton::Left),
         rect.x + 4,
-        rect.y + 5, // the text row of entry 1
+        rect.y + 2, // the node row of entry 1
     ));
 
     let sel = app.selection.as_ref().expect("selection active");
-    // Entry 1's body rows: bar(0), text(1), bar(2). The lazy anchor lands on
-    // its text row — exactly where the pointer met text.
-    assert_eq!(sel.start, (1, 1, 4), "anchor at the first text row reached");
-    assert_eq!(sel.end, (1, 1, 4));
+    // Entry 1's body row 0 is its node row; the lazy anchor lands exactly
+    // where the pointer met text.
+    assert_eq!(sel.start, (1, 0, 4), "anchor at the first text row reached");
+    assert_eq!(sel.end, (1, 0, 4));
     let text = app.get_selected_text(sel);
     assert!(text.is_empty(), "single-point anchor copies nothing");
 }
@@ -820,12 +863,12 @@ async fn compact_density_shows_single_row_prompts() {
     );
     assert!(text.contains("done"), "response missing:\n{text}");
 
-    // Cozy density restores the block + footer.
+    // Cozy density restores the rail node + footer.
     app.compact = false;
     app.entries[0].touch();
     app.entries[1].touch();
     let text = frame_text(&mut app, 92, 24);
-    assert!(text.contains("▌"), "cozy block missing:\n{text}");
+    assert!(text.contains("◆"), "cozy rail node missing:\n{text}");
     assert!(text.contains("Plan"), "cozy footer missing:\n{text}");
 }
 
@@ -886,33 +929,86 @@ async fn preview_of_the_new_transcript_style() {
 }
 
 #[tokio::test]
-async fn reasoning_streams_as_a_tail_then_collapses() {
+async fn reasoning_lives_in_the_thinking_panel() {
     let mut app = test_app().await;
     app.entries.push(Entry::new(EntryRole::User, "think hard"));
     let mut entry = Entry::streaming();
     entry.reasoning = "step one\nstep two\nstep three".into();
     app.entries.push(entry);
 
-    // Streaming: the dim live tail shows the model's thoughts.
+    // Streaming: the model's thoughts stream in the left panel.
     let text = frame_text(&mut app, 92, 24);
-    assert!(text.contains("step three"), "live tail missing:\n{text}");
-    assert!(text.contains("step one"), "tail start missing:\n{text}");
+    assert!(text.contains("step one"), "panel tail missing:\n{text}");
+    assert!(
+        text.contains("step three"),
+        "latest thought missing:\n{text}"
+    );
 
-    // Done: collapses to one marker line; the answer renders after it.
+    // Done: the transcript shows only the answer — no reasoning body, no
+    // collapse marker — while the panel keeps the last thoughts.
     if let Some(e) = app.entries.last_mut() {
         e.phase = Phase::Done;
         e.text = "the answer".into();
         e.touch();
     }
     let text = frame_text(&mut app, 92, 24);
-    assert!(
-        text.contains("Thought · 28 chars"),
-        "collapse marker missing:\n{text}"
-    );
     assert!(text.contains("the answer"), "answer missing:\n{text}");
     assert!(
-        !text.contains("step three"),
-        "reasoning body must collapse when done:\n{text}"
+        !text.contains("Thought ·"),
+        "collapse marker must be gone:\n{text}"
+    );
+    assert!(
+        text.contains("step three"),
+        "panel keeps the last thoughts:\n{text}"
+    );
+
+    // The reasoning must never render inside the main chat window.
+    let mut terminal = Terminal::new(TestBackend::new(92, 24)).unwrap();
+    terminal.draw(|f| render(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let chat = app.view.cached_chat_rect().expect("chat rect cached");
+    for y in chat.y..chat.y + chat.height {
+        let mut row = String::new();
+        for x in chat.x..chat.x + chat.width {
+            row.push_str(buffer[(x, y)].symbol());
+        }
+        assert!(
+            !row.contains("step one") && !row.contains("Thought"),
+            "reasoning leaked into the transcript row: {row:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn thinking_panel_shows_a_rolling_tail() {
+    let mut app = test_app().await;
+    let mut entry = Entry::streaming();
+    // Far more lines than the window can hold: older ones must roll off.
+    entry.reasoning = (1..=40)
+        .map(|i| format!("thought line {i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.entries.push(entry);
+
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        text.contains("thought line 40"),
+        "latest thought must be visible:\n{text}"
+    );
+    assert!(
+        !text.contains("thought line 01"),
+        "oldest thought must roll off:\n{text}"
+    );
+}
+
+#[tokio::test]
+async fn thinking_panel_placeholder_when_idle() {
+    let mut app = test_app().await;
+    let text = frame_text(&mut app, 92, 24);
+    assert!(text.contains("thinking"), "panel title missing:\n{text}");
+    assert!(
+        text.contains("no thoughts yet"),
+        "idle hint missing:\n{text}"
     );
 }
 
@@ -921,9 +1017,9 @@ async fn mouse_selection_survives_emoji_lines() {
     use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
     let mut app = test_app().await;
-    // "⚠️ ok" after the 2-cell `▌ ` prefix: ⚠ renders at column 2, the VS16
-    // top-up at 3, the space at 4, "ok" at 5-6. A raw char-count mapping
-    // would drift every click after the emoji by one cell.
+    // "⚠️ ok" after the 4-cell `  ◆ ` rail-node prefix: ⚠ renders at column
+    // 4, the VS16 top-up at 5, the space at 6, "ok" at 7-8. A raw char-count
+    // mapping would drift every click after the emoji by one cell.
     app.entries
         .push(Entry::new(EntryRole::User, "\u{26A0}\u{FE0F} ok"));
     let _ = frame_text(&mut app, 92, 24);
@@ -935,22 +1031,22 @@ async fn mouse_selection_survives_emoji_lines() {
         modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
     };
 
-    // Click the ⚠ glyph (column 2) → anchor at its base char (index 2).
+    // Click the ⚠ glyph (column 4) → anchor at its base char (index 4).
     app.on_mouse(mouse(
         MouseEventKind::Down(MouseButton::Left),
-        rect.x + 2,
-        rect.y + 1,
+        rect.x + 4,
+        rect.y,
     ));
-    // Drag to column 4 (just past the cluster) → the whole emoji selects.
+    // Drag to column 6 (just past the cluster) → the whole emoji selects.
     app.on_mouse(mouse(
         MouseEventKind::Drag(MouseButton::Left),
-        rect.x + 4,
-        rect.y + 1,
+        rect.x + 6,
+        rect.y,
     ));
 
     let sel = app.selection.as_ref().expect("selection active");
-    assert_eq!(sel.start, (0, 1, 2), "anchor at the cell under the pointer");
-    assert_eq!(sel.end, (0, 1, 4));
+    assert_eq!(sel.start, (0, 0, 4), "anchor at the cell under the pointer");
+    assert_eq!(sel.end, (0, 0, 6));
     let text = app.get_selected_text(sel);
     assert_eq!(
         text, "\u{26A0}\u{FE0F}",
@@ -975,19 +1071,19 @@ async fn wide_glyph_drag_paints_every_cell_of_the_glyphs() {
         modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
     };
 
-    // Row layout after the 2-cell `▌ ` prefix: 日 = cols 2-3, 本 = 4-5,
-    // 語 = 6-7, テ = 8-9. A drag from inside 日 to the start of テ must
-    // paint ALL six cells of 日本語 — the old char-count paint covered
-    // only three cells, ending mid-glyph.
+    // Row layout after the 4-cell `  ◆ ` rail-node prefix: 日 = cols 4-5,
+    // 本 = 6-7, 語 = 8-9, テ = 10-11. A drag from inside 日 to the start of
+    // テ must paint ALL six cells of 日本語 — the old char-count paint
+    // covered only three cells, ending mid-glyph.
     app.on_mouse(mouse(
         MouseEventKind::Down(MouseButton::Left),
-        rect.x + 3,
-        rect.y + 1,
+        rect.x + 4,
+        rect.y,
     ));
     app.on_mouse(mouse(
         MouseEventKind::Drag(MouseButton::Left),
-        rect.x + 8,
-        rect.y + 1,
+        rect.x + 10,
+        rect.y,
     ));
 
     let sel = app.selection.as_ref().expect("selection active");
@@ -998,8 +1094,8 @@ async fn wide_glyph_drag_paints_every_cell_of_the_glyphs() {
     let mut terminal = Terminal::new(TestBackend::new(92, 24)).unwrap();
     terminal.draw(|f| render(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
-    let row = rect.y + 1;
-    for dx in 0..10 {
+    let row = rect.y;
+    for dx in 0..12 {
         let c = &buffer[(rect.x + dx, row)];
         println!("cell {dx}: symbol={:?} bg={:?}", c.symbol(), c.bg);
     }
@@ -1012,33 +1108,50 @@ async fn wide_glyph_drag_paints_every_cell_of_the_glyphs() {
     // cell's attributes — so the visible highlight covers 日 through 語.
     assert_eq!(
         highlighted,
-        vec![2, 4, 6],
+        vec![4, 6, 8],
         "every selected glyph's base cell paints: {highlighted:?}"
     );
 }
 
 #[tokio::test]
-async fn hidden_tool_display_shows_only_the_response() {
+async fn tool_rows_are_visible_by_default() {
     let mut app = test_app().await;
     app.entries.push(Entry::new(EntryRole::User, "build it"));
     let mut reply = assistant("done building");
     reply.tools.push(with_tool("run_command", "npm test", true));
     app.entries.push(reply);
 
-    // Default level is Hidden: no tool rows at all, just the response.
-    let text = frame_text(&mut app, 92, 24);
-    assert!(!text.contains("run_command"), "tool row leaked:\n{text}");
-    assert!(text.contains("done building"), "response missing:\n{text}");
-
-    // Rows level: the row appears, still without previews.
-    app.tool_display = ToolDisplay::Rows;
+    // Default level is Rows: the activity is visible without ctrl+o.
     let text = frame_text(&mut app, 92, 24);
     assert!(text.contains("run_command"), "tool row missing:\n{text}");
+    assert!(text.contains("done building"), "response missing:\n{text}");
+
+    // Hidden remains one toggle away — tool rows disappear from main chat.
+    // (Info panel still shows "Last: ✓ run_command" as a summary.)
+    app.tool_display = ToolDisplay::Hidden;
+    let text = frame_text(&mut app, 92, 24);
+    // The rail branch marker `├` only appears on actual tool rows in main chat.
+    assert!(
+        !text.contains("├"),
+        "tool row leaked into main chat:\n{text}"
+    );
+    assert!(text.contains("done building"), "response missing:\n{text}");
+
+    // Rows level: the row appears in main chat with rail branch.
+    app.tool_display = ToolDisplay::Rows;
+    let text = frame_text(&mut app, 92, 24);
+    assert!(
+        text.contains("├"),
+        "tool row missing from main chat:\n{text}"
+    );
 
     // Full level: identical here (no preview body on this row).
     app.tool_display = ToolDisplay::Full;
     let text = frame_text(&mut app, 92, 24);
-    assert!(text.contains("run_command"), "tool row missing:\n{text}");
+    assert!(
+        text.contains("├"),
+        "tool row missing from main chat:\n{text}"
+    );
 }
 
 #[tokio::test]
@@ -1466,7 +1579,10 @@ async fn header_shows_workspace_and_status() {
     app.cwd = std::path::PathBuf::from("/tmp/nanomite/header-demo");
     let text = frame_text(&mut app, 100, 24);
     // Brand, workspace path and the model/effort block all live in the header.
-    assert!(text.contains("nanomite"), "brand missing:\n{text}");
+    assert!(
+        text.to_lowercase().contains("nanomite"),
+        "brand missing:\n{text}"
+    );
     assert!(
         text.contains("header-demo"),
         "workspace missing from header:\n{text}"
@@ -1477,7 +1593,10 @@ async fn header_shows_workspace_and_status() {
     );
     // A tiny terminal keeps the brand row without the path.
     let narrow = frame_text(&mut app, 30, 12);
-    assert!(narrow.contains("nanomite"), "brand missing:\n{narrow}");
+    assert!(
+        narrow.to_lowercase().contains("nanomite"),
+        "brand missing:\n{narrow}"
+    );
 }
 
 #[tokio::test]
@@ -2115,14 +2234,20 @@ fn help_sheet_lists_every_on_key_binding() {
 async fn edit_file_preview_uses_the_diff_renderer() {
     let mut app = test_app().await;
     app.tool_display = ToolDisplay::Full;
+    // Cell-index-exact lookup: `String::find` yields a BYTE offset, which
+    // drifts past the styled span whenever multibyte glyphs (▌, ░, │, …)
+    // precede the needle in the row — the fg would then be read from an
+    // unstyled cell. Walk cells instead so the match start is the cell.
     fn fg_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<Color> {
         for y in 0..buffer.area.height {
-            let mut row = String::new();
-            for x in 0..buffer.area.width {
-                row.push_str(buffer[(x, y)].symbol());
-            }
-            if let Some(x) = row.find(needle) {
-                return Some(buffer[(x as u16, y)].fg);
+            let syms: Vec<&str> = (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            for start in 0..syms.len() {
+                let joined: String = syms[start..].concat();
+                if joined.starts_with(needle) {
+                    return Some(buffer[(start as u16, y)].fg);
+                }
             }
         }
         None
@@ -2408,31 +2533,6 @@ async fn queued_prompt_dispatches_when_the_turn_finishes() {
             .iter()
             .any(|e| e.role == EntryRole::Assistant && e.phase == Phase::Streaming),
         "a streaming assistant entry must exist for the new turn"
-    );
-}
-
-#[tokio::test]
-async fn queue_strip_renders_queued_messages_quietly() {
-    let mut app = test_app().await;
-    app.composer.insert_str("first");
-    app.submit();
-    app.composer.insert_str("second message");
-    app.submit();
-    app.composer.insert_str("third");
-    app.submit();
-    assert_eq!(app.prompt_queue_len(), 2);
-
-    let text = frame_text(&mut app, 100, 24);
-    // The strip names the event and shows what is waiting.
-    assert!(text.contains("queued"), "queue header missing:\n{text}");
-    assert!(
-        text.contains("second message"),
-        "queued message preview missing:\n{text}"
-    );
-    // Quiet styling: the strip must not render the old highlighted chrome.
-    assert!(
-        !text.contains("Queued prompts ("),
-        "old highlighted queue UI is back:\n{text}"
     );
 }
 
@@ -3290,49 +3390,6 @@ async fn double_esc_escalates_to_a_force_stop() {
     }
     assert!(!app.is_busy(), "force stop did not end the turn");
     assert_eq!(app.entries[1].phase, Phase::Interrupted);
-}
-
-#[tokio::test]
-async fn suggestion_strip_renders_above_the_composer() {
-    let mut app = test_app().await;
-    app.entries.push(Entry::new(EntryRole::User, "fix the bug"));
-    app.entries.push(assistant("done, here is the diff"));
-    app.suggestions = Some(SuggestionStrip {
-        items: vec!["run the tests".into(), "commit the fix".into()],
-        selected: 1,
-    });
-
-    let text = frame_text(&mut app, 80, 24);
-    assert_frame_well_formed(&text, 80, 24);
-    assert!(text.contains("next steps"), "strip header missing:\n{text}");
-    assert!(text.contains("run the tests"), "item missing:\n{text}");
-    assert!(text.contains("commit the fix"), "item missing:\n{text}");
-    assert!(text.contains("tab cycle"), "key hints missing:\n{text}");
-    // The composer box still renders below the strip.
-    assert!(text.contains('❯'), "composer prompt missing:\n{text}");
-}
-
-#[tokio::test]
-async fn no_suggestions_no_strip_rows() {
-    let mut app = test_app().await;
-    app.entries.push(Entry::new(EntryRole::User, "hello"));
-    app.entries.push(assistant("hi there"));
-
-    let plain = frame_text(&mut app, 80, 24);
-    assert_frame_well_formed(&plain, 80, 24);
-    assert!(
-        !plain.contains("next steps"),
-        "strip must stay hidden:\n{plain}"
-    );
-    assert!(!plain.contains("tab cycle"));
-
-    app.suggestions = Some(SuggestionStrip {
-        items: vec!["one".into()],
-        selected: 0,
-    });
-    let with = frame_text(&mut app, 80, 24);
-    assert!(with.contains("next steps"));
-    assert!(with.contains("one"));
 }
 
 #[tokio::test]

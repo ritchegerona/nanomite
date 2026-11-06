@@ -1,8 +1,8 @@
 pub mod chat;
-use crate::ui::chat::render_prompt_queue;
 pub mod composer;
 pub mod diff;
 pub mod panels;
+use crate::ui::panels::draw_thinking_panel;
 #[cfg(test)]
 mod tests;
 pub mod text;
@@ -17,15 +17,16 @@ use theme::Theme;
 /// Nominal height of the `/memory` record overlay; the rect clamps to the area.
 const MEMORY_OVERLAY_ROWS: u16 = 28;
 
-/// Cached frame geometry: recomputed only when the terminal or composer resizes.
+/// Cached frame geometry for the three-tile hacker layout (flipped T1).
+/// Left column (30%): info panel (top) + chat input (bottom).
+/// Right column (70%): main transcript + response.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rects {
     pub header: Rect,
-    pub chat: Rect,
-    pub queue: Option<Rect>,
-    pub suggestions: Option<Rect>,
+    pub left_info: Rect,
+    pub left_input: Rect,
+    pub main_chat: Rect,
     pub footer: Rect,
-    pub composer: Rect,
 }
 
 /// Viewport + animation state. Everything here is redraw-cheap to read.
@@ -44,7 +45,7 @@ pub struct View {
     offsets_dirty: bool,
     offset_width: u16,
     offset_view: u16,
-    pub layout: Option<(Rect, u16, u16, u16, Rects)>,
+    pub layout: Option<(Rect, u16, Rects)>,
     footer: Option<(String, Line<'static>)>,
 }
 
@@ -72,12 +73,12 @@ impl View {
     }
 
     pub fn cached_chat_height(&self) -> Option<u16> {
-        self.layout.map(|(_, _, _, _, r)| r.chat.height)
+        self.layout.map(|(_, _, r)| r.main_chat.height)
     }
 
     /// Get the cached chat area rect for mouse hit testing
     pub fn cached_chat_rect(&self) -> Option<Rect> {
-        self.layout.map(|(_, _, _, _, r)| r.chat)
+        self.layout.map(|(_, _, r)| r.main_chat)
     }
 
     /// Get the viewport row count (chat area height)
@@ -207,45 +208,31 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     let theme = app.theme;
 
-    // The composer metrics are needed to solve the vertical layout, so measure it first.
-    let inner_width = area.width.saturating_sub(6).max(8) as usize;
-    // Key handling measures wrapping at the painted width; keep the cached
-    // value in sync so Up/Down behave identically at any terminal size.
-    app.composer_layout_width = inner_width;
-    let prompt_layout = app.composer.layout(inner_width, theme.base());
+    // The left input tile hugs the composer: measure the wrapped prompt at
+    // the tile's inner text width (borders + `❯ ` gutter), give the composer
+    // a comfortable 5-row base (3 text rows + borders, grows to 10 for long
+    // input) and hand the rest of the column to the info panel.
+    let left_w = left_tile_width(area) as usize;
+    let wrap_w = left_w.saturating_sub(4).max(8);
+    app.composer_layout_width = wrap_w;
+    let prompt_layout = app.composer.layout(wrap_w, theme.base());
     let composer_rows = if app.compact {
         composer::rows_compact(&prompt_layout)
     } else {
         composer::rows(&prompt_layout)
     };
-
-    let queue_rows = if app.prompt_queue_len() > 0 {
-        app.prompt_queue_len() as u16 + 1
-    } else {
-        0
-    };
-    // The follow-up strip mounts only while suggestions are on screen:
-    // one header row plus one row per suggestion.
-    let suggest_rows = match &app.suggestions {
-        Some(strip) => strip.items.len() as u16 + 1,
-        None => 0,
-    };
-    let rects = app
-        .view
-        .layout(area, composer_rows, queue_rows, suggest_rows);
+    let min_input = if app.compact { 1 } else { 5 };
+    let input_h = composer_rows.max(min_input);
+    let rects = app.view.layout(area, input_h);
 
     panels::header(frame, rects.header, app);
-    chat::render(frame, rects.chat, app);
-    if let Some(queue_rect) = rects.queue {
-        render_prompt_queue(frame, queue_rect, app);
-    }
-    if let Some(suggest_rect) = rects.suggestions {
-        panels::suggestions(frame, suggest_rect, app);
-    }
+    draw_thinking_panel(frame, rects.left_info, app, &theme);
+    chat::render(frame, rects.main_chat, app);
+    let cursor = composer::render(frame, rects.left_input, app, &prompt_layout, app.compact);
     panels::footer(frame, rects.footer, app);
 
-    let cursor = composer::render(frame, rects.composer, app, &prompt_layout, app.compact);
-
+    // Overlays render full-width on top of everything; they don't need to
+    // respect the left info column since they are modal and painted last.
     match app.overlay.clone() {
         Some(Overlay::Picker(picker)) => {
             let rows = (picker.items.len() as u16).saturating_add(2);
@@ -309,52 +296,98 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 }
 
-impl View {
-    fn layout(
-        &mut self,
-        area: Rect,
-        composer_rows: u16,
-        queue_rows: u16,
-        suggest_rows: u16,
-    ) -> Rects {
-        let has_queued = queue_rows > 0;
-        let has_suggestions = suggest_rows > 0;
+/// Width of the left info/input column: 30% of the terminal, clamped so both
+/// columns stay usable. Shared by `View::layout` and the composer measurement
+/// so the wrapped row count always matches the painted width.
+pub(crate) fn left_tile_width(area: Rect) -> u16 {
+    let w = (area.width as f32 * 0.30).round() as u16;
+    w.max(24).min(area.width.saturating_sub(24)).max(1)
+}
 
-        if let Some((cached_area, cached_rows, cached_queue, cached_suggest, rects)) = self.layout {
-            if cached_area == area
-                && cached_rows == composer_rows
-                && cached_queue == queue_rows
-                && cached_suggest == suggest_rows
-            {
+impl View {
+    fn layout(&mut self, area: Rect, input_h: u16) -> Rects {
+        // Three-tile flipped T1: header | (left: info+input) | (right: main) | footer.
+        // The input tile hugs the composer: `input_h` rows (3 = one text row
+        // plus borders; grows with multiline input), and the info panel takes
+        // everything that is left of the column.
+        if let Some((cached_area, cached_input, rects)) = self.layout {
+            if cached_area == area && cached_input == input_h {
                 return rects;
             }
         }
-        let areas = ratatui::layout::Layout::vertical([
-            ratatui::layout::Constraint::Length(1),
-            ratatui::layout::Constraint::Min(3),
-            ratatui::layout::Constraint::Length(queue_rows),
-            ratatui::layout::Constraint::Length(suggest_rows),
-            ratatui::layout::Constraint::Length(composer_rows),
-            ratatui::layout::Constraint::Length(1),
-        ])
-        .horizontal_margin(1)
-        .split(area);
+
+        let header_h = 1;
+        let footer_h = 1;
+        let main_h = area.height.saturating_sub(header_h + footer_h);
+
+        // Header
+        let header = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: header_h,
+        };
+
+        // Footer
+        let footer = Rect {
+            x: area.x,
+            y: area.y + area.height - footer_h,
+            width: area.width,
+            height: footer_h,
+        };
+
+        // Main area between header and footer
+        let main_area = Rect {
+            x: area.x,
+            y: area.y + header_h,
+            width: area.width,
+            height: main_h,
+        };
+
+        // Horizontal split: left 30%, right 70%
+        let left_w = left_tile_width(area);
+
+        let left = Rect {
+            x: main_area.x,
+            y: main_area.y,
+            width: left_w,
+            height: main_area.height,
+        };
+
+        let right = Rect {
+            x: main_area.x + left_w,
+            y: main_area.y,
+            width: main_area.width.saturating_sub(left_w),
+            height: main_area.height,
+        };
+
+        // Left column vertical split: the composer hugs its content, the info
+        // panel occupies the rest. Always leave the panel a few rows.
+        let input_h = input_h.max(1).min(left.height.saturating_sub(3)).max(1);
+        let info_h = left.height.saturating_sub(input_h);
+
+        let left_info = Rect {
+            x: left.x,
+            y: left.y,
+            width: left.width,
+            height: info_h,
+        };
+
+        let left_input = Rect {
+            x: left.x,
+            y: left.y + info_h,
+            width: left.width,
+            height: input_h,
+        };
 
         let rects = Rects {
-            header: areas[0],
-            chat: areas[1],
-            queue: if has_queued { Some(areas[2]) } else { None },
-            suggestions: if has_suggestions {
-                Some(areas[3])
-            } else {
-                None
-            },
-            composer: areas[4],
-            // Status strip sits flush on the terminal's bottom edge, under
-            // the composer - opencode's footer order.
-            footer: areas[5],
+            header,
+            left_info,
+            left_input,
+            main_chat: right,
+            footer,
         };
-        self.layout = Some((area, composer_rows, queue_rows, suggest_rows, rects));
+        self.layout = Some((area, input_h, rects));
         rects
     }
 }
