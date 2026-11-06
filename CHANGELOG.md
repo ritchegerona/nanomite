@@ -4,9 +4,50 @@ Every entry describes a verified change. Labels: implemented+tested,
 implemented unverified, planned, experimental, unsupported. Planned work is
 never listed as released.
 
-## [Unreleased]
+## [1.2.0] — 2026-11-07
 
 ### Added
+
+- **Hacker-tile main layout (flipped T1)**: the TUI is now three fixed tiles —
+  a left column holding the thinking panel (top) and the composer (bottom,
+  5 rows resting, growing to 10 with multiline input), and a large right
+  transcript for final answers, tool activity and code. Overlays render
+  full-width on top; the composer wraps at the tile's true inner width so the
+  dynamic height always matches what is painted. implemented+tested.
+- **Thinking panel**: the upper-left tile is a live, rolling stream of the
+  model's reasoning — new sentences append at the bottom edge (flush, anchored
+  to the border), the oldest lines drop off and fade as the window fills, and
+  a blinking caret marks the newest thought. The reasoning no longer renders
+  in the transcript at all; the main window carries only the answer, the tool
+  rows (`→ read_file`, `← edit_file`, …) and rail-framed code. implemented+tested.
+- **Rail transcript redesign**: assistant turns hang off a left rail (`│`),
+  tool calls branch from it (`├`) with right-aligned durations and inline
+  `failed:` reasons (`ToolRow.error` captured from `ToolEnd`), and fenced code
+  renders as rail frames (`├─ lang … ╰─ n lines · click to copy`) instead of
+  boxes. User turns are mode-coloured rail nodes (`◆`) with a right-aligned
+  HH:MM stamp. implemented+tested.
+- **Richer tool labels**: `describe_args` now surfaces the actual command
+  (`run_command`, `ssh_run host: cmd`), URLs (`browse`, `web_fetch`), search
+  queries and test runners in the tool row. implemented+tested.
+- **Three new themes**: `hacker` (phosphor green on black), `mr-robot`
+  (fsociety red on warm charcoal) and `anonymous` (grey-hat silver on black).
+  Theme labels resolve display names too (`Mr. Robot` → `mr-robot`); the
+  `/themes` picker lists all nine skins with descriptors. implemented+tested.
+
+### Changed
+
+- **Message footers render on every terminal state** (done, interrupted,
+  failed) with the wall-clock time, duration, tok/s and `↑prompt ↓completion`
+  token split; failed turns append a danger-coloured `· failed`.
+- **Tool rows are visible by default** (`ToolDisplay::Rows`): a coding turn
+  shows what it touched without `ctrl+o`; hidden remains one toggle away.
+- **Status strip is live**: the streaming label reads `running N tools` while
+  tools execute and `thinking` otherwise, and the dead streaming token counter
+  was removed.
+- **Help sheet scroll clamps to its content**, so `End` always lands on the
+  keys section instead of scrolling past it.
+
+### Added (carried from pre-1.2.0 work)
 
 - **Daily learning loop**: `/learn <topic>` runs a research turn that recalls
   prior lessons, researches the topic with the agent's own tools, saves durable

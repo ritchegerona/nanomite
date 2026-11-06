@@ -6,11 +6,12 @@ workflow so any future implementation can be checked against it.
 
 ## Current release
 
-- **Version:** `1.1.0`
-- **Git tag:** `v1.1.0`
+- **Version:** `1.2.0`
+- **Git tag:** `v1.2.0`
 - **Branch:** `master`
 - **Build:** `cargo build --release`
-- **Tests:** 707 Rust + 76 Python = 783 total, all passing; clippy clean
+- **Tests:** 719 Rust (710 lib + 1 production-attach + 8 agent-integration) + 76
+  Python = 795 total, all passing; clippy and rustfmt clean; bench completes
 - **Install:** copy binary to `$PATH`; previous binary kept as rollback
 
 ## Required update workflow (Milestone 14)
@@ -40,6 +41,7 @@ supports them.
 
 | Version | Date | Highlights |
 |---|---|---|
+| 1.2.0 | 2026-11-07 | **Hacker-tile UI redesign**: three-tile layout (thinking panel + composer left, transcript right), rolling thinking stream (reasoning lives in its own panel, anchored to the bottom edge, fades as it fills), rail transcript with branch tool rows, inline failure reasons, rail-framed code, `◆` user nodes with HH:MM stamps, message footers on every state with clock + token split, tool rows visible by default, three new themes (`hacker`, `mr-robot`, `anonymous`; 9 total), richer tool labels. Daily learning loop and HACKER MODE lifecycle/reporting work carried into this release. |
 | 1.1.0 | 2026-11-04 | **Config fail-fast validation**: `HackerConfig::validate()` wired into `Config::build()` — enabled hacker mode without valid scope loudly fails and self-disables. `types.rs` extracted from `app/mod.rs` (pure UI data types, no `App` dependency). All HACKER MODE capabilities preserved (typestate gate, `OpCapability`, scope validation, audit trail, findings store, SARIF export). Repo cleaned: 120 legacy scratch files removed. |
 | 1.0.0 | 2026-11-04 | **Advanced capability layer**: typestate `HackerSessionTyped` (`Discovered→Authorized→Active→Closed`), `OpCapability` unforgeable token with `CapEvent` audit trail, `CapError` fail-fast domain errors, scope + risk-ceiling checks. Python cracking toolkit under `src/nanomite/cracking/` with context-managed sessions, streaming wordlist generator, CTI-grade reports. Installer scripts fixed (`install.sh`, `install.ps1`) with Python deps. Full documentation overhaul: `ARCHITECTURE.md`, `HACKER_MODE.md`, `HACKER_SECURITY.md`, `INSTALLATION.md`. |
 | 0.8.0 | 2026-11-02 | HACKER MODE Phase 4: assessment lifecycle (`list|use|complete`), reporting operations (`summary|export`), evidence verification (`verify <id>`), finding triage (`triage|accept|close`), JSON+SARIF export, more finding producers. Double-Esc interrupt. Tool confirmation prompts Plan-only. Footer status strip moved to bottom edge. |
