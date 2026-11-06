@@ -1270,10 +1270,13 @@ impl Config {
             .filter(|topic| !topic.is_empty()),
             // Auto-update behavior: "notify" = check and notify, "true" = check and prompt, "false" = disabled
             autoupdate: if use_env {
-                first_env_one("NANOMITE_AUTOUPDATE")
-                    .unwrap_or_else(|| "notify".to_string())
+                first_env_one("NANOMITE_AUTOUPDATE").unwrap_or_else(|| "notify".to_string())
             } else {
-                stored.autoupdate.as_ref().cloned().unwrap_or_else(|| "notify".to_string())
+                stored
+                    .autoupdate
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_else(|| "notify".to_string())
             },
             hacker,
         }
