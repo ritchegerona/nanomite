@@ -154,7 +154,7 @@ pages, and `nanomite update` to move to the next version in one command.
   and they are appended to the system prompt on every turn
 - **Persistent setup** — provider, key, model, theme and tool toggles are saved
   to `~/.config/nanomite/config.toml` and survive restarts
-- **Offline-capable test suite** — 698 tests, zero network required
+- **Offline-capable test suite** — 709 tests, zero network required
 
 ## Installation
 
@@ -658,7 +658,7 @@ src/
 ## Development
 
 ```bash
-cargo test --lib     # 698 tests, fully offline
+cargo test --lib     # 709 tests, fully offline
 cargo run            # dev build against your config
 cargo build --release
 ```

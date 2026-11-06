@@ -7,7 +7,7 @@ conditions · **L3** integrated and regression-tested · **L4**
 benchmark-validated and monitored. Evidence in `docs/ARCHITECTURE.md` and test
 suite.
 
-## Working (verified by the 698-test suite)
+## Working (verified by the 709-test suite)
 
 - Streaming chat with any OpenAI-compatible endpoint (L3) — 21 presets,
   keyless localhost support, `/provider` `/models` `/connect` menus.
@@ -81,6 +81,6 @@ Reasoning/execution modes · evolution lifecycle beyond `/improve` (experiment
   new path.
 - The daily learning turn spends model tokens and needs working tools
   (`web_fetch`/`browse` for external topics); it is off by default.
-- Verification snapshot: `cargo test --lib` **698 passed / 0 failed**
+- Verification snapshot: `cargo test --lib` **709 passed / 0 failed**
   (fully offline) plus `tests/production_attach.rs` (1 integration test) +
   `tests/agent_integration.rs` (8 integration tests).
