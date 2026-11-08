@@ -8,11 +8,20 @@
 
 use super::findings::Finding;
 
+pub mod advanced_cloud;
+pub mod advanced_evasion;
+pub mod advanced_network;
+pub mod advanced_recon;
+pub mod advanced_web;
+pub mod attack_path;
+pub mod c2_simulation;
 pub mod exploitation;
 pub mod kali;
 pub mod network;
+pub mod post_exploitation;
 pub mod recon;
 pub mod reporting;
+pub mod supply_chain;
 pub mod vuln;
 pub mod web;
 

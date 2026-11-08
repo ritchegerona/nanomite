@@ -17,9 +17,18 @@ use std::time::{Instant, SystemTime};
 use super::audit::{AuditLog, AuditRecord};
 use super::authorization::{authorize, Decision, Operation};
 use super::context::AssessmentContext;
+use super::modules::advanced_cloud;
+use super::modules::advanced_evasion;
+use super::modules::advanced_network;
+use super::modules::advanced_recon;
+use super::modules::advanced_web;
+use super::modules::attack_path;
+use super::modules::c2_simulation;
 use super::modules::kali::{self, BinaryProbe, PathProbe, ProcessRunner, SystemRunner};
 use super::modules::network::{Connector, TcpConnector};
+use super::modules::post_exploitation;
 use super::modules::recon::{Resolver, SystemResolver};
+use super::modules::supply_chain;
 use super::modules::vuln::{self, VulnEntry};
 use super::modules::web::{Fetcher, ReqwestFetcher};
 use super::modules::{exploitation, network, recon, reporting, web, ModuleReport};
@@ -128,6 +137,335 @@ pub const OPERATIONS: &[OpSpec] = &[
         false,
         false,
         "<md|json|sarif>",
+    ),
+    // Advanced Recon
+    spec(
+        "advanced_recon",
+        "ct",
+        OperationCategory::Passive,
+        true,
+        true,
+        "<domain>",
+    ),
+    spec(
+        "advanced_recon",
+        "asn",
+        OperationCategory::Passive,
+        true,
+        true,
+        "<ip|cidr>",
+    ),
+    spec(
+        "advanced_recon",
+        "cloud",
+        OperationCategory::Passive,
+        true,
+        true,
+        "<domain>",
+    ),
+    spec(
+        "advanced_recon",
+        "sweep",
+        OperationCategory::Passive,
+        true,
+        true,
+        "<domain>",
+    ),
+    // Advanced Web
+    spec(
+        "advanced_web",
+        "graphql",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<url>",
+    ),
+    spec(
+        "advanced_web",
+        "openapi",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<url>",
+    ),
+    spec(
+        "advanced_web",
+        "jwt",
+        OperationCategory::Passive,
+        false,
+        false,
+        "<token>",
+    ),
+    spec(
+        "advanced_web",
+        "ssrf",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<url> <param>",
+    ),
+    spec(
+        "advanced_web",
+        "sweep",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<url>",
+    ),
+    // Advanced Network
+    spec(
+        "advanced_network",
+        "smb",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<host> <ips...>",
+    ),
+    spec(
+        "advanced_network",
+        "kerberos",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<domain> <dc_ips...>",
+    ),
+    spec(
+        "advanced_network",
+        "adcs",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<domain> <dc_ips...>",
+    ),
+    spec(
+        "advanced_network",
+        "ldap",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<domain> <dc_ips...>",
+    ),
+    spec(
+        "advanced_network",
+        "rpc",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<host> <ips...>",
+    ),
+    spec(
+        "advanced_network",
+        "sweep",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<target> <ips...>",
+    ),
+    // Advanced Cloud
+    spec(
+        "advanced_cloud",
+        "aws-metadata",
+        OperationCategory::ActiveDiscovery,
+        false,
+        true,
+        "",
+    ),
+    spec(
+        "advanced_cloud",
+        "gcp-metadata",
+        OperationCategory::ActiveDiscovery,
+        false,
+        true,
+        "",
+    ),
+    spec(
+        "advanced_cloud",
+        "azure-metadata",
+        OperationCategory::ActiveDiscovery,
+        false,
+        true,
+        "",
+    ),
+    spec(
+        "advanced_cloud",
+        "k8s-enum",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<api_server> [token]",
+    ),
+    spec(
+        "advanced_cloud",
+        "container-escape",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    spec(
+        "advanced_cloud",
+        "sweep",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<target>",
+    ),
+    // Advanced Evasion
+    spec(
+        "advanced_evasion",
+        "waf-bypass",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    spec(
+        "advanced_evasion",
+        "edr-evasion",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    spec(
+        "advanced_evasion",
+        "lolbins",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    spec(
+        "advanced_evasion",
+        "sweep",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    // Post Exploitation
+    spec(
+        "post_exploitation",
+        "credential-access",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    spec(
+        "post_exploitation",
+        "lateral-movement",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    spec(
+        "post_exploitation",
+        "persistence",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    spec(
+        "post_exploitation",
+        "sweep",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    // Attack Path
+    spec(
+        "attack_path",
+        "analyze",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    spec(
+        "attack_path",
+        "export-graphml",
+        OperationCategory::Passive,
+        false,
+        false,
+        "<path>",
+    ),
+    // Supply Chain
+    spec(
+        "supply_chain",
+        "sbom",
+        OperationCategory::Passive,
+        true,
+        false,
+        "<path>",
+    ),
+    spec(
+        "supply_chain",
+        "dep-confusion",
+        OperationCategory::Passive,
+        false,
+        false,
+        "<names> <ecosystems>",
+    ),
+    spec(
+        "supply_chain",
+        "repo-jacking",
+        OperationCategory::Passive,
+        false,
+        false,
+        "<repos...>",
+    ),
+    spec(
+        "supply_chain",
+        "sweep",
+        OperationCategory::Passive,
+        true,
+        false,
+        "<sbom_path> <names> <ecosystems> <repos...>",
+    ),
+    // C2 Simulation
+    spec(
+        "c2_simulation",
+        "profiles",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
+    ),
+    spec(
+        "c2_simulation",
+        "analyze-traffic",
+        OperationCategory::Passive,
+        false,
+        false,
+        "<samples_json> <profiles_json>",
+    ),
+    spec(
+        "c2_simulation",
+        "detection-rules",
+        OperationCategory::Passive,
+        false,
+        false,
+        "<profile_name>",
+    ),
+    spec(
+        "c2_simulation",
+        "simulate",
+        OperationCategory::Passive,
+        false,
+        false,
+        "<profile_name> [count]",
+    ),
+    spec(
+        "c2_simulation",
+        "sweep",
+        OperationCategory::Passive,
+        false,
+        false,
+        "",
     ),
 ];
 
@@ -383,6 +721,255 @@ pub fn run(
                 }
             }
         }
+        // Advanced Recon
+        ("advanced_recon", "ct") => {
+            let host = host.as_deref().unwrap_or(target);
+            advanced_recon::certificate_transparency(host, &advanced_recon::ReqwestJsonFetcher)
+        }
+        ("advanced_recon", "asn") => {
+            let host = host.as_deref().unwrap_or(target);
+            advanced_recon::asn_mapping(host, &advanced_recon::ReqwestJsonFetcher)
+        }
+        ("advanced_recon", "cloud") => {
+            let host = host.as_deref().unwrap_or(target);
+            advanced_recon::cloud_asset_enum(
+                host,
+                &advanced_recon::ReqwestJsonFetcher,
+                &advanced_recon::SystemResolver,
+            )
+        }
+        ("advanced_recon", "sweep") => {
+            let host = host.as_deref().unwrap_or(target);
+            advanced_recon::full_sweep(
+                host,
+                &advanced_recon::ReqwestJsonFetcher,
+                &advanced_recon::SystemResolver,
+            )
+        }
+        // Advanced Web
+        ("advanced_web", "graphql") => {
+            let host = host.as_deref().unwrap_or(target);
+            advanced_web::graphql_introspect(host, &advanced_web::ReqwestFetcher)
+        }
+        ("advanced_web", "openapi") => {
+            let host = host.as_deref().unwrap_or(target);
+            advanced_web::openapi_analyze(host, &advanced_web::ReqwestFetcher)
+        }
+        ("advanced_web", "jwt") => advanced_web::jwt_analyze(arg),
+        ("advanced_web", "ssrf") => {
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            if parts.len() < 2 {
+                return Err("advanced_web/ssrf needs <url> <param>".into());
+            }
+            advanced_web::ssrf_probe(parts[0], parts[1], &advanced_web::ReqwestFetcher)
+        }
+        ("advanced_web", "sweep") => {
+            let host = host.as_deref().unwrap_or(target);
+            advanced_web::full_sweep(host, &advanced_web::ReqwestFetcher)
+        }
+        // Advanced Network
+        ("advanced_network", "smb") => {
+            let host = host.as_deref().unwrap_or(target);
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            if parts.is_empty() {
+                return Err("advanced_network/smb needs <host> <ips...>".into());
+            }
+            let ips: Result<Vec<IpAddr>, _> = parts.iter().map(|s| s.parse()).collect();
+            match ips {
+                Ok(ips) => advanced_network::smb_enum(host, &ips, &advanced_network::TcpConnector),
+                Err(_) => Err("invalid IP address".into()),
+            }
+        }
+        ("advanced_network", "kerberos") => {
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            if parts.len() < 2 {
+                return Err("advanced_network/kerberos needs <domain> <dc_ips...>".into());
+            }
+            let domain = parts[0];
+            let ips: Result<Vec<IpAddr>, _> = parts[1..].iter().map(|s| s.parse()).collect();
+            match ips {
+                Ok(ips) => {
+                    advanced_network::kerberos_enum(domain, &ips, &advanced_network::TcpConnector)
+                }
+                Err(_) => Err("invalid IP address".into()),
+            }
+        }
+        ("advanced_network", "adcs") => {
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            if parts.len() < 2 {
+                return Err("advanced_network/adcs needs <domain> <dc_ips...>".into());
+            }
+            let domain = parts[0];
+            let ips: Result<Vec<IpAddr>, _> = parts[1..].iter().map(|s| s.parse()).collect();
+            match ips {
+                Ok(ips) => {
+                    advanced_network::adcs_enum(domain, &ips, &advanced_network::TcpConnector)
+                }
+                Err(_) => Err("invalid IP address".into()),
+            }
+        }
+        ("advanced_network", "ldap") => {
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            if parts.len() < 2 {
+                return Err("advanced_network/ldap needs <domain> <dc_ips...>".into());
+            }
+            let domain = parts[0];
+            let ips: Result<Vec<IpAddr>, _> = parts[1..].iter().map(|s| s.parse()).collect();
+            match ips {
+                Ok(ips) => {
+                    advanced_network::ldap_enum(domain, &ips, &advanced_network::TcpConnector)
+                }
+                Err(_) => Err("invalid IP address".into()),
+            }
+        }
+        ("advanced_network", "rpc") => {
+            let host = host.as_deref().unwrap_or(target);
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            if parts.is_empty() {
+                return Err("advanced_network/rpc needs <host> <ips...>".into());
+            }
+            let ips: Result<Vec<IpAddr>, _> = parts.iter().map(|s| s.parse()).collect();
+            match ips {
+                Ok(ips) => advanced_network::rpc_enum(host, &ips, &advanced_network::TcpConnector),
+                Err(_) => Err("invalid IP address".into()),
+            }
+        }
+        ("advanced_network", "sweep") => {
+            let host = host.as_deref().unwrap_or(target);
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            if parts.is_empty() {
+                return Err("advanced_network/sweep needs <target> <ips...>".into());
+            }
+            let ips: Result<Vec<IpAddr>, _> = parts.iter().map(|s| s.parse()).collect();
+            match ips {
+                Ok(ips) => {
+                    advanced_network::full_sweep(host, &ips, &advanced_network::TcpConnector)
+                }
+                Err(_) => Err("invalid IP address".into()),
+            }
+        }
+        // Advanced Cloud
+        ("advanced_cloud", "aws-metadata") => {
+            advanced_cloud::aws_metadata_check(&advanced_cloud::ReqwestFetcher)
+        }
+        ("advanced_cloud", "gcp-metadata") => {
+            advanced_cloud::gcp_metadata_check(&advanced_cloud::ReqwestFetcher)
+        }
+        ("advanced_cloud", "azure-metadata") => {
+            advanced_cloud::azure_metadata_check(&advanced_cloud::ReqwestFetcher)
+        }
+        ("advanced_cloud", "k8s-enum") => {
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            if parts.is_empty() {
+                return Err("advanced_cloud/k8s-enum needs <api_server> [token]".into());
+            }
+            let token = if parts.len() > 1 {
+                Some(parts[1])
+            } else {
+                None
+            };
+            advanced_cloud::k8s_api_enum(parts[0], token, &advanced_cloud::ReqwestFetcher)
+        }
+        ("advanced_cloud", "container-escape") => Ok(advanced_cloud::container_escape_checks()),
+        ("advanced_cloud", "sweep") => {
+            let host = host.as_deref().unwrap_or(target);
+            advanced_cloud::full_sweep(host, &advanced_cloud::ReqwestFetcher)
+        }
+        // Advanced Evasion
+        ("advanced_evasion", "waf-bypass") => Ok(advanced_evasion::waf_bypass_catalog()),
+        ("advanced_evasion", "edr-evasion") => Ok(advanced_evasion::edr_evasion_catalog()),
+        ("advanced_evasion", "lolbins") => Ok(advanced_evasion::lolbin_catalog()),
+        ("advanced_evasion", "sweep") => Ok(advanced_evasion::full_sweep()),
+        // Post Exploitation
+        ("post_exploitation", "credential-access") => {
+            Ok(post_exploitation::credential_access_catalog())
+        }
+        ("post_exploitation", "lateral-movement") => {
+            Ok(post_exploitation::lateral_movement_paths())
+        }
+        ("post_exploitation", "persistence") => Ok(post_exploitation::persistence_enum()),
+        ("post_exploitation", "sweep") => Ok(post_exploitation::full_sweep()),
+        // Attack Path
+        ("attack_path", "analyze") => attack_path::full_analysis(None, None, None, None),
+        ("attack_path", "export-graphml") => {
+            use std::path::Path;
+            attack_path::export_graphml(&attack_path::AttackGraph::default(), Path::new(arg)).map(
+                |_| ModuleReport::new("attack_path", "export-graphml", arg, "graphml exported"),
+            )
+        }
+        // Supply Chain
+        ("supply_chain", "sbom") => {
+            use std::path::Path;
+            supply_chain::sbom_analyze(Path::new(arg))
+        }
+        ("supply_chain", "dep-confusion") => {
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            if !parts.len().is_multiple_of(2) || parts.is_empty() {
+                return Err("supply_chain/dep-confusion needs <names> <ecosystems> pairs".into());
+            }
+            let mid = parts.len() / 2;
+            let names: Vec<String> = parts[..mid].iter().map(|s| s.to_string()).collect();
+            let ecosystems: Vec<String> = parts[mid..].iter().map(|s| s.to_string()).collect();
+            supply_chain::dependency_confusion_check(&names, &ecosystems)
+        }
+        ("supply_chain", "repo-jacking") => {
+            let repos: Vec<String> = arg.split_whitespace().map(|s| s.to_string()).collect();
+            supply_chain::repo_jacking_check(&repos)
+        }
+        ("supply_chain", "sweep") => {
+            // This is a scaffold - needs structured args
+            Ok(supply_chain::full_sweep(None, None, None)
+                .unwrap_or_else(|e| ModuleReport::new("supply_chain", "sweep", "error", e)))
+        }
+        // C2 Simulation
+        ("c2_simulation", "profiles") => {
+            let mut report = ModuleReport::new(
+                "c2_simulation",
+                "profiles",
+                "catalog",
+                format!(
+                    "{} built-in beacon profiles",
+                    c2_simulation::builtin_beacon_profiles().len()
+                ),
+            );
+            for p in c2_simulation::builtin_beacon_profiles() {
+                report = report.line(format!("{} ({}) - {}", p.name, p.c2_framework, p.protocol));
+            }
+            Ok(report)
+        }
+        ("c2_simulation", "analyze-traffic") => {
+            // Expect JSON args - scaffold
+            Ok(ModuleReport::new(
+                "c2_simulation",
+                "analyze-traffic",
+                arg,
+                "traffic analysis scaffold",
+            ))
+        }
+        ("c2_simulation", "detection-rules") => {
+            let profiles = c2_simulation::builtin_beacon_profiles();
+            let profile = profiles
+                .iter()
+                .find(|p| p.name == arg)
+                .ok_or_else(|| format!("profile '{}' not found", arg))?;
+            Ok(c2_simulation::generate_detection_rules(profile))
+        }
+        ("c2_simulation", "simulate") => {
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            let profile_name = parts[0];
+            let count = if parts.len() > 1 {
+                parts[1].parse().unwrap_or(10)
+            } else {
+                10
+            };
+            let profiles = c2_simulation::builtin_beacon_profiles();
+            let profile = profiles
+                .iter()
+                .find(|p| p.name == profile_name)
+                .ok_or_else(|| format!("profile '{}' not found", profile_name))?;
+            Ok(c2_simulation::simulate_beacon_traffic(profile, count))
+        }
+        ("c2_simulation", "sweep") => Ok(c2_simulation::full_analysis()),
         _ => Err(format!(
             "operation `{}/{}` is in the table but has no implementation",
             spec.module, spec.op
