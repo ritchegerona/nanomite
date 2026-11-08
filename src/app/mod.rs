@@ -9,6 +9,7 @@ use crate::board::engine::{BoardEngine, CancelFlag};
 use crate::board::store::{BoardMessage, BoardStore};
 use crate::commands::{self, Command};
 use crate::config::{find_preset, host_of, Config, ProviderKind, ProviderPreset, PRESETS};
+use privacy::PrivacyEvent;
 use crate::improve::{
     Actor, ApplyOutcome, CargoTestRunner, ImproveEngine, RegressionRunner, Roots, Status, Target,
 };
@@ -1829,6 +1830,7 @@ pub(crate) enum HackerEvent {
 
 /// `/hacker` mode sub-module: slash-command dispatch preserved from `App`.
 pub mod hacker;
+pub mod privacy;
 
 /// opencode-style follow-up suggestions: after a turn finishes, a tiny
 /// side-call asks the model for a few short prompts the user would most
@@ -1931,6 +1933,11 @@ pub struct App {
     /// Results of `/hacker run` operations, executed on the blocking pool.
     hacker_rx: UnboundedReceiver<HackerEvent>,
     hacker_tx: UnboundedSender<HackerEvent>,
+    /// Results of `/vpn` and `/tor` actions, executed on the blocking pool.
+    #[allow(dead_code)]
+    privacy_rx: UnboundedReceiver<PrivacyEvent>,
+    #[allow(dead_code)]
+    privacy_tx: UnboundedSender<PrivacyEvent>,
     /// Bumped on every `/panel`: stale events from an older convene are dropped.
     board_gen: u64,
     /// Shared with the in-flight convene task so `esc` can stop the engine.
@@ -2053,6 +2060,7 @@ impl App {
         let (memory_tx, memory_rx) = unbounded_channel();
         let (improve_tx, improve_rx) = unbounded_channel();
         let (suggest_tx, suggest_rx) = unbounded_channel();
+        let (privacy_tx, privacy_rx) = unbounded_channel();
 
         // Persistent memory is opened before the runtime so the six memory tools
         // are live schemas and turn retrieval/capture run from the first prompt.
@@ -2129,6 +2137,8 @@ impl App {
             hacker_tx,
             board_gen: 0,
             board_cancel: None,
+            privacy_rx,
+            privacy_tx,
             handle,
             history: Vec::new(),
             turn_history: Vec::new(),
@@ -2465,6 +2475,10 @@ impl App {
         while let Ok(result) = self.suggest_rx.try_recv() {
             changed = true;
             self.apply_suggest_result(result);
+        }
+        while let Ok(event) = self.privacy_rx.try_recv() {
+            changed = true;
+            self.apply_privacy_event(event);
         }
         while let Some(request) = self.confirm_rx.as_mut().and_then(|rx| rx.try_recv().ok()) {
             changed = true;
@@ -3253,6 +3267,8 @@ impl App {
             Command::Next => self.next_turn(),
             Command::Learn => self.run_learn(args),
             Command::Update => self.handle_update(args),
+            Command::Vpn => privacy::run_vpn(self, args),
+            Command::Tor => privacy::run_tor(self, args),
             Command::Favorites => self.run_favorites(args),
         }
         self.mark_dirty();
@@ -9432,5 +9448,40 @@ mod tests {
                     model: "claude-3".into()
                 }
         );
+    }
+
+    #[tokio::test]
+    async fn autoupdate_disabled_skips_check() {
+        let mut cfg = test_config();
+        cfg.autoupdate = "false".to_string();
+        let mut app = App::new(cfg, tokio::runtime::Handle::current())
+            .expect("app");
+        // autoupdate=``false`` must short-circuit before any git invocation.
+        let result = app.check_for_updates_on_startup();
+        assert!(result.is_ok());
+        assert!(app.entries.is_empty(), "no entries when autoupdate is off");
+    }
+
+    #[tokio::test]
+    async fn autoupdate_silent_skip_outside_checkout_install() {
+        // Outside a git-checkout install, locate_checkout() returns None and
+        // check_for_updates_on_startup() silently returns Ok(()) with no
+        // entries and no toast — regardless of autoupdate mode.
+        for mode in ["notify", "true"] {
+            let mut cfg = test_config();
+            cfg.autoupdate = mode.to_string();
+            let mut app = App::new(cfg, tokio::runtime::Handle::current())
+                .expect("app");
+            let result = app.check_for_updates_on_startup();
+            assert!(result.is_ok(), "mode {mode} must not error");
+            assert!(
+                app.entries.is_empty(),
+                "mode {mode}: no entries outside a checkout"
+            );
+            assert!(
+                app.toast.is_none(),
+                "mode {mode}: no toast outside a checkout"
+            );
+        }
     }
 }

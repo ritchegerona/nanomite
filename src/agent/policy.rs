@@ -53,7 +53,7 @@ impl Risk {
     pub fn of(name: &str) -> Risk {
         match name.trim() {
             "run_command" | "ssh_run" | "memory_delete" | "browse" | "browse_screenshot"
-            | "run_tests" => Risk::External,
+            | "run_tests" | "vpn_control" | "tor_control" => Risk::External,
             "write_file" | "edit_file" | "memory_save" | "memory_update" | "propose_self_edit"
             | "git_commit" | "git_branch" | "index_symbols" | "create_plan" | "update_task"
             | "delete_plan" | "read_document" => Risk::Write,
@@ -235,6 +235,8 @@ mod tests {
         assert_eq!(Risk::of("browse_screenshot"), Risk::External);
         // run_tests executes cargo test (subprocess, mutates target/).
         assert_eq!(Risk::of("run_tests"), Risk::External);
+        assert_eq!(Risk::of("vpn_control"), Risk::External);
+        assert_eq!(Risk::of("tor_control"), Risk::External);
         // read_document reads arbitrary files via extractors.
         assert_eq!(Risk::of("read_document"), Risk::Write);
         // Git: inspection is safe, history mutation is a write.
@@ -360,6 +362,8 @@ mod tests {
             "memory_save",
             "memory_delete",
             "propose_self_edit",
+            "vpn_control",
+            "tor_control",
         ];
         for name in tools {
             let plan = ToolPolicy::Plan.authorize(name).is_ok();

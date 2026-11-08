@@ -109,6 +109,11 @@ harness = false
 name = "smoke_vpn_tor"
 required-features = ["vpn", "tor"]
 
+[[bin]]
+name = "nanomite-vpn"
+path = "src/bin/nanomite_vpn.rs"
+required-features = ["vpn"]
+
 
 [dev-dependencies]
 tempfile = "3.15"

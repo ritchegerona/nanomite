@@ -67,6 +67,7 @@ pub mod tun;
 
 // Public re-exports for convenience
 pub use config::Config;
+pub use crypto::KeyPair;
 pub use engine::{TunnelEvent, TunnelState, VpnConfig, VpnEngine};
 pub use events::VpnEvent;
 pub use tun::TunDevice;

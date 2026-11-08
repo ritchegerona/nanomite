@@ -1,0 +1,22 @@
+theme = 12-bit Rainbow
+
+# Opacity setting (accepts values from 0.0 to 1.0)
+background-opacity = 0.75
+
+# Optional: Add a frosted-glass blur effect behind the terminal (macOS/Linux supported)
+background-blur = 10
+
+# Horizontal gap (left & right padding)
+window-padding-x = 16
+
+# Vertical gap (top & bottom padding)
+window-padding-y = 12
+
+# Optional: Keeps padding balanced across edges when resizing
+window-padding-balance = true
+
+# Specify font family (must be installed on your Mac)
+font-family = "JetBrains Mono"
+
+# Set font size in points (default is 13)
+font-size = 14

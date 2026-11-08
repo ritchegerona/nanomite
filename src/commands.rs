@@ -52,6 +52,8 @@ pub enum Command {
     Hacker,
     Learn,
     Update,
+    Vpn,
+    Tor,
 }
 
 pub struct Entry {
@@ -300,6 +302,18 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &["/upgrade"],
         hint: "check for updates and rebuild - /update check to only check (alt+shift+u)",
         kind: Command::Update,
+    },
+    Entry {
+        command: "/vpn",
+        aliases: &[],
+        hint: "control the built-in VPN: /vpn start|stop|status (alt+v)",
+        kind: Command::Vpn,
+    },
+    Entry {
+        command: "/tor",
+        aliases: &[],
+        hint: "control the built-in Tor daemon: /tor start|stop|status (alt+t)",
+        kind: Command::Tor,
     },
     Entry {
         command: "/share",

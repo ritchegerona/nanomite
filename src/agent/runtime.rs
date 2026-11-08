@@ -1399,6 +1399,14 @@ pub(crate) fn run_tool(
             let payload = serde_json::to_string(&result).unwrap_or_default();
             Ok((payload, summary))
         }
+        #[cfg(feature = "vpn")]
+        "vpn_control" => {
+            return crate::tools::privacy_tools::dispatch(call.name.as_str(), args);
+        }
+        #[cfg(feature = "tor")]
+        "tor_control" => {
+            return crate::tools::privacy_tools::dispatch(call.name.as_str(), args);
+        }
         other => {
             // External tools dispatch by name through the same gate.
             if tools.external.get(other).is_some() {
@@ -2201,7 +2209,10 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        assert_eq!(filter_disabled_schemas(schemas, &[]).len(), 26);
+        let expected = 26
+            + if cfg!(feature = "vpn") { 1 } else { 0 }
+            + if cfg!(feature = "tor") { 1 } else { 0 };
+        assert_eq!(filter_disabled_schemas(schemas, &[]).len(), expected);
     }
 
     #[test]

@@ -1953,7 +1953,7 @@ pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
         OverlayKind::Providers => (100, 22),
         OverlayKind::Connect => (100, 10),
         OverlayKind::Help => (100, 40),
-        OverlayKind::Tools => (100, 48),
+        OverlayKind::Tools => (100, 64),
         OverlayKind::Board => (100, 40),
         OverlayKind::Memory => (100, 40),
         OverlayKind::Improve => (100, 34),

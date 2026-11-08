@@ -448,7 +448,8 @@ fn describe_http_error(status: u16, body: &str) -> String {
 
 /// Tool catalogue exposed to the model.
 pub fn tool_schemas() -> Vec<Tool> {
-    vec![
+    #[allow(unused_mut)]
+    let mut schemas = vec![
         Tool::new(
             "list_files",
             "List files and directories at a path inside the workspace.",
@@ -795,7 +796,10 @@ pub fn tool_schemas() -> Vec<Tool> {
                 "additionalProperties": false
             }),
         ),
-    ]
+    ];
+    #[cfg(any(feature = "vpn", feature = "tor"))]
+    schemas.extend(crate::tools::privacy_tools::privacy_tool_schemas());
+    schemas
 }
 
 pub fn system_prompt(workspace: &str) -> String {

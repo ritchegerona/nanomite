@@ -8,6 +8,7 @@ pub mod git_tools;
 pub mod improve_tools;
 pub mod index_tools;
 pub mod memory_tools;
+pub mod privacy_tools;
 pub mod plan_tools;
 pub mod test_tools;
 

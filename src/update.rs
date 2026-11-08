@@ -82,11 +82,20 @@ pub fn run() -> io::Result<()> {
 
     let new_version = read_version(&repo).unwrap_or_else(|| current.to_string());
     step("rebuilding (release) — this can take a minute");
-    let build = std::process::Command::new("cargo")
-        .current_dir(&repo)
-        .args(["build", "--release"])
-        .status()
-        .map_err(|e| io::Error::other(format!("cargo failed to start: {e}")))?;
+    let mut build = std::process::Command::new("cargo");
+    build.current_dir(&repo).args(["build", "--release"]);
+    // Rebuild with the same optional modules the running binary was built
+    // with, so `nanomite update` never silently drops them.
+    #[allow(unused_mut)]
+    let mut features: Vec<&str> = Vec::new();
+    #[cfg(feature = "vpn")]
+    features.push("vpn");
+    #[cfg(feature = "tor")]
+    features.push("tor");
+    if !features.is_empty() {
+        build.arg("--features").arg(features.join(","));
+    }
+    let build = build.status().map_err(|e| io::Error::other(format!("cargo failed to start: {e}")))?;
     if !build.success() {
         return Err(io::Error::other(
             "cargo build --release failed — the source is updated but the binary is not; fix the build and run `cargo build --release`",
