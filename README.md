@@ -111,7 +111,9 @@ pages, and `nanomite update` to move to the next version in one command.
   run from fixed argv templates, findings persist to SQLite with hashed
   evidence and triage, named assessments can be listed/resumed/completed,
   evidence digests re-verified, and a `reporting` module summarizes or exports
-  (markdown/JSON/SARIF). Exploitation stays plan-only — no payloads
+  (markdown/JSON/SARIF). Exploitation is authorized-only — the crate plans, and
+  curated non-destructive proof execution is gated by scope + password in the
+  operator tools (no payloads, shells, persistence or destructive actions)
 - **Follow-up suggestions** — when a turn finishes, a tiny side-call asks the
   model for three short next-step prompts and pops them up above the prompt:
   `Tab` cycles, `enter` sends the highlighted one, `esc` or typing dismisses
@@ -231,6 +233,19 @@ pip install numpy scikit-learn onnxruntime llama-cpp-python pytest mypy ruff
 
 It is optional — nanomite runs without it — but HACKER MODE password-audit
 operations need it.
+
+### Operator tools (tools/)
+
+Standalone Python tools used alongside nanomite live under
+`tools/custom/<category>/` — `inventory`, `recon`, `web`, `cracking`,
+`exploitation`, `wireless`, `reporting`. They are not part of the agent tool
+catalog and are invoked through `run_command`/`ssh_run` or directly. See
+[`tools/README.md`](tools/README.md) for the catalog and
+[`tools/manifest.json`](tools/manifest.json) for the machine-readable index.
+The `exploitation/` tools are authorized-only and require an explicit scope file
+plus the local authorization password (set once with
+`python3 tools/custom/exploitation/authorize.py set`). Execution is limited to
+curated, non-destructive proof checks; no payloads, shells or persistence.
 
 ### One-line install (recommended)
 

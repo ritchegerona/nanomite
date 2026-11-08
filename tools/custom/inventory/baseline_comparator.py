@@ -22,7 +22,7 @@ If --baseline does not exist, the current inventory becomes the baseline.
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -97,7 +97,7 @@ def compare(current, baseline):
                 pass
 
     return {
-        "compared_at": datetime.utcnow().isoformat() + "Z",
+        "compared_at": datetime.now(timezone.utc).isoformat(),
         "baseline_file": None,  # filled by caller
         "current_file": None,   # filled by caller
         "summary": {

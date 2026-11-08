@@ -35,6 +35,9 @@ crack_more.log
 chunk_*.txt
 *.bak
 
+# Local tool authorization state (never commit)
+tools-auth*.json
+
 # Decrypted outputs (do not commit recovered files)
 *.xlsx
 decrypted_*.xlsx

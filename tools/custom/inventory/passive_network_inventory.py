@@ -30,15 +30,13 @@ Requirements:
 import argparse
 import json
 import os
-import sys
-from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
     from scapy.all import ARP, conf, sniff
     HAS_SCAPY = True
-except Exception:  # scapy not installed
+except Exception:  # noqa: BLE001 - scapy is optional
     HAS_SCAPY = False
 
 
@@ -60,7 +58,7 @@ def parse_arp_cache():
                             "mac": mac.lower(),
                             "interface": iface,
                             "source": "arp_cache",
-                            "timestamp": datetime.utcnow().isoformat() + "Z",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
                         })
     except FileNotFoundError:
         pass
@@ -98,7 +96,7 @@ def run_passive(iface=None, duration=None, output=None, require_root=True):
                     "mac": mac,
                     "interface": iface or conf.iface,
                     "source": "arp_sniff",
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "arp_op": int(arp.op),  # 1 = request, 2 = reply
                 }
                 add_entry(entry)
@@ -135,7 +133,7 @@ def run_passive(iface=None, duration=None, output=None, require_root=True):
 
     if output:
         data = {
-            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "interface": iface,
             "host_count": len(inventory),
             "hosts": list(inventory.values()),

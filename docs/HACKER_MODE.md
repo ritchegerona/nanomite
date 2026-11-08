@@ -7,7 +7,10 @@
 > authorization gate, an assessment scope, an append-only audit trail, and a
 > module registry on top of the existing nanomite agent runtime.
 >
-> Exploitation is **plan-only** (no payloads, no compromise automation).
+> Exploitation is **authorized-only**: the crate plans validation, and proof
+> execution is available only through the password+scope-gated operator runner
+> (`tools/custom/exploitation/exploit_runner.py`). No payloads, shells,
+> persistence or destructive actions are part of the crate.
 > HACKER MODE is **disabled by default**.
 
 ## Entering it
@@ -148,9 +151,12 @@ Execution properties:
 - **Honest.** `vuln` reports `Suspected (version-only)` and says "no
   vulnerability database configured" rather than implying there are none; a
   version match is never `Confirmed`.
-- **No weaponization.** `exploitation/plan` produces guidance (verification
-  steps, evidence checklist) only. It contains no exploit code, payloads,
-  shells, persistence, credential attacks or automation of compromise.
+- **Authorized-only execution.** `exploitation/plan` produces guidance
+  (verification steps, evidence checklist) only. Actual proof execution lives in
+  `tools/custom/exploitation/exploit_runner.py`, is non-destructive by design
+  (reads/evidence only), and requires a scope file plus the local authorization
+  password. It contains no shells, payload delivery, persistence or automation
+  of compromise.
 
 ## The 12 modules
 
@@ -158,16 +164,18 @@ Execution properties:
 `password`, `wireless`, `exploitation`, `post-exploitation`, `reporting`.
 
 Five modules execute operations (`recon`, `network`, `web`, `vuln`,
-`reporting`), `exploitation` provides the plan operation, and `kali` bridges
-installed assessment tools. The rest remain descriptors until their phase lands.
+`reporting`), `exploitation` provides the plan operation (with authorized-only
+execution in the operator tools), and `kali` bridges installed assessment tools.
+The rest remain descriptors until their phase lands.
 
 ## Not (yet) implemented
 
 - No authenticated enumeration, password auditing, wireless work or
   post-exploitation.
-- No exploit execution of any kind. Confirmation, PoC tooling and any
-  potentially disruptive validation stay outside this crate; wire your own
-  authorized framework in as an external tool instead.
+- No exploit execution inside the crate. Proof execution is deliberately
+  external: `tools/custom/exploitation/exploit_runner.py` performs curated,
+  non-destructive checks only after scope + password verification. Wire your own
+  authorized framework in for anything beyond that.
 
 ## Kali bridge (`kali/run`)
 

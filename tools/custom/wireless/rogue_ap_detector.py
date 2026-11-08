@@ -20,8 +20,8 @@ Usage:
   3. Review console output and rogue_ap_alerts.log
 """
 
-import subprocess
 import re
+import subprocess
 import sys
 from datetime import datetime
 
@@ -49,6 +49,7 @@ def scan_aps(interface: str):
         result = subprocess.run(
             ["iwlist", interface, "scan"],
             capture_output=True,
+            check=False,
             text=True,
             timeout=30,
         )

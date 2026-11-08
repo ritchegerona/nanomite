@@ -80,13 +80,21 @@ authorizing the address, but the fetch/connect is later done by the HTTP client
 / socket, which resolves again — a full TOCTOU guarantee would require pinning
 the connection to the checked address, which reqwest does not expose here.
 
-### Exploitation is plan-only
+### Exploitation is authorized-only
 
-`exploitation/plan` is a guidance generator: verification steps and an evidence
-checklist for a named weakness class. It contains **no exploit code, payloads,
-shells, persistence, credential attacks, or automation of compromise**, and its
-tests assert those terms are absent from the output. It is still classified
-`Intrusive`/`critical`, so it needs a target inside the assessment.
+`exploitation/plan` remains a guidance generator: verification steps and an
+evidence checklist for a named weakness class. It contains **no exploit code,
+payloads, shells, persistence, credential attacks, or automation of compromise**,
+and its tests assert those terms are absent from the output. It is still
+classified `Intrusive`/`critical`, so it needs a target inside the assessment.
+
+Execution is **authorized-only** and deliberately external to the crate:
+`tools/custom/exploitation/exploit_runner.py` performs curated, non-destructive
+proof-of-access checks (traversal read, exposed-file retrieval, anonymous/default
+login, unauthenticated service reads). It requires the target to be inside a
+scope file **and** the local authorization password to verify (salted PBKDF2
+digest, 0600). It captures evidence metadata only — no payload delivery, shells,
+persistence, target writes or destructive actions.
 
 ## Kali bridge (`kali/run`)
 

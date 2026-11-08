@@ -2,7 +2,6 @@
 """Generate PDF and DOCX from the markdown report."""
 
 import re
-import subprocess
 from pathlib import Path
 
 MD_PATH = Path("/home/ritche/mailforen/report/FULL_ENUMERATION_REPORT.md")
@@ -130,7 +129,6 @@ def md_to_html(md_text):
             # Skip separator row (| --- | --- |)
             if all(set(c) <= set('-: ') for c in cells):
                 continue
-            is_header = all(not c.startswith('<') for c in cells) and not table_html[-1].startswith('<table>') or len(table_html) == 1
             tag = 'th' if len(table_html) == 1 else 'td'
             row = '<tr>' + ''.join(f'<{tag}>{cell}</{tag}>' for cell in cells) + '</tr>'
             table_html.append(row)
@@ -180,8 +178,7 @@ def convert_to_pdf(html_path, pdf_path):
 def convert_to_docx(md_path, docx_path):
     """Convert markdown to DOCX using python-docx."""
     from docx import Document
-    from docx.shared import Pt, Inches, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Inches, Pt, RGBColor
 
     doc = Document()
 
@@ -194,7 +191,6 @@ def convert_to_docx(md_path, docx_path):
         lines = f.readlines()
 
     i = 0
-    in_table = False
     table_data = []
 
     while i < len(lines):
@@ -251,8 +247,8 @@ def convert_to_docx(md_path, docx_path):
                             run.font.bold = True
                             run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
                     # Shade header
-                    from docx.oxml.ns import qn
                     from docx.oxml import OxmlElement
+                    from docx.oxml.ns import qn
                     tcPr = hdr[j]._tc.get_or_add_tcPr()
                     shd = OxmlElement('w:shd')
                     shd.set(qn('w:val'), 'clear')
@@ -320,10 +316,10 @@ def main():
     # Cleanup temp HTML
     html_path.unlink()
 
-    print(f"\n[+] All reports generated in /home/ritche/mailforen/report/")
-    print(f"    - FULL_ENUMERATION_REPORT.md")
-    print(f"    - FULL_ENUMERATION_REPORT.pdf")
-    print(f"    - FULL_ENUMERATION_REPORT.docx")
+    print("\n[+] All reports generated in /home/ritche/mailforen/report/")
+    print("    - FULL_ENUMERATION_REPORT.md")
+    print("    - FULL_ENUMERATION_REPORT.pdf")
+    print("    - FULL_ENUMERATION_REPORT.docx")
 
 
 if __name__ == '__main__':

@@ -1,0 +1,67 @@
+{
+  "manifest_version": 1,
+  "description": "Standalone operator tools bundled with NANOMITE. Not part of the agent tool catalog.",
+  "authorization_required": true,
+  "authorization": {
+    "mechanism": "local root (sudo) password verified by sudo; nothing stored",
+    "manager": "exploitation/authorize.py",
+    "password_env": "NANOMITE_ROOT_PASSWORD",
+    "legacy_password_env": "NANOMITE_TOOLS_AUTH_PASSWORD",
+    "config_env": "NANOMITE_TOOLS_AUTH",
+    "lockout": "none (sudo-side)"
+  },
+  "categories": {
+    "inventory": {
+      "purpose": "Host discovery and baseline drift detection",
+      "tools": [
+        {"name": "passive_network_inventory.py", "origin": "built", "summary": "Passive ARP inventory of the local subnet; ARP-cache fallback for non-root."},
+        {"name": "baseline_comparator.py", "origin": "built", "summary": "Diff current inventory vs baseline; flags new hosts, MAC changes, removals."}
+      ]
+    },
+    "recon": {
+      "purpose": "Port scanning and DNS enumeration",
+      "tools": [
+        {"name": "port_scanner.py", "origin": "built", "summary": "Concurrent TCP connect scan with optional banner grabbing; CIDR/target-file input, JSON output."},
+        {"name": "subdomain_enum.py", "origin": "built", "summary": "DNS brute-force subdomain enumeration with wildcard detection."}
+      ]
+    },
+    "web": {
+      "purpose": "Web misconfiguration scanning, content discovery, TLS audit",
+      "tools": [
+        {"name": "web_vuln_scan.py", "origin": "built", "summary": "Read-only scan of headers, cookies, CORS, methods, exposed paths, listing, version disclosure, TLS."},
+        {"name": "dir_buster.py", "origin": "built", "summary": "Content discovery with wildcard/soft-404 filtering and extension expansion."},
+        {"name": "tls_audit.py", "origin": "built", "summary": "Protocol support, negotiated cipher, certificate subject/SAN/expiry."}
+      ]
+    },
+    "cracking": {
+      "purpose": "Hash identification, offline cracking, wordlist generation",
+      "tools": [
+        {"name": "hash_identifier.py", "origin": "built", "summary": "Identify hash formats from prefix/shape."},
+        {"name": "hash_cracker.py", "origin": "built", "summary": "Multiprocessing dictionary cracker (MD5/SHA*/NTLM/crypt) with mutation rules."},
+        {"name": "wordlist_generator.py", "origin": "built", "summary": "Case/leet/suffix wordlist mutations bounded by length and count."}
+      ]
+    },
+    "exploitation": {
+      "purpose": "Authorized-only exploitation (runner + planner) and default-credential hygiene",
+      "tools": [
+        {"name": "authorize.py", "origin": "built", "summary": "Verify the local root (sudo) password via sudo; nothing is stored or logged."},
+        {"name": "exploit_runner.py", "origin": "built", "summary": "Authorized-only, non-destructive proof-of-access checks (traversal read, exposed files, default creds, unauth Redis, anon FTP) with evidence metadata.", "authorization_gate": true, "executes": true},
+        {"name": "exploit_planner.py", "origin": "built", "summary": "Planning surface: maps services/findings to techniques, detection steps, evidence, references.", "authorization_gate": true},
+        {"name": "default_cred_check.py", "origin": "built", "summary": "Small fixed default-credential list against HTTP Basic/FTP, rate-limited, masked.", "authorization_gate": true, "executes": true}
+      ]
+    },
+    "wireless": {
+      "purpose": "Wi-Fi rogue-AP detection and wifite wrapper",
+      "tools": [
+        {"name": "rogue_ap_detector.py", "origin": "built", "summary": "Compare nearby APs against an authorized SSID->BSSID allow-list."},
+        {"name": "wifite_py3_minimal.py", "origin": "third-party wrapper (stub)", "summary": "Minimal Python 3 placeholder for wifite; points to upstream."}
+      ]
+    },
+    "reporting": {
+      "purpose": "Report rendering",
+      "tools": [
+        {"name": "generate_report.py", "origin": "built", "summary": "Render a Markdown report to PDF/DOCX (scenario-specific hardcoded paths)."}
+      ]
+    }
+  }
+}
