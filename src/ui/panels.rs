@@ -789,6 +789,24 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
                 ));
             }
         }
+        // Right-side opencode-style Free/Fast badge: local/flash/nano/mini
+        // runtimes get a quiet label, everything else shows nothing here.
+        let badge = match &item.value {
+            PickerValue::ProviderModel { model, .. }
+            | PickerValue::Model(model) => {
+                let provider = match &item.value {
+                    PickerValue::ProviderModel { provider, .. } => provider.as_str(),
+                    _ => app.cfg.preset.as_str(),
+                };
+                let offline = false;
+                model_badge(provider, model, offline)
+            }
+            _ => String::new(),
+        };
+        if !badge.is_empty() {
+            spans.push(Span::styled("  ", theme.faint_style()));
+            spans.push(Span::styled(format!("[{badge}]"), theme.faint_style()));
+        }
         lines.push(Line::from(spans));
     }
 
