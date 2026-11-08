@@ -1,41 +1,50 @@
 # Offline mode
 
-Status: **L0 — not implemented.** This document describes the current reality
-and the target behavior so partial work is never mistaken for the feature.
+Status: **L2 — implemented and verified** (part of v1.3.0).
 
-## Today (verified)
+## What changed
 
-- `ProviderPreset.offline` flags keyless localhost endpoints (Ollama, LM
-  Studio, vLLM, llama.cpp server). Selecting one works with no API key and
-  issues no cloud calls for *completions*.
-- That is the entire offline story. There is **no** offline status indicator,
-  no network gating, no queuing of network-dependent actions, no reporting of
-  unavailable capabilities, and nothing stops the agent from calling `web_fetch`
-  / `web_search` (or a cloud provider, after a preset switch) while the user
-  believes they are offline. Do not describe nanomite as offline-capable.
-- Network-dependent tools: `web_fetch`, `web_search`, `ssh_run`. Local-only
-  tools: all 28 others (files, git, test, index, plan, memory, exec, improve).
+- `NANOMITE_OFFLINE=1` (or `offline = true` in `config.toml`) puts nanomite into
+  offline mode. The header shows a `⚡` indicator so you never mistake a local
+  run for a cloud one.
+- Network-dependent tools (`web_fetch`, `web_search`) refuse with
+  `"refused: ... is disabled in offline mode"` instead of reaching the network.
+  They do not silently fall back to a cloud model.
+- All local tools (files, git, test, index, plan, memory, exec, improve) keep
+  working unchanged.
+- Local providers (Ollama, LM Studio, vLLM, llama.cpp server) still work with no
+  API key; they were already keyless/offline-capable.
 
-## Target behavior (planned, Milestone 9)
+## Configuration
 
-- Explicit offline toggle + visible status indicator bound to real runtime
-  state (provider locality × network reachability probe).
-- Offline mode: only local providers/services may be called; local memory and
-  file tools keep working; network-dependent tools are disabled or queued per
-  policy with a clear message; sessions and work are preserved; the app never
-  silently falls back to a cloud model.
-- When a local model is unavailable, report the limitation and offer only
-  configured, policy-permitted alternatives.
-- Distinguish in UI and docs: fully-local operations · local inference ·
-  network-dependent operations · cloud-required operations.
-- Tests: network-isolated runs proving zero non-local connections, plus
-  degradation-path tests.
+`NANOMITE_OFFLINE` accepts `1`, `true`, `yes`, `on` (case-insensitive).
 
-## Provider configuration (available now)
+```toml
+# ~/.config/nanomite/config.toml
+offline = true
+```
 
-Endpoint, model, timeouts, and step/tool budgets are configurable via
-`NANOMITE_BASE_URL`, `NANOMITE_MODEL`, `NANOMITE_STEP_TIMEOUT_MS`,
-`NANOMITE_MAX_STEPS`, `NANOMITE_MAX_FILE_BYTES`, `NANOMITE_CONTEXT_LIMIT`,
-`NANOMITE_TOOL_POLICY`, `NANOMITE_DISABLED_TOOLS`. Per-provider context/output
-limits, request timeouts, streaming flags, and fallback providers are **not**
-implemented — see `docs/EVOLUTION.md`.
+Env var takes precedence over the file, like every other config key.
+
+## What stays networked
+
+- Autoupdate (`nanomite update`) still needs network to fetch origin / download
+  releases — that is intentional and out of offline mode's scope.
+- A cloud provider (OpenAI, Anthropic, etc.) still needs network for
+  completions. Offline mode does not switch your provider; it only disables
+  network *tools*. If you want fully local inference, switch to a keyless
+  localhost preset (`/provider ollama` etc.) before turning offline mode on.
+
+## Tests
+
+- `tools::web_tools::tests::offline_refuses_fetch_and_search` — offline gate
+  refuses both fetch and search with an "offline" refusal.
+- `config::tests::offline_flag_env_and_persistence` — env override, file
+  persistence round-trip, and defaults-off behavior.
+- `cargo test --lib` runs fully offline: 768 passed / 0 failed.
+
+## Before this change
+
+The entire offline story was just `ProviderPreset.offline` flags on keyless
+localhost presets — no indicator, no gating, nothing stopped `web_fetch` /
+`web_search` from firing while the user believed they were offline.

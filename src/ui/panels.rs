@@ -101,6 +101,16 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
             },
         ),
         Span::styled(
+            if app.cfg.offline {
+                format!(" {} ", glyph::OFFLINE)
+            } else {
+                String::new()
+            },
+            Style::default()
+                .fg(theme.warn())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
             model,
             theme.dim().add_modifier(Modifier::DIM).fg(theme.accent()),
         ),

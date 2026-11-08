@@ -237,19 +237,18 @@ mod tests {
     /// The catalog is the single inventory: names must be unique.
     #[test]
     fn catalog_names_are_unique() {
-    let mut names: Vec<&'static str> = ToolSet::catalog().into_iter().map(|s| s.name).collect();
-    let count = names.len();
-    names.sort_unstable();
-    names.dedup();
-    assert_eq!(names.len(), count, "duplicate tool names in catalog");
-    let expected = 34usize
-        + if cfg!(feature = "vpn") { 1 } else { 0 }
-        + if cfg!(feature = "tor") { 1 } else { 0 };
-    assert_eq!(
-        count,
-        expected,
-        "expected the full tool inventory ({expected})"
-    );
+        let mut names: Vec<&'static str> = ToolSet::catalog().into_iter().map(|s| s.name).collect();
+        let count = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), count, "duplicate tool names in catalog");
+        let expected = 34usize
+            + if cfg!(feature = "vpn") { 1 } else { 0 }
+            + if cfg!(feature = "tor") { 1 } else { 0 };
+        assert_eq!(
+            count, expected,
+            "expected the full tool inventory ({expected})"
+        );
     }
 
     /// Catalog and schemas must stay in step: the exact name set the model

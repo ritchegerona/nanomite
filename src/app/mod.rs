@@ -9,7 +9,6 @@ use crate::board::engine::{BoardEngine, CancelFlag};
 use crate::board::store::{BoardMessage, BoardStore};
 use crate::commands::{self, Command};
 use crate::config::{find_preset, host_of, Config, ProviderKind, ProviderPreset, PRESETS};
-use privacy::PrivacyEvent;
 use crate::improve::{
     Actor, ApplyOutcome, CargoTestRunner, ImproveEngine, RegressionRunner, Roots, Status, Target,
 };
@@ -21,6 +20,7 @@ use crate::ui::composer::Composer;
 use crate::ui::theme::Theme;
 use crate::ui::theme::ThemeId;
 use crate::ui::View;
+use privacy::PrivacyEvent;
 use ratatui::text::Line;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -2510,6 +2510,7 @@ impl App {
                 max_message_chars: 200_000,
                 provider: format!("{:?}", cfg.provider).to_string(),
                 model: cfg.model.clone(),
+                offline: cfg.offline,
             }),
         )
         // Config-loaded disables (file or NANOMITE_DISABLED_TOOLS) take effect
@@ -9454,8 +9455,7 @@ mod tests {
     async fn autoupdate_disabled_skips_check() {
         let mut cfg = test_config();
         cfg.autoupdate = "false".to_string();
-        let mut app = App::new(cfg, tokio::runtime::Handle::current())
-            .expect("app");
+        let mut app = App::new(cfg, tokio::runtime::Handle::current()).expect("app");
         // autoupdate=``false`` must short-circuit before any git invocation.
         let result = app.check_for_updates_on_startup();
         assert!(result.is_ok());
@@ -9470,8 +9470,7 @@ mod tests {
         for mode in ["notify", "true"] {
             let mut cfg = test_config();
             cfg.autoupdate = mode.to_string();
-            let mut app = App::new(cfg, tokio::runtime::Handle::current())
-                .expect("app");
+            let mut app = App::new(cfg, tokio::runtime::Handle::current()).expect("app");
             let result = app.check_for_updates_on_startup();
             assert!(result.is_ok(), "mode {mode} must not error");
             assert!(

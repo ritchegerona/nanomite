@@ -54,7 +54,9 @@ pub fn dispatch(call_name: &str, _args: Value) -> Result<(String, String), Strin
             let parsed: VpnControlArgs = serde_json::from_value(_args)
                 .map_err(|e| format!("bad vpn_control arguments: {e}"))?;
             let text = match parsed.action.trim().to_ascii_lowercase().as_str() {
-                "start" => crate::privacy::vpn::start_blocking(parsed.config_path.as_deref().map(Path::new))?,
+                "start" => crate::privacy::vpn::start_blocking(
+                    parsed.config_path.as_deref().map(Path::new),
+                )?,
                 "stop" => crate::privacy::vpn::stop_blocking()?,
                 "status" => crate::privacy::vpn::status_blocking()?,
                 other => {
@@ -70,7 +72,9 @@ pub fn dispatch(call_name: &str, _args: Value) -> Result<(String, String), Strin
             let parsed: TorControlArgs = serde_json::from_value(_args)
                 .map_err(|e| format!("bad tor_control arguments: {e}"))?;
             let text = match parsed.action.trim().to_ascii_lowercase().as_str() {
-                "start" => crate::privacy::tor::start_blocking(parsed.data_dir.as_deref().map(Path::new))?,
+                "start" => {
+                    crate::privacy::tor::start_blocking(parsed.data_dir.as_deref().map(Path::new))?
+                }
                 "stop" => crate::privacy::tor::stop_blocking()?,
                 "status" => crate::privacy::tor::status_blocking()?,
                 other => {

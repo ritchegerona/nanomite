@@ -56,7 +56,10 @@ struct Runtime {
 static RUNTIME: OnceLock<Mutex<Option<Runtime>>> = OnceLock::new();
 
 fn state_guard() -> std::sync::MutexGuard<'static, Option<Runtime>> {
-    RUNTIME.get_or_init(|| Mutex::new(None)).lock().expect("vpn lock poisoned")
+    RUNTIME
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .expect("vpn lock poisoned")
 }
 
 /// Start (or report an already-running) VPN engine.
@@ -71,8 +74,9 @@ pub async fn start(config_path: Option<&Path>) -> Result<String, String> {
     }
 
     let config = match config_path {
-        Some(path) => Config::from_file(path)
-            .map_err(|e| format!("failed to load vpn config: {e}"))?,
+        Some(path) => {
+            Config::from_file(path).map_err(|e| format!("failed to load vpn config: {e}"))?
+        }
         None => Config::default_config_path()
             .ok()
             .and_then(|path| path.is_file().then_some(path))
@@ -95,9 +99,7 @@ pub async fn start(config_path: Option<&Path>) -> Result<String, String> {
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<TunnelEvent>();
     engine.set_event_channel(event_tx);
-    let _drain = tokio::spawn(async move {
-        while event_rx.recv().await.is_some() {}
-    });
+    let _drain = tokio::spawn(async move { while event_rx.recv().await.is_some() {} });
 
     let bind_addr = SocketAddr::from(([0, 0, 0, 0], listen_port));
     engine
@@ -243,15 +245,15 @@ mod tests {
     #[test]
     fn runtime_handle_is_available_in_spawn_blocking() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ok = rt
-            .block_on(async {
-                tokio::task::spawn_blocking(|| {
-                    tokio::runtime::Handle::try_current().is_ok()
-                })
+        let ok = rt.block_on(async {
+            tokio::task::spawn_blocking(|| tokio::runtime::Handle::try_current().is_ok())
                 .await
                 .unwrap()
-            });
-        assert!(ok, "tool calls run in spawn_blocking and need the runtime handle");
+        });
+        assert!(
+            ok,
+            "tool calls run in spawn_blocking and need the runtime handle"
+        );
     }
 
     #[test]

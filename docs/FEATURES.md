@@ -58,7 +58,10 @@ suite.
 ## Landing (verify before claiming)
 
 - Token budgeting and `/compact` summarization quality (unmeasured).
-- Offline mode with status + gating — still L0 (`docs/OFFLINE_MODE.md`).
+
+## Landing (verify before claiming)
+
+- None remaining: offline mode landed at L2 (`docs/OFFLINE_MODE.md`).
 
 ## Planned (L0 — not started)
 

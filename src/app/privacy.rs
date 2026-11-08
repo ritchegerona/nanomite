@@ -40,10 +40,14 @@ pub(crate) fn run_vpn(this: &mut App, args: &str) {
         let action_for_toast = _action.clone();
         this.handle.spawn_blocking(move || {
             let result = match _action.as_str() {
-                "start" => crate::privacy::vpn::start_blocking(_config_path.as_deref().map(Path::new)),
+                "start" => {
+                    crate::privacy::vpn::start_blocking(_config_path.as_deref().map(Path::new))
+                }
                 "stop" => crate::privacy::vpn::stop_blocking(),
                 "status" => crate::privacy::vpn::status_blocking(),
-                other => Err(format!("unknown /vpn subcommand `{other}` - try start|stop|status|help")),
+                other => Err(format!(
+                    "unknown /vpn subcommand `{other}` - try start|stop|status|help"
+                )),
             };
             let _ = tx.send(PrivacyEvent::Done {
                 module,
@@ -56,7 +60,9 @@ pub(crate) fn run_vpn(this: &mut App, args: &str) {
     }
     #[cfg(not(feature = "vpn"))]
     {
-        this.toast("vpn module not compiled in - rebuild with `cargo build --release --features vpn`");
+        this.toast(
+            "vpn module not compiled in - rebuild with `cargo build --release --features vpn`",
+        );
     }
     this.mark_dirty();
 }
@@ -83,7 +89,9 @@ pub(crate) fn run_tor(this: &mut App, args: &str) {
                 "start" => crate::privacy::tor::start_blocking(_data_dir.as_deref().map(Path::new)),
                 "stop" => crate::privacy::tor::stop_blocking(),
                 "status" => crate::privacy::tor::status_blocking(),
-                other => Err(format!("unknown /tor subcommand `{other}` - try start|stop|status|help")),
+                other => Err(format!(
+                    "unknown /tor subcommand `{other}` - try start|stop|status|help"
+                )),
             };
             let _ = tx.send(PrivacyEvent::Done {
                 module,
@@ -96,7 +104,9 @@ pub(crate) fn run_tor(this: &mut App, args: &str) {
     }
     #[cfg(not(feature = "tor"))]
     {
-        this.toast("tor module not compiled in - rebuild with `cargo build --release --features tor`");
+        this.toast(
+            "tor module not compiled in - rebuild with `cargo build --release --features tor`",
+        );
     }
     this.mark_dirty();
 }
@@ -107,12 +117,17 @@ impl App {
     pub(crate) fn apply_privacy_event(&mut self, event: PrivacyEvent) {
         match event {
             PrivacyEvent::Notice(text) => self.toast(text),
-            PrivacyEvent::Done { module, action, ok, text } => {
+            PrivacyEvent::Done {
+                module,
+                action,
+                ok,
+                text,
+            } => {
                 let prefix = if ok { "ok" } else { "error" };
-            self.entries.push(Entry::new(
-                EntryRole::System,
-                format!("[{module}] {action}: {prefix} - {text}"),
-            ));
+                self.entries.push(Entry::new(
+                    EntryRole::System,
+                    format!("[{module}] {action}: {prefix} - {text}"),
+                ));
                 self.toast(format!("[{module}] {action} - {text}"));
             }
         }

@@ -601,6 +601,8 @@ pub mod glyph {
     pub const BLOCK_LIGHT: &str = "░";
     /// Brain glyph for context window display.
     pub const BRAIN: &str = "🧠";
+    /// Offline indicator shown in the header when NANOMITE_OFFLINE=1.
+    pub const OFFLINE: &str = "⚡";
 }
 
 #[cfg(test)]

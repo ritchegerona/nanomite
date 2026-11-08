@@ -95,7 +95,9 @@ pub fn run() -> io::Result<()> {
     if !features.is_empty() {
         build.arg("--features").arg(features.join(","));
     }
-    let build = build.status().map_err(|e| io::Error::other(format!("cargo failed to start: {e}")))?;
+    let build = build
+        .status()
+        .map_err(|e| io::Error::other(format!("cargo failed to start: {e}")))?;
     if !build.success() {
         return Err(io::Error::other(
             "cargo build --release failed — the source is updated but the binary is not; fix the build and run `cargo build --release`",

@@ -17,7 +17,7 @@ use tempfile::TempDir;
 #[tokio::test]
 async fn tool_set_file_operations() {
     let tmp = TempDir::new().unwrap();
-    let tools = ToolSet::new(tmp.path().to_path_buf(), 4 * 1024 * 1024);
+    let tools = ToolSet::new(tmp.path().to_path_buf(), 4 * 1024 * 1024, false);
 
     // Write file
     let result = tools
@@ -86,7 +86,7 @@ async fn tool_set_file_operations() {
 #[tokio::test]
 async fn tool_set_exec_operations() {
     let tmp = TempDir::new().unwrap();
-    let tools = ToolSet::new(tmp.path().to_path_buf(), 4 * 1024 * 1024);
+    let tools = ToolSet::new(tmp.path().to_path_buf(), 4 * 1024 * 1024, false);
 
     // Run a simple command
     let result = tools
@@ -200,7 +200,7 @@ async fn config_from_env() {
 #[tokio::test]
 async fn document_extraction_text() {
     let tmp = TempDir::new().unwrap();
-    let tools = ToolSet::new(tmp.path().to_path_buf(), 4 * 1024 * 1024);
+    let tools = ToolSet::new(tmp.path().to_path_buf(), 4 * 1024 * 1024, false);
 
     // Create a text file
     std::fs::write(tmp.path().join("doc.txt"), "Hello, world!\nThis is a test.").unwrap();

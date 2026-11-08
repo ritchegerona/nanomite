@@ -159,10 +159,21 @@ fn strip_tags(s: &str) -> String {
 }
 
 #[derive(Clone)]
-pub struct WebTools;
+pub struct WebTools {
+    /// When true, fetch/search/browse/screenshot refuse instead of reaching
+    /// the network.
+    pub offline: bool,
+}
 
 impl WebTools {
+    pub fn new(offline: bool) -> Self {
+        Self { offline }
+    }
+
     pub fn fetch(&self, args: WebFetchArgs) -> Result<WebFetchResult, String> {
+        if self.offline {
+            return Err("refused: web_fetch is disabled in offline mode".into());
+        }
         let url = args.url.trim().to_string();
         if !(url.starts_with("http://") || url.starts_with("https://")) {
             return Err("refused: only http(s) URLs are allowed".into());
@@ -193,6 +204,9 @@ impl WebTools {
     }
 
     pub fn search(&self, args: WebSearchArgs) -> Result<WebSearchResult, String> {
+        if self.offline {
+            return Err("refused: web_search is disabled in offline mode".into());
+        }
         let query = args.query.trim().to_string();
         if query.is_empty() {
             return Err("refused: empty query".into());
@@ -292,7 +306,7 @@ mod tests {
 
     #[test]
     fn refuses_non_http_schemes_and_empty_queries() {
-        let web = WebTools;
+        let web = WebTools::new(false);
         assert!(web
             .fetch(WebFetchArgs {
                 url: "ftp://example.com".into(),
@@ -308,6 +322,27 @@ mod tests {
                 query: "   ".into(),
             })
             .is_err());
+    }
+
+    #[test]
+    fn offline_refuses_fetch_and_search() {
+        let web = WebTools::new(true);
+        assert!(web
+            .fetch(WebFetchArgs {
+                url: "https://example.com".into(),
+            })
+            .is_err());
+        assert!(web
+            .search(WebSearchArgs {
+                query: "test".into(),
+            })
+            .is_err());
+        let err = web
+            .fetch(WebFetchArgs {
+                url: "https://example.com".into(),
+            })
+            .unwrap_err();
+        assert!(err.contains("offline"), "{err}");
     }
 
     #[test]

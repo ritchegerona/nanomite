@@ -663,6 +663,11 @@ pub struct Config {
     /// Auto-update behavior: "notify" = check and notify on startup, "true" = check and prompt, "false" = disabled.
     /// Environment variable: NANOMITE_AUTOUPDATE (values: "notify", "true", "false")
     pub autoupdate: String,
+    /// Offline mode: when true, network-dependent tools (web_fetch, web_search,
+    /// ssh_run) refuse instead of reaching the network. The UI shows an
+    /// offline indicator so the user never mistakes a local run for a cloud one.
+    /// Environment variable: NANOMITE_OFFLINE (values: "1", "true", "yes", "on")
+    pub offline: bool,
 }
 
 /// The subset of settings persisted to disk; everything else stays env-driven.
@@ -699,6 +704,7 @@ struct Stored {
     learning_topic: Option<String>,
     // auto-update setting
     autoupdate: Option<String>,
+    offline: Option<bool>,
 }
 
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
@@ -775,6 +781,7 @@ fn parse_stored(text: &str) -> Stored {
                 "compact" => stored.compact = parse_bool_opt(&value),
                 "confirm_external" => stored.confirm_external = parse_bool_opt(&value),
                 "autoupdate" => stored.autoupdate = Some(value),
+                "offline" => stored.offline = parse_bool_opt(&value),
                 _ => {}
             },
             _ => {}
@@ -888,6 +895,7 @@ fn stored_text(cfg: &Config) -> String {
     if !cfg.confirm_external {
         lines.push("confirm_external = false".to_string());
     }
+    lines.push(format!("offline = {}", cfg.offline));
     lines.push(String::new());
     // Favorite models. A `[model]` section keeps the table explicit; the list
     // is quoted CSV so a model id containing a comma still round-trips.
@@ -930,6 +938,9 @@ fn stored_text(cfg: &Config) -> String {
         }
     }
     lines.push(String::new());
+    // Auto-update behavior.
+    lines.push(format!("autoupdate = {}", quote(&cfg.autoupdate)));
+    lines.push(String::new());
     // Daily learning loop. Off by default (each session spends model tokens);
     // `/learn daily on` flips it, `topic` pins a subject instead of rotating.
     lines.push("[learn]".to_string());
@@ -937,10 +948,6 @@ fn stored_text(cfg: &Config) -> String {
     if let Some(topic) = &cfg.learning_topic {
         lines.push(format!("topic = {}", quote(topic)));
     }
-    lines.push(String::new());
-    // Auto-update behavior. Its own top-level key: writing it after the
-    // `[learn]` header used to file it under that section on reload.
-    lines.push(format!("autoupdate = {}", quote(&cfg.autoupdate)));
     lines.push(String::new());
     lines.join("\n")
 }
@@ -1304,6 +1311,11 @@ impl Config {
                     .as_ref()
                     .cloned()
                     .unwrap_or_else(|| "notify".to_string())
+            },
+            offline: if use_env {
+                parse_bool(&first_env_one("NANOMITE_OFFLINE").unwrap_or_default())
+            } else {
+                stored.offline.unwrap_or(false)
             },
             hacker,
         }
@@ -1946,5 +1958,36 @@ mod tests {
 
         // Unknown model gets default
         assert_eq!(model_context_limit("unknown-model-xyz"), 8_192);
+    }
+
+    #[test]
+    fn offline_flag_env_and_persistence() {
+        // File only -> offline off by default.
+        let path =
+            std::env::temp_dir().join(format!("nanomite-offline-{}.toml", std::process::id()));
+        fs::write(&path, "model = \"gpt-4o-mini\"\n").expect("write config");
+        let cfg = Config::load_from(&path);
+        assert!(!cfg.offline, "offline defaults off");
+        let _ = fs::remove_file(&path);
+
+        // File value round-trips.
+        let mut cfg = Config::from_env();
+        cfg.offline = true;
+        let path =
+            std::env::temp_dir().join(format!("nanomite-offline-{}.toml", std::process::id()));
+        cfg.store_path = Some(path.clone());
+        cfg.save_to(&path);
+        let loaded = Config::load_from(&path);
+        assert!(loaded.offline, "offline persists through save/load");
+        let _ = fs::remove_file(&path);
+
+        // Environment overrides file: load() reads NANOMITE_CONFIG.
+        std::env::set_var("NANOMITE_CONFIG", &path);
+        std::env::set_var("NANOMITE_OFFLINE", "1");
+        let env_cfg = Config::load();
+        assert!(env_cfg.offline, "NANOMITE_OFFLINE=1 wins through load()");
+        std::env::remove_var("NANOMITE_OFFLINE");
+        std::env::remove_var("NANOMITE_CONFIG");
+        let _ = fs::remove_file(&path);
     }
 }

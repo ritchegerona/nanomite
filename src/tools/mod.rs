@@ -8,8 +8,8 @@ pub mod git_tools;
 pub mod improve_tools;
 pub mod index_tools;
 pub mod memory_tools;
-pub mod privacy_tools;
 pub mod plan_tools;
+pub mod privacy_tools;
 pub mod test_tools;
 
 pub mod web_tools;
@@ -50,14 +50,17 @@ pub struct ToolSet {
     /// Anchor paths the engine validates against. Travels with the engine so
     /// tool dispatch needs nothing from the runtime.
     pub improve_roots: Option<crate::improve::Roots>,
+    /// Offline mode: when true, network tools refuse instead of reaching the
+    /// network.
+    pub offline: bool,
 }
 
 impl ToolSet {
-    pub fn new(workspace: std::path::PathBuf, max_file_bytes: usize) -> Self {
+    pub fn new(workspace: std::path::PathBuf, max_file_bytes: usize, offline: bool) -> Self {
         Self {
             files: crate::tools::file_tools::FileTools::new(workspace.clone(), max_file_bytes),
             exec: crate::tools::exec_tools::ExecTools::new(workspace.clone()),
-            web: crate::tools::web_tools::WebTools,
+            web: crate::tools::web_tools::WebTools::new(offline),
             browser: crate::tools::browser_tools::BrowserTools::new(workspace.clone()),
             documents: crate::tools::document_tools::DocumentTools::new(
                 workspace.clone(),
@@ -71,6 +74,7 @@ impl ToolSet {
             index: crate::tools::index_tools::IndexTools::new(workspace.clone()),
             plan: crate::tools::plan_tools::PlanTools::new(workspace.clone()),
             improve_roots: None,
+            offline,
         }
     }
 }

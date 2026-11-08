@@ -5,10 +5,7 @@
 //! waits for bootstrap, and keeps the [`TorController`] alive. [`stop`]
 //! shuts the daemon down.
 
-use crate::nanomite_tor::{
-    config::TorConfig,
-    TorController,
-};
+use crate::nanomite_tor::{config::TorConfig, TorController};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -32,7 +29,10 @@ struct Runtime {
 static RUNTIME: OnceLock<Mutex<Option<Runtime>>> = OnceLock::new();
 
 fn state_guard() -> std::sync::MutexGuard<'static, Option<Runtime>> {
-    RUNTIME.get_or_init(|| Mutex::new(None)).lock().expect("tor lock poisoned")
+    RUNTIME
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .expect("tor lock poisoned")
 }
 
 /// Start (or report an already-running) `tor` daemon.
@@ -84,7 +84,11 @@ pub async fn stop() -> Result<String, String> {
     };
     drop(guard);
     runtime.task.abort();
-    runtime.controller.shutdown().await.map_err(|e| e.to_string())?;
+    runtime
+        .controller
+        .shutdown()
+        .await
+        .map_err(|e| e.to_string())?;
     Ok("tor stopped".to_string())
 }
 

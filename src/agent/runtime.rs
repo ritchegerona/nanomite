@@ -70,6 +70,9 @@ pub struct AgentConfig {
     /// provider, so these never shape behaviour.
     pub provider: String,
     pub model: String,
+    /// Offline mode: when true, network-dependent tools (web_fetch, web_search,
+    /// ssh_run) refuse instead of reaching the network.
+    pub offline: bool,
 }
 
 impl Default for AgentConfig {
@@ -81,6 +84,7 @@ impl Default for AgentConfig {
             max_message_chars: 200_000,
             provider: String::new(),
             model: String::new(),
+            offline: false,
         }
     }
 }
@@ -225,7 +229,8 @@ impl AgentRuntime {
         config: Option<AgentConfig>,
     ) -> Self {
         let workspace: std::path::PathBuf = workspace.into();
-        let tools = Arc::new(ToolSet::new(workspace.clone(), max_file_bytes));
+        let offline = config.as_ref().is_some_and(|c| c.offline);
+        let tools = Arc::new(ToolSet::new(workspace.clone(), max_file_bytes, offline));
         let project = crate::memory::model::slugify(
             &workspace
                 .file_name()
@@ -260,7 +265,11 @@ impl AgentRuntime {
     /// Memory is provider-independent by construction - nothing here mentions a
     /// model, an endpoint or a prompt format.
     pub fn with_memory(mut self, engine: Arc<crate::memory::MemoryEngine>) -> Self {
-        let mut tools = ToolSet::new(self.workspace.clone(), self.max_file_bytes);
+        let mut tools = ToolSet::new(
+            self.workspace.clone(),
+            self.max_file_bytes,
+            self.tools.offline,
+        );
         // Both builders rebuild the tool set, so each preserves the other's
         // attachment: call order never silently drops a subsystem.
         tools.improve = self.tools.improve.clone();
@@ -290,7 +299,11 @@ impl AgentRuntime {
         engine: Arc<crate::improve::ImproveEngine>,
         roots: crate::improve::Roots,
     ) -> Self {
-        let mut tools = ToolSet::new(self.workspace.clone(), self.max_file_bytes);
+        let mut tools = ToolSet::new(
+            self.workspace.clone(),
+            self.max_file_bytes,
+            self.tools.offline,
+        );
         tools.memory = self.tools.memory.clone();
         tools.improve = Some(Arc::clone(&engine));
         tools.improve_roots = Some(roots.clone());
@@ -2222,6 +2235,7 @@ mod tests {
         let tools = ToolSet::new(
             std::env::temp_dir().join("nanomite-runtime-test-workspace"),
             64 * 1024,
+            false,
         );
         let call = ToolCall {
             id: "tp1".into(),
@@ -2280,6 +2294,7 @@ mod tests {
         let mut tools = ToolSet::new(
             std::env::temp_dir().join("nanomite-runtime-test-workspace"),
             64 * 1024,
+            false,
         );
         tools.external = Arc::new(crate::tools::external_tools::ExternalTools::load(&dir));
         assert!(tools.external.get("ext_probe").is_some());
@@ -2337,7 +2352,7 @@ mod tests {
         let workspace =
             std::env::temp_dir().join(format!("nanomite-hook-gate-ws-{}", std::process::id()));
         std::fs::create_dir_all(&workspace).unwrap();
-        let tools = ToolSet::new(workspace.clone(), 64 * 1024);
+        let tools = ToolSet::new(workspace.clone(), 64 * 1024, false);
         let call = ToolCall {
             id: "h1".into(),
             name: "write_file".into(),
@@ -2389,6 +2404,7 @@ mod tests {
         let tools = ToolSet::new(
             std::env::temp_dir().join("nanomite-runtime-test-workspace"),
             64 * 1024,
+            false,
         );
         let call = ToolCall {
             id: "t9".into(),
@@ -2437,7 +2453,7 @@ mod tests {
         let runtime = runtime_with(provider, None);
         // Point the runtime's tool set at the fixture workspace.
         let runtime = AgentRuntime {
-            tools: Arc::new(ToolSet::new(ws.clone(), 64 * 1024)),
+            tools: Arc::new(ToolSet::new(ws.clone(), 64 * 1024, false)),
             ..runtime
         };
 
