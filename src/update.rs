@@ -13,6 +13,11 @@ use std::time::Duration;
 /// How long a single git or cargo step may run before the update gives up.
 const STEP_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Startup update checks run synchronously before the event loop starts: a
+/// slow or offline network must never hold the TUI hostage. The interactive
+/// `/update` flow keeps the generous `STEP_TIMEOUT`; startup uses this.
+pub const STARTUP_STEP_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Entry point for `nanomite update`.
 pub fn run() -> io::Result<()> {
     let current = env!("CARGO_PKG_VERSION");
@@ -131,9 +136,45 @@ pub fn git_opt(repo: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> io::Result<std::process::Output> {
+    run_git_timeout(repo, args, STEP_TIMEOUT)
+}
+
+fn run_git_timeout(
+    repo: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> io::Result<std::process::Output> {
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(repo).args(args);
-    timeout_runner(cmd, STEP_TIMEOUT)
+    timeout_runner(cmd, timeout)
+}
+
+/// `git_out` with the startup timeout: same contract, but a slow network
+/// fails fast instead of blocking process start.
+pub fn git_out_startup(repo: &Path, args: &[&str]) -> Result<String, io::Error> {
+    let out = run_git_timeout(repo, args, STARTUP_STEP_TIMEOUT)?;
+    if !out.status.success() {
+        return Err(io::Error::other(format!(
+            "git {} failed: {}",
+            args.first().copied().unwrap_or("git"),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// `git_opt` with the startup timeout.
+pub fn git_opt_startup(repo: &Path, args: &[&str]) -> Option<String> {
+    let out = run_git_timeout(repo, args, STARTUP_STEP_TIMEOUT).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 fn timeout_runner(
@@ -223,5 +264,20 @@ mod tests {
         assert!(!same);
         let older = parse_tag("v0.5.9").unwrap() > parse_tag("0.6.0").unwrap();
         assert!(!older);
+    }
+
+    /// The startup cap must stay well under the interactive `/update` cap:
+    /// startup runs synchronously before the event loop, so a slow network
+    /// must fail fast instead of holding the TUI hostage.
+    #[test]
+    fn startup_timeout_is_strictly_shorter() {
+        assert!(
+            STARTUP_STEP_TIMEOUT < STEP_TIMEOUT,
+            "startup cap ({STARTUP_STEP_TIMEOUT:?}) must be under the interactive cap ({STEP_TIMEOUT:?})"
+        );
+        assert!(
+            STARTUP_STEP_TIMEOUT <= Duration::from_secs(10),
+            "startup cap must stay in the seconds range, got {STARTUP_STEP_TIMEOUT:?}"
+        );
     }
 }

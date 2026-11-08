@@ -2936,8 +2936,9 @@ impl App {
             Err(_) => return Ok(()),
         };
 
-        if crate::update::git_out(&repo, &["fetch", "origin", "--tags", "--quiet"]).is_err() {
-            return Ok(()); // Silently skip on fetch failure
+        if crate::update::git_out_startup(&repo, &["fetch", "origin", "--tags", "--quiet"]).is_err()
+        {
+            return Ok(()); // Silently skip on fetch failure (5s startup cap)
         }
 
         let behind: usize = crate::update::git_out(

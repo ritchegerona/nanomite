@@ -470,9 +470,15 @@ fn canonicalize_deepest(path: &Path) -> PathBuf {
 }
 
 fn is_noise_dir(name: &str) -> bool {
+    // Dot-dirs are caches and tool state, never source: `.venv` alone is
+    // 100M+ of site-packages that would otherwise eat the scan budget
+    // before `src/` is even reached (matches index_tools's walk).
+    if name.starts_with('.') {
+        return true;
+    }
     matches!(
         name,
-        "target" | "node_modules" | ".git" | "dist" | "build" | "vendor" | ".next"
+        "target" | "node_modules" | "dist" | "build" | "vendor" | "venv" | "env" | "__pycache__"
     )
 }
 
@@ -761,5 +767,73 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Caches, tool state and build output are never source: the search must
+    /// not descend into dot-dirs (`.venv` alone is 100M+ of site-packages)
+    /// or bare `venv`/`__pycache__` dirs.
+    #[test]
+    fn noise_dir_skips_dot_dirs_and_venv() {
+        for noise in [
+            ".venv",
+            ".git",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".hypothesis",
+            ".nanomite",
+            ".venv/lib",
+            "venv",
+            "env",
+            "__pycache__",
+            "target",
+            "node_modules",
+            "dist",
+            "build",
+            "vendor",
+        ] {
+            assert!(is_noise_dir(noise), "{noise:?} must be noise");
+        }
+        for source in [
+            "src",
+            "tools",
+            "tests",
+            "docs",
+            "src-tauri",
+            "envs",
+            "venv2",
+            "",
+        ] {
+            assert!(!is_noise_dir(source), "{source:?} must not be noise");
+        }
+    }
+
+    /// End-to-end: a needle that exists BOTH in `.venv` and in `src/` must
+    /// only hit `src/` — the walk must not scan cache dirs at all.
+    #[test]
+    fn search_skips_venv_and_cache_dirs() {
+        let dir = std::env::temp_dir().join(format!("nanomite-search-venv-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".venv/lib/python3/site-packages")).unwrap();
+        fs::write(
+            dir.join(".venv/lib/python3/site-packages/pkg.py"),
+            "needle in venv\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join(".mypy_cache")).unwrap();
+        fs::write(dir.join(".mypy_cache/cache.txt"), "needle in cache\n").unwrap();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/real.rs"), "needle in source\n").unwrap();
+
+        let tools = FileTools::new(dir.clone(), 1024 * 1024);
+        let result = tools
+            .search(SearchArgs {
+                query: "needle".into(),
+                path: None,
+            })
+            .expect("search");
+        assert_eq!(result.hits.len(), 1, "only the src hit: {result:?}");
+        assert!(result.hits[0].path.ends_with("src/real.rs"), "{result:?}");
+        let _ = fs::remove_dir_all(&dir);
     }
 }
