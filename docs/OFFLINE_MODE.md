@@ -41,7 +41,7 @@ Env var takes precedence over the file, like every other config key.
   refuses both fetch and search with an "offline" refusal.
 - `config::tests::offline_flag_env_and_persistence` — env override, file
   persistence round-trip, and defaults-off behavior.
-- `cargo test --lib` runs fully offline: 768 passed / 0 failed.
+- `cargo test --lib` runs fully offline: 774 passed / 0 failed.
 
 ## Before this change
 

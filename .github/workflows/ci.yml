@@ -28,6 +28,21 @@ jobs:
       - name: cargo test (integration)
         run: cargo test --test production_attach --test agent_integration
 
+  vpn-tor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check (vpn,tor features)
+        run: cargo check --all-targets --features vpn,tor
+      - name: cargo clippy (vpn,tor features)
+        run: cargo clippy --all-targets --features vpn,tor -- -D warnings
+      - name: cargo test (vpn,tor features)
+        run: cargo test --lib --features vpn,tor -- --test-threads=1
+
   bench:
     runs-on: ubuntu-latest
     steps:
@@ -48,7 +63,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: build release
         run: cargo build --release
-      - name: upload binary to the tag
+      - name: upload binaries to the tag
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/nanomite
+          files: |
+            target/release/nanomite
+            target/release/nanomite-vpn

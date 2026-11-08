@@ -3,7 +3,7 @@ use super::text;
 use super::theme::{glyph, Theme};
 use crate::app::{
     Action, App, BoardState, ImproveLevel, ImproveReview, ImproveState, Overlay, OverlayKind,
-    PickerItem, PickerValue, CONNECT_FIELDS, IMPROVE_DETAIL_LINES,
+    PickerItem, PickerValue, SettingsCategory, SettingsKind, CONNECT_FIELDS, IMPROVE_DETAIL_LINES,
 };
 use crate::commands::Command;
 use crate::config::model_context_limit;
@@ -1293,6 +1293,12 @@ pub fn tools_row_count() -> u16 {
     (catalog.len() + groups + 1 + external_rows) as u16
 }
 
+/// Content rows of the `/settings` sheet: one line per setting, grouped by
+/// category. Drives overlay sizing.
+pub fn settings_row_count(app: &App) -> u16 {
+    crate::app::App::settings_row_count(app) as u16
+}
+
 /// External tool names for the /tools overlay, from the manifest dir.
 fn external_tool_names() -> Vec<String> {
     crate::tools::external_tools::ExternalTools::load(&crate::tools::external_tools::tools_dir())
@@ -1451,6 +1457,142 @@ pub fn tools(frame: &mut Frame, area: Rect, app: &App) {
             .right_aligned(),
         )
         .style(Style::default().bg(theme.panel_bg()));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(window), inner);
+}
+
+// ---------------------------------------------------------------------------
+// /settings — nanomite configuration
+// ---------------------------------------------------------------------------
+
+/// `/settings`: view and change nanomite configuration. Each row shows a
+/// category label, the setting name, and its current value. `enter` toggles
+/// booleans or cycles choices; `esc` closes.
+pub fn settings(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+    let inner_w = area.width.saturating_sub(4) as usize;
+    let inner_h = area.height.saturating_sub(2) as usize;
+
+    let settings = crate::app::App::all_settings(&app.cfg, app);
+    let state = match &app.overlay {
+        Some(Overlay::Settings(s)) => s.clone(),
+        _ => return,
+    };
+
+    let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
+        "  nanomite configuration · enter toggles / cycles · esc closes",
+        theme.faint_style(),
+    ))];
+
+    let mut last_cat: Option<SettingsCategory> = None;
+    let mut row_line: Vec<usize> = Vec::with_capacity(settings.len());
+
+    for (i, setting) in settings.iter().enumerate() {
+        // Category header when the category changes.
+        if last_cat != Some(setting.category) {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!(" {}", setting.category.label()),
+                    Style::default()
+                        .fg(theme.accent())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            last_cat = Some(setting.category);
+        }
+        row_line.push(lines.len());
+
+        let selected = i == state.cursor;
+        let cursor_marker = if selected { glyph::GUTTER } else { " " };
+
+        // Kind marker: ✓/✗ for boolean, ↻ for choice, · for read-only.
+        let (kind_marker, kind_style) = match setting.kind {
+            SettingsKind::Boolean => {
+                let on = setting.value == "on";
+                let marker = if on { glyph::CHECK } else { glyph::CROSS };
+                let style = if on {
+                    Style::default().fg(theme.success())
+                } else {
+                    Style::default().fg(theme.danger())
+                };
+                (format!("{marker} "), style)
+            }
+            SettingsKind::Choice => ("↻ ".to_string(), Style::default().fg(theme.warn())),
+            SettingsKind::ReadOnly => ("· ".to_string(), Style::default().fg(theme.faint())),
+        };
+
+        let name_w = 24usize;
+        let desc_budget = inner_w
+            .saturating_sub(6 + name_w + setting.value.len() + 4)
+            .max(10);
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(" {cursor_marker} "),
+                Style::default().fg(theme.accent()),
+            ),
+            Span::styled(kind_marker.to_string(), kind_style),
+            Span::styled(
+                format!("{:<name_w$}", setting.label),
+                if selected {
+                    Style::default().fg(theme.strong())
+                } else {
+                    theme.dim()
+                },
+            ),
+            Span::styled(
+                format!(
+                    "  {value}",
+                    value = text::truncate_head(&setting.value, desc_budget)
+                ),
+                if selected {
+                    theme.dim()
+                } else {
+                    theme.faint_style()
+                },
+            ),
+        ]));
+    }
+
+    // Keep the highlighted row inside the viewport.
+    let selected_line = row_line
+        .get(state.cursor)
+        .copied()
+        .unwrap_or(lines.len().saturating_sub(1));
+    let visible = inner_h.max(1);
+    let start = selected_line
+        .saturating_sub(visible.saturating_sub(1))
+        .min(selected_line);
+    let window: Vec<Line<'static>> = lines.into_iter().skip(start).take(visible).collect();
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border_focus()))
+        .title(
+            Line::from(Span::styled(
+                " settings ",
+                Style::default().fg(theme.accent()),
+            ))
+            .centered(),
+        )
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(
+                    " {}{} move {} enter toggle {} esc close ",
+                    glyph::ARROW_UP,
+                    glyph::ARROW_DOWN,
+                    glyph::DOT,
+                    glyph::DOT
+                ),
+                theme.faint_style(),
+            ))
+            .right_aligned(),
+        )
+        .style(Style::default().bg(theme.panel_bg()));
+
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
@@ -1969,6 +2111,7 @@ pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
         OverlayKind::Improve => (100, 34),
         OverlayKind::SudoPassword => (100, 12),
         OverlayKind::Hacker => (100, 40),
+        OverlayKind::Settings => (100, 40),
     };
     let width = (area.width * w_pct / 100).clamp(40.min(area.width), 100.min(area.width));
     let height = (content_rows + 2).clamp(7.min(area.height), max_h.min(area.height));

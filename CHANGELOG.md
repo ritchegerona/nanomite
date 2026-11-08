@@ -4,6 +4,20 @@ Every entry describes a verified change. Labels: implemented+tested,
 implemented unverified, planned, experimental, unsupported. Planned work is
 never listed as released.
 
+## [1.3.0] — 2026-11-08
+
+### Added
+
+- **`/settings` command** (`/set`, `alt+a`): view and change nanomite configuration in a full-screen overlay grouped by category — provider & model, tool authorization, appearance, behavior, hacker mode, daily learning, auto-update. Booleans toggle with Enter, choices cycle, read-only items show hints. implemented+tested.
+- **`/perf` command** (`/telemetry`, `alt+p`): show recent turn and tool-call timing stats (p50/p95 latency, failure counts) from the new runtime telemetry subsystem. implemented+tested.
+- **Runtime telemetry** (`src/telemetry.rs`): bounded ring buffer recording turn and tool-call timings, O(1) recording, p50/p95 stats, never blocks the UI thread. implemented+tested.
+
+### Changed
+
+- **Docs sync**: `docs/FEATURES.md`, `AGENTS.md`, `docs/OFFLINE_MODE.md` updated to reflect completed work — offline mode landed, authenticated self-update landed, plan mode enforced at dispatch, test counts corrected (774 lib + 8 integration + 1 production attach; 913 with vpn,tor).
+- **CI**: added `vpn-tor` job covering `--features vpn,tor` check/clippy/test; `nanomite-vpn` binary included in release uploads.
+- **Git hygiene**: `comparison_report.json`, `inventory.json`, `inventory_nonroot.json` removed from tracking and added to `.gitignore`.
+
 ## [1.2.0] — 2026-11-07
 
 ### Added

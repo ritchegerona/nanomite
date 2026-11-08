@@ -33,6 +33,7 @@ pub enum Command {
     ProviderMenu,
     Tools,
     Panel,
+    Perf,
     Improve,
     ImproveFromBoard,
     Prev,
@@ -49,6 +50,7 @@ pub enum Command {
     Focus,
     Team,
     Density,
+    Settings,
     Hacker,
     Learn,
     Update,
@@ -246,6 +248,12 @@ pub const COMMANDS: &[Entry] = &[
         hint: "daily learning - /learn <topic> | status | digest | daily on|off (alt+shift+l)",
         kind: Command::Learn,
     },
+    Entry {
+        command: "/perf",
+        aliases: &["/telemetry"],
+        hint: "show recent turn and tool-call timing stats (alt+p)",
+        kind: Command::Perf,
+    },
     // -- security -------------------------------------------------------------
     Entry {
         command: "/hacker",
@@ -277,6 +285,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "toggle compact density (ctrl+g)",
         kind: Command::Density,
+    },
+    Entry {
+        command: "/settings",
+        aliases: &["/set"],
+        hint: "view and change nanomite configuration (alt+a)",
+        kind: Command::Settings,
     },
     Entry {
         command: "/themes",

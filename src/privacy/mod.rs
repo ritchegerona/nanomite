@@ -24,10 +24,3 @@ pub mod vpn;
 /// Message shown when a module is not part of this build.
 pub const NOT_COMPILED: &str =
     "this build has no privacy modules - rebuild with `cargo build --release --features \"vpn,tor\"`";
-
-/// Resolves a user-supplied path, falling back to `default` when empty.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-}

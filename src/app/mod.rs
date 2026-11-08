@@ -1,4 +1,5 @@
 use crate::agent::openai::OpenAiProvider;
+use crate::agent::policy::ToolPolicy;
 use crate::agent::provider::{AgentProvider, ChatMessage, Usage};
 use crate::agent::runtime::{AgentEvent, AgentRuntime, Cancel};
 use crate::agent::suggest::{self, SuggestResult};
@@ -8,13 +9,16 @@ use crate::agent::testdouble::ScriptedProvider;
 use crate::board::engine::{BoardEngine, CancelFlag};
 use crate::board::store::{BoardMessage, BoardStore};
 use crate::commands::{self, Command};
-use crate::config::{find_preset, host_of, Config, ProviderKind, ProviderPreset, PRESETS};
+use crate::config::{
+    find_preset, host_of, Config, ProviderKind, ProviderPreset, Reasoning, PRESETS,
+};
 use crate::improve::{
     Actor, ApplyOutcome, CargoTestRunner, ImproveEngine, RegressionRunner, Roots, Status, Target,
 };
 use crate::memory::policy::MemoryPolicy;
 use crate::memory::MemoryEngine;
 use crate::session::{self, StoredSession};
+use crate::telemetry::TelemetryHandle;
 use crate::ui::chat;
 use crate::ui::composer::Composer;
 use crate::ui::theme::Theme;
@@ -582,6 +586,7 @@ pub enum OverlayKind {
     Improve,
     SudoPassword,
     Hacker,
+    Settings,
 }
 
 impl Overlay {
@@ -598,6 +603,7 @@ impl Overlay {
             Overlay::Improve(_) => OverlayKind::Improve,
             Overlay::SudoPassword(_) => OverlayKind::SudoPassword,
             Overlay::Hacker(_) => OverlayKind::Hacker,
+            Overlay::Settings(_) => OverlayKind::Settings,
         }
     }
 }
@@ -606,6 +612,57 @@ impl Overlay {
 #[derive(Debug, Clone, Default)]
 pub struct HackerState {
     pub cursor: usize,
+}
+
+/// Cursor and sub-view for the `/settings` overlay.
+#[derive(Debug, Clone, Default)]
+pub struct SettingsState {
+    pub cursor: usize,
+    /// When `Some`, the user is viewing a sub-panel for this category.
+    pub category: Option<SettingsCategory>,
+}
+
+/// Top-level setting categories shown in `/settings`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsCategory {
+    Provider,
+    Tools,
+    Appearance,
+    Behavior,
+    Hacker,
+    Learning,
+    Updates,
+}
+
+impl SettingsCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            SettingsCategory::Provider => "provider & model",
+            SettingsCategory::Tools => "tool authorization",
+            SettingsCategory::Appearance => "appearance",
+            SettingsCategory::Behavior => "behavior",
+            SettingsCategory::Hacker => "hacker mode",
+            SettingsCategory::Learning => "daily learning",
+            SettingsCategory::Updates => "auto-update",
+        }
+    }
+}
+
+/// One user-facing setting row in `/settings`.
+#[derive(Debug, Clone)]
+pub struct SettingsEntry {
+    pub category: SettingsCategory,
+    pub label: &'static str,
+    pub value: String,
+    pub kind: SettingsKind,
+}
+
+/// What pressing enter on a setting row does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsKind {
+    Boolean,  // on/off, toggled by enter
+    Choice,   // cycles through allowed values by enter
+    ReadOnly, // display only, enter shows a toast
 }
 
 #[derive(Debug, Clone)]
@@ -624,6 +681,8 @@ pub enum Overlay {
     SudoPassword(SudoPasswordState),
     /// `/hacker`: the read-only HACKER MODE workspace (asssessment, modules).
     Hacker(HackerState),
+    /// `/settings`: view and change nanomite configuration.
+    Settings(SettingsState),
 }
 
 /// One staged proposal as the `/improve` list shows it.
@@ -1862,6 +1921,8 @@ pub struct App {
     pub turn_started: Option<Instant>,
     pub view: View,
     pub toast: Option<(String, Instant)>,
+    /// Lightweight runtime telemetry: turn and tool-call timings.
+    pub telemetry: crate::telemetry::TelemetryHandle,
     /// Toggles behind `/details` and `/thinking`.
     pub show_tool_details: bool,
     pub show_thinking: bool,
@@ -2092,6 +2153,7 @@ impl App {
             composer: Composer::new(),
             overlay: None,
             usage: Usage::default(),
+            telemetry: TelemetryHandle::default(),
             turn_started: None,
             toast: None,
             show_tool_details: true,
@@ -2644,6 +2706,19 @@ impl App {
                 } else {
                     None
                 };
+                // Record tool-call telemetry before `name`/`detail` are consumed below.
+                if let Some(entry) = self.entries.get(index) {
+                    if let Some(row) = entry
+                        .tools
+                        .iter()
+                        .rev()
+                        .find(|r| r.running && r.name == name)
+                    {
+                        if let Some(elapsed) = row.elapsed {
+                            self.telemetry.record_tool(&name, ok, elapsed);
+                        }
+                    }
+                }
                 if let Some(entry) = self.entries.get_mut(index) {
                     if let Some(row) = entry
                         .tools
@@ -2703,6 +2778,10 @@ impl App {
                 usage,
                 elapsed,
             } => {
+                // Record turn telemetry (tool-call count + duration).
+                if let Some(entry) = self.entries.get(index) {
+                    self.telemetry.record_turn(entry.steps, true, elapsed);
+                }
                 self.usage.add(&usage);
                 let mut stat: Option<TurnStat> = None;
                 if let Some(entry) = self.entries.get_mut(index) {
@@ -2744,6 +2823,11 @@ impl App {
                 self.request_followups();
             }
             AgentEvent::Interrupted => {
+                // Record interrupted turn telemetry.
+                if let Some(entry) = self.entries.get(index) {
+                    let elapsed = entry.started.elapsed();
+                    self.telemetry.record_turn(entry.steps, false, elapsed);
+                }
                 if let Some(entry) = self.entries.get_mut(index) {
                     entry.phase = Phase::Interrupted;
                     entry.elapsed = Some(entry.started.elapsed());
@@ -3220,6 +3304,7 @@ impl App {
             Command::Details => self.toggle_tool_details(),
             Command::Hud => self.toggle_hud(),
             Command::Density => self.toggle_compact(),
+            Command::Settings => self.open_settings(),
             Command::Revert => self.revert_turn(parse_turn_arg(args)),
             Command::Fork => self.fork_session_at(parse_turn_arg(args).unwrap_or(0)),
             Command::EditTurn => self.edit_turn(parse_turn_arg(args).unwrap_or(0)),
@@ -3237,6 +3322,7 @@ impl App {
             Command::Memory => self.open_memory_picker(),
             Command::New => self.new_session(),
             Command::Panel => self.open_board(args),
+            Command::Perf => self.show_perf(),
             Command::Reasoning => self.cycle_reasoning(),
             Command::Copy => self.copy_selection(),
             Command::Image => {
@@ -3601,6 +3687,57 @@ impl App {
         let mut entry = Entry::new(EntryRole::Assistant, text);
         entry.phase = Phase::Done;
         self.entries.push(entry);
+        self.mark_dirty();
+    }
+
+    // -- /perf --------------------------------------------------------------
+
+    /// Shows recent turn and tool-call timing stats from telemetry.
+    fn show_perf(&mut self) {
+        let turn_stats = self.telemetry.turn_stats();
+        let tool_stats = self.telemetry.tool_stats();
+        let recent_turns = self.telemetry.recent_turns(5);
+        let recent_tools = self.telemetry.recent_tools(5);
+
+        let mut text = String::new();
+        text.push_str("Telemetry (last 512 records)\n\n");
+        text.push_str(&format!(
+            "Turns: {} total, {} failures, p50 {}ms, p95 {}ms, avg {} tool calls\n",
+            turn_stats.count,
+            turn_stats.failures,
+            turn_stats.p50_ms,
+            turn_stats.p95_ms,
+            turn_stats.avg_tool_calls,
+        ));
+        text.push_str(&format!(
+            "Tools: {} total, {} failures, p50 {}ms, p95 {}ms\n\n",
+            tool_stats.count, tool_stats.failures, tool_stats.p50_ms, tool_stats.p95_ms,
+        ));
+
+        if !recent_turns.is_empty() {
+            text.push_str("Recent turns:\n");
+            for t in &recent_turns {
+                let status = if t.ok { "ok" } else { "INTERRUPTED" };
+                text.push_str(&format!(
+                    "  {}ms · {} calls · {}\n",
+                    t.elapsed_ms, t.tool_calls, status
+                ));
+            }
+            text.push('\n');
+        }
+
+        if !recent_tools.is_empty() {
+            text.push_str("Recent tool calls:\n");
+            for t in &recent_tools {
+                let status = if t.ok { "ok" } else { "FAILED" };
+                text.push_str(&format!("  {}ms · {} · {}\n", t.elapsed_ms, t.name, status));
+            }
+        }
+
+        self.entries
+            .push(Entry::new(EntryRole::System, text.trim_end().to_string()));
+        let last = self.entries.last_mut().unwrap();
+        last.phase = Phase::Done;
         self.mark_dirty();
     }
 
@@ -4205,6 +4342,12 @@ impl App {
             })
             .collect();
         self.overlay = Some(Overlay::Picker(Picker::new(PickerMode::Themes, rows)));
+        self.mark_dirty();
+    }
+
+    /// Open the `/settings` overlay: view and change nanomite configuration.
+    pub fn open_settings(&mut self) {
+        self.overlay = Some(Overlay::Settings(SettingsState::default()));
         self.mark_dirty();
     }
 
@@ -4949,6 +5092,316 @@ impl App {
 
         self.toast(message);
         self.mark_dirty();
+    }
+
+    // -- /settings ----------------------------------------------------------
+
+    /// Builds the full settings list from the live config. Always in sync
+    /// with `app.cfg` because it reads values directly.
+    pub fn all_settings(cfg: &Config, app: &App) -> Vec<SettingsEntry> {
+        let mut out: Vec<SettingsEntry> = Vec::new();
+
+        macro_rules! row {
+            ($cat:expr, $label:expr, $value:expr, $kind:expr) => {
+                out.push(SettingsEntry {
+                    category: $cat,
+                    label: $label,
+                    value: $value.to_string(),
+                    kind: $kind,
+                });
+            };
+        }
+
+        // -- provider & model ----------------------------------------------
+        row!(
+            SettingsCategory::Provider,
+            "model",
+            cfg.model.as_str(),
+            SettingsKind::ReadOnly
+        );
+        row!(
+            SettingsCategory::Provider,
+            "reasoning effort",
+            cfg.reasoning.as_str(),
+            SettingsKind::Choice
+        );
+
+        // -- tool authorization --------------------------------------------
+        row!(
+            SettingsCategory::Tools,
+            "tool policy",
+            cfg.tool_policy.as_str(),
+            SettingsKind::Choice
+        );
+        row!(
+            SettingsCategory::Tools,
+            "confirm external calls",
+            on_off(cfg.confirm_external),
+            SettingsKind::Boolean
+        );
+
+        // -- appearance ----------------------------------------------------
+        row!(
+            SettingsCategory::Appearance,
+            "theme",
+            cfg.theme.as_str(),
+            SettingsKind::ReadOnly
+        );
+        row!(
+            SettingsCategory::Appearance,
+            "compact density",
+            on_off(cfg.compact),
+            SettingsKind::Boolean
+        );
+        row!(
+            SettingsCategory::Appearance,
+            "performance hud",
+            on_off(app.hud),
+            SettingsKind::Boolean
+        );
+        row!(
+            SettingsCategory::Appearance,
+            "thinking indicator",
+            on_off(app.show_thinking),
+            SettingsKind::Boolean
+        );
+        row!(
+            SettingsCategory::Appearance,
+            "focus mode",
+            on_off(app.focus),
+            SettingsKind::Boolean
+        );
+
+        // -- behavior ------------------------------------------------------
+        row!(
+            SettingsCategory::Behavior,
+            "offline mode",
+            on_off(cfg.offline),
+            SettingsKind::Boolean
+        );
+        row!(
+            SettingsCategory::Behavior,
+            "follow-up suggestions",
+            on_off(cfg.followup_suggestions),
+            SettingsKind::Boolean
+        );
+        row!(
+            SettingsCategory::Behavior,
+            "reduced motion",
+            on_off(cfg.reduced_motion),
+            SettingsKind::Boolean
+        );
+        row!(
+            SettingsCategory::Behavior,
+            "max steps",
+            cfg.max_steps.to_string().as_str(),
+            SettingsKind::ReadOnly
+        );
+        row!(
+            SettingsCategory::Behavior,
+            "max tool calls",
+            cfg.max_tool_calls.to_string().as_str(),
+            SettingsKind::ReadOnly
+        );
+
+        // -- hacker mode ---------------------------------------------------
+        row!(
+            SettingsCategory::Hacker,
+            "hacker mode enabled",
+            on_off(cfg.hacker.enabled),
+            SettingsKind::Boolean
+        );
+        row!(
+            SettingsCategory::Hacker,
+            "hacker auto-approve",
+            on_off(cfg.hacker.auto_approve),
+            SettingsKind::Boolean
+        );
+        row!(
+            SettingsCategory::Hacker,
+            "hacker audit log",
+            on_off(cfg.hacker.audit),
+            SettingsKind::Boolean
+        );
+        row!(
+            SettingsCategory::Hacker,
+            "hacker evidence store",
+            on_off(cfg.hacker.store),
+            SettingsKind::Boolean
+        );
+
+        // -- learning ------------------------------------------------------
+        row!(
+            SettingsCategory::Learning,
+            "daily learning",
+            on_off(cfg.learning_daily),
+            SettingsKind::Boolean
+        );
+
+        // -- updates -------------------------------------------------------
+        row!(
+            SettingsCategory::Updates,
+            "auto-update",
+            cfg.autoupdate.as_str(),
+            SettingsKind::Choice
+        );
+
+        out
+    }
+
+    /// Total number of selectable setting rows.
+    pub fn settings_row_count(app: &App) -> usize {
+        Self::all_settings(&app.cfg, app).len()
+    }
+
+    /// Toggles or cycles the setting at `index` in [`all_settings`],
+    /// persists the config, and shows a toast with the result.
+    fn toggle_setting(&mut self, index: usize) {
+        let settings = Self::all_settings(&self.cfg, self);
+        let Some(setting) = settings.get(index) else {
+            return;
+        };
+        let category = setting.category;
+        let label = setting.label;
+        let kind = setting.kind;
+
+        let mut changed = false;
+        let mut message = String::new();
+
+        match (category, label, kind) {
+            // Provider & model
+            (SettingsCategory::Provider, "reasoning effort", SettingsKind::Choice) => {
+                let cycle = Reasoning::CYCLE;
+                let current = self.cfg.reasoning;
+                let next = cycle
+                    .iter()
+                    .position(|r| *r == current)
+                    .map(|i| cycle[(i + 1) % cycle.len()])
+                    .unwrap_or(Reasoning::Medium);
+                self.cfg.reasoning = next;
+                changed = true;
+                message = format!("reasoning effort: {}", next.as_str());
+            }
+            // Tool authorization
+            (SettingsCategory::Tools, "tool policy", SettingsKind::Choice) => {
+                let cycle = [
+                    ToolPolicy::Plan,
+                    ToolPolicy::Coder,
+                    ToolPolicy::Build,
+                    ToolPolicy::Hacker,
+                ];
+                let current = self.cfg.tool_policy;
+                let next = cycle
+                    .iter()
+                    .position(|p| *p == current)
+                    .map(|i| cycle[(i + 1) % cycle.len()])
+                    .unwrap_or(ToolPolicy::Plan);
+                self.cfg.tool_policy = next;
+                changed = true;
+                message = format!("tool policy: {}", next.as_str());
+            }
+            (SettingsCategory::Tools, "confirm external calls", SettingsKind::Boolean) => {
+                self.cfg.confirm_external = !self.cfg.confirm_external;
+                changed = true;
+                message = format!("confirm external: {}", on_off(self.cfg.confirm_external));
+            }
+            // Appearance
+            (SettingsCategory::Appearance, "compact density", SettingsKind::Boolean) => {
+                self.cfg.compact = !self.cfg.compact;
+                changed = true;
+                message = format!("compact density: {}", on_off(self.cfg.compact));
+            }
+            (SettingsCategory::Appearance, "performance hud", SettingsKind::Boolean) => {
+                self.hud = !self.hud;
+                changed = true;
+                message = format!("performance hud: {}", on_off(self.hud));
+            }
+            (SettingsCategory::Appearance, "thinking indicator", SettingsKind::Boolean) => {
+                self.show_thinking = !self.show_thinking;
+                changed = true;
+                message = format!("thinking indicator: {}", on_off(self.show_thinking));
+            }
+            (SettingsCategory::Appearance, "focus mode", SettingsKind::Boolean) => {
+                self.focus = !self.focus;
+                changed = true;
+                message = format!("focus mode: {}", on_off(self.focus));
+            }
+            // Behavior
+            (SettingsCategory::Behavior, "offline mode", SettingsKind::Boolean) => {
+                self.cfg.offline = !self.cfg.offline;
+                changed = true;
+                message = format!("offline mode: {}", on_off(self.cfg.offline));
+            }
+            (SettingsCategory::Behavior, "follow-up suggestions", SettingsKind::Boolean) => {
+                self.cfg.followup_suggestions = !self.cfg.followup_suggestions;
+                changed = true;
+                message = format!(
+                    "follow-up suggestions: {}",
+                    on_off(self.cfg.followup_suggestions)
+                );
+            }
+            (SettingsCategory::Behavior, "reduced motion", SettingsKind::Boolean) => {
+                self.cfg.reduced_motion = !self.cfg.reduced_motion;
+                changed = true;
+                message = format!("reduced motion: {}", on_off(self.cfg.reduced_motion));
+            }
+            // Hacker mode
+            (SettingsCategory::Hacker, "hacker mode enabled", SettingsKind::Boolean) => {
+                self.cfg.hacker.enabled = !self.cfg.hacker.enabled;
+                changed = true;
+                message = format!("hacker mode: {}", on_off(self.cfg.hacker.enabled));
+            }
+            (SettingsCategory::Hacker, "hacker auto-approve", SettingsKind::Boolean) => {
+                self.cfg.hacker.auto_approve = !self.cfg.hacker.auto_approve;
+                changed = true;
+                message = format!(
+                    "hacker auto-approve: {}",
+                    on_off(self.cfg.hacker.auto_approve)
+                );
+            }
+            (SettingsCategory::Hacker, "hacker audit log", SettingsKind::Boolean) => {
+                self.cfg.hacker.audit = !self.cfg.hacker.audit;
+                changed = true;
+                message = format!("hacker audit: {}", on_off(self.cfg.hacker.audit));
+            }
+            (SettingsCategory::Hacker, "hacker evidence store", SettingsKind::Boolean) => {
+                self.cfg.hacker.store = !self.cfg.hacker.store;
+                changed = true;
+                message = format!("hacker store: {}", on_off(self.cfg.hacker.store));
+            }
+            // Learning
+            (SettingsCategory::Learning, "daily learning", SettingsKind::Boolean) => {
+                self.cfg.learning_daily = !self.cfg.learning_daily;
+                changed = true;
+                message = format!("daily learning: {}", on_off(self.cfg.learning_daily));
+            }
+            // Updates
+            (SettingsCategory::Updates, "auto-update", SettingsKind::Choice) => {
+                let next = match self.cfg.autoupdate.as_str() {
+                    "notify" => "true",
+                    "true" => "false",
+                    _ => "notify",
+                };
+                self.cfg.autoupdate = next.to_string();
+                changed = true;
+                message = format!("auto-update: {}", self.cfg.autoupdate);
+            }
+            // Read-only settings: just show a toast
+            (_, _, SettingsKind::ReadOnly) => {
+                self.toast(format!(
+                    "{label}: {} (use /themes or /model to change)",
+                    setting.value
+                ));
+                return;
+            }
+            _ => {}
+        }
+
+        if changed {
+            self.cfg.save();
+            self.toast(message);
+            self.mark_dirty();
+        }
     }
 
     // -- /improve -----------------------------------------------------------
@@ -6942,6 +7395,7 @@ impl App {
 
             // Alt+letter runs the matching slash command
             KeyCode::Char('m') if alt => self.run_command(Command::Models, ""),
+            KeyCode::Char('a') if alt => self.run_command(Command::Settings, ""),
             KeyCode::Char('l') if alt => self.run_command(Command::Tools, ""),
             KeyCode::Char('w') if alt => self.run_command(Command::Worktrees, ""),
             KeyCode::Char('s') if alt => self.run_command(Command::Sessions, ""),
@@ -6959,6 +7413,7 @@ impl App {
             KeyCode::Char('e') if alt => self.run_command(Command::Editor, ""),
             KeyCode::Char('v') if alt => self.run_command(Command::Image, ""),
             KeyCode::Char('b') if alt => self.run_command(Command::Panel, ""),
+            KeyCode::Char('p') if alt => self.run_command(Command::Perf, ""),
             KeyCode::Char('x') if alt => self.run_command(Command::Ab, ""),
             KeyCode::Char('T') if alt => self.run_command(Command::Team, ""),
             KeyCode::Char('i') if alt => self.run_command(Command::Improve, ""),
@@ -7398,6 +7853,36 @@ impl App {
                     _ => {}
                 }
                 self.overlay = Some(Overlay::Tools(state));
+                self.mark_dirty();
+            }
+            Overlay::Settings(mut state) => {
+                let total = Self::settings_row_count(self);
+                let cursor = state.cursor;
+                match key.code {
+                    KeyCode::Esc => {
+                        self.close_overlay();
+                        return;
+                    }
+                    KeyCode::Enter => {
+                        self.overlay = Some(Overlay::Settings(state));
+                        self.toggle_setting(cursor);
+                        return;
+                    }
+                    KeyCode::Up => state.cursor = state.cursor.saturating_sub(1),
+                    KeyCode::Down => {
+                        if total > 0 && state.cursor + 1 < total {
+                            state.cursor += 1;
+                        }
+                    }
+                    KeyCode::PageUp => state.cursor = state.cursor.saturating_sub(8),
+                    KeyCode::PageDown => {
+                        state.cursor = (state.cursor + 8).min(total.saturating_sub(1))
+                    }
+                    KeyCode::Home => state.cursor = 0,
+                    KeyCode::End => state.cursor = total.saturating_sub(1),
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Settings(state));
                 self.mark_dirty();
             }
             Overlay::Board(mut state) => {

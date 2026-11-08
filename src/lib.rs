@@ -25,6 +25,7 @@ pub mod nanomite_vpn;
 pub mod memory;
 pub mod privacy;
 pub mod session;
+pub mod telemetry;
 pub mod tools;
 pub mod ui;
 pub mod update;

@@ -35,6 +35,11 @@ crack_more.log
 chunk_*.txt
 *.bak
 
+# Scratch / comparison data (never commit)
+comparison_report.json
+inventory.json
+inventory_nonroot.json
+
 # Local tool authorization state (never commit)
 tools-auth*.json
 
