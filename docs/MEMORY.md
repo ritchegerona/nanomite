@@ -6,7 +6,7 @@ projection. Nothing in `src/memory/` knows about any AI provider — records
 are plain serde data, so changing models never touches stored knowledge.
 
 Status: **L3** (updated 2026-11-04). Integrated and regression-tested in the
-709-test suite; `tests/production_attach.rs` covers the real startup attach
+774-test suite; `tests/production_attach.rs` covers the real startup attach
 path. The `consolidation_merges_exact_duplicates_only` failure noted in the
 2026-10-14 audit is fixed, and the `export()` deadlock found then is fixed.
 Runtime/UI integration is live: `MemoryEngine` attaches at startup and the six

@@ -32,7 +32,7 @@ supports them.
 
 - Releases are manual: `cargo build --release`, copy the binary, keep the
   previous binary as the rollback artifact.
-- Last known-good baseline: 709 lib + 8 integration tests green,
+- Last known-good baseline: 774 lib + 8 integration tests green,
   clippy clean (verified 2026-11-06; last tag v0.8.0).
 - Versioning: semver + `v*` tags; generate notes from CHANGELOG entries,
   Git history, and test results — never from model invention.

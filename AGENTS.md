@@ -24,7 +24,7 @@ suite runs **913 tests**. `cargo clippy --all-targets -- -D warnings` is
 clean. `cargo fmt --check` is clean.
 
 `tests/production_attach.rs` is a separate **integration** target (1 test, green)
-that exercises the real startup attach path. It is *not* part of the 709; quote
+that exercises the real startup attach path. It is *not* part of the 774; quote
 the two numbers separately. `tests/agent_integration.rs` is a third offline
 target (8 tests, green): config load/env, session persist/restore (v1 + v2),
 in-memory memory, document extraction, and tool-set file/exec operations.
@@ -38,7 +38,7 @@ compiles on the stable toolchain: `cargo bench` works, and `cargo test`
 ```bash
 cargo check            # clean
 cargo test --lib       # 774 passed, 0 failed, ~5 s, fully offline
-cargo test --test production_attach   # 1 passed (integration; not in the 709)
+cargo test --test production_attach   # 1 passed (integration; not in the 774)
 cargo bench            # benches/perf.rs harness; bench profile inherits release
 cargo clippy --all-targets -- -D warnings   # clean (CI at .github/workflows/ci.yml)
 cargo fmt
@@ -160,7 +160,7 @@ broken.
   `read_document` is the agent-facing door to it.
 - `tests/production_attach.rs` — integration target proving the real production
   attach path (memory + config) works from the outside. 1 test, separate from
-  the 709.
+  the 774.
 
 ## Operator tools (`tools/`)
 

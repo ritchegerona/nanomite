@@ -150,13 +150,18 @@ pages, and `nanomite update` to move to the next version in one command.
   small terminals
 - **`/doctor`** — pre-flight diagnostics: provider, key, memory store,
   sessions, workspace writability, tool toggles
+- **`/settings`** — view and change nanomite configuration in a full-screen
+  overlay: provider & model, tool authorization, appearance, behavior, hacker
+  mode, daily learning, auto-update. Booleans toggle with Enter, choices cycle.
+- **`/perf`** — show recent turn and tool-call timing stats (p50/p95 latency,
+  failure counts) from the runtime telemetry subsystem
 - **4 themes** — Umbrella Corp (default, Resident Evil–inspired red), midnight,
   graphite and mono; the choice is persisted across sessions
 - **Your own prompt** — drop extra instructions in `~/.config/nanomite/prompt.md`
   and they are appended to the system prompt on every turn
 - **Persistent setup** — provider, key, model, theme and tool toggles are saved
   to `~/.config/nanomite/config.toml` and survive restarts
-- **Offline-capable test suite** — 709 tests, zero network required
+- **Offline-capable test suite** — 774 tests, zero network required
 
 ## Installation
 
@@ -593,6 +598,8 @@ features · appearance · output.
 | `/unshare` |  | alt+shift+x | Remove any shared copy |
 | `/init` |  | alt+shift+n | Create or update AGENTS.md |
 | `/doctor` |  | alt+o | Run pre-flight diagnostics on the setup |
+| `/settings` | `/set` | alt+a | View and change nanomite configuration (model, policy, theme, hacker mode, learning, updates) |
+| `/perf` | `/telemetry` | alt+p | Show recent turn and tool-call timing stats |
 | `/help` |  | f1 | Keysheet and command list |
 | `/exit` | `/quit`, `/q` | alt+q | Quit nanomite |
 
@@ -673,7 +680,7 @@ src/
 ## Development
 
 ```bash
-cargo test --lib     # 709 tests, fully offline
+cargo test --lib     # 774 tests, fully offline
 cargo run            # dev build against your config
 cargo build --release
 ```

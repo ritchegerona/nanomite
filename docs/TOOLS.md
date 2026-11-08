@@ -7,7 +7,7 @@ runs on the blocking pool with a hard timeout; failures are returned to the
 model as errors, never panics.
 
 Status: the full **34-tool** inventory is **L3** (integrated + regression-tested,
-709-test suite) as of 2026-11-06. `src/tools/catalog.rs` is the single
+774-test suite) as of 2026-11-06. `src/tools/catalog.rs` is the single
 inventory: `ToolSpec { name, description, category }`, with tests asserting the
 catalog matches the exposed schema list exactly — add a tool to one and the
 test fails instead of the two drifting apart.
