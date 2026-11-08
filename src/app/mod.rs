@@ -1106,6 +1106,29 @@ pub fn is_dropped_path_burst(burst: &str) -> bool {
     resolve_against(b, &cwd).exists()
 }
 
+/// Appends a raw drop/paste payload to `/tmp/nanomite-drops.log` when drop
+/// diagnostics are on. Best-effort: failures are ignored, this is a debug aid.
+fn log_drop(kind: &str, text: &str) {
+    use std::io::Write;
+    let collapsed: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let line = format!(
+        "[{}] {}: {}\n",
+        kind,
+        chrono::Local::now().format("%H:%M:%S"),
+        collapsed.trim()
+    );
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/nanomite-drops.log")
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
 /// Minimal percent-decoding for `file://` URIs (%20 and friends); invalid
 /// escapes pass through untouched.
 fn percent_decode(s: &str) -> String {
@@ -1841,6 +1864,10 @@ pub struct App {
     pub show_tool_details: bool,
     pub show_thinking: bool,
     pub pending_editor: bool,
+    /// `NANOMITE_DEBUG_DROPS=1`: record raw paste/burst payloads as toasts
+    /// and in `/tmp/nanomite-drops.log` so terminal-specific drop formats
+    /// can be diagnosed.
+    pub debug_drops: bool,
     session_started: Instant,
     undo_stack: Vec<UndoStep>,
     control_tx: Option<UnboundedSender<Control>>,
@@ -2060,6 +2087,9 @@ impl App {
             turn_started: None,
             toast: None,
             show_tool_details: true,
+            debug_drops: std::env::var("NANOMITE_DEBUG_DROPS")
+                .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false),
             show_thinking: true,
             pending_editor: false,
             session_started: Instant::now(),
@@ -3316,7 +3346,12 @@ impl App {
     fn run_favorites(&mut self, args: &str) {
         let trimmed = args.trim();
         if trimmed.is_empty() {
-            let favs: Vec<&str> = self.cfg.model_favorites.iter().map(|s| s.as_str()).collect();
+            let favs: Vec<&str> = self
+                .cfg
+                .model_favorites
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
             if favs.is_empty() {
                 self.toast("no favorited models - ctrl+f in /model to pin one");
             } else {
@@ -3914,6 +3949,21 @@ impl App {
     /// into the composer so the agent can read them. Anything that does not
     /// look like paths pastes verbatim into the composer.
     pub fn on_paste(&mut self, text: &str) {
+        // Drop diagnostics: when NANOMITE_DEBUG_DROPS=1, record the raw
+        // payload so terminal-specific drag-and-drop formats can be
+        // identified. A log file rather than a toast — the queued-image
+        // toast would overwrite the echo in the same event.
+        if self.debug_drops {
+            log_drop("paste", text);
+            let collapsed: String = text
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
+            self.toast(format!(
+                "drop: {}",
+                crate::ui::text::truncate(collapsed.trim(), 80)
+            ));
+        }
         // A focused input (transcript-search bar, /connect form, picker filter,
         // sudo prompt) takes the paste before the chat composer, so ctrl+V
         // lands wherever the caret is.
@@ -3985,11 +4035,22 @@ impl App {
     /// other paths). No-op when the burst is not a real path or is not the
     /// composer's tail.
     pub fn reroute_drop_burst(&mut self, burst: &str) -> bool {
-        if !is_dropped_path_burst(burst) || !self.composer.value().ends_with(burst) {
+        if self.debug_drops && is_dropped_path_burst(burst) {
+            log_drop("drop-burst", burst);
+            self.toast(format!(
+                "drop-burst: {}",
+                crate::ui::text::truncate(burst, 80)
+            ));
+        }
+        if !is_dropped_path_burst(burst) {
             return false;
         }
-        if !self.composer.strip_suffix(burst.chars().count()) {
-            return false;
+        // The burst's characters were already typed into the composer by
+        // `on_key` as they arrived; strip them so only the attachment
+        // remains, not the literal path text.
+        let len = burst.chars().count();
+        if self.composer.value().ends_with(burst) {
+            let _ = self.composer.strip_suffix(len);
         }
         self.on_paste(burst);
         true
@@ -7263,7 +7324,8 @@ impl App {
                     // opencode-style model-picker shortcuts, Model mode only.
                     KeyCode::Char('f') if ctrl && picker.mode == PickerMode::Model => {
                         let model = match picker.selection() {
-                            Some(PickerValue::Model(m)) | Some(PickerValue::ProviderModel { model: m, .. }) => Some(m),
+                            Some(PickerValue::Model(m))
+                            | Some(PickerValue::ProviderModel { model: m, .. }) => Some(m),
                             _ => None,
                         };
                         drop(picker);
@@ -8540,7 +8602,10 @@ mod tests {
             toast.contains("is over the"),
             "toast should report the size cap, got: {toast}"
         );
-        assert!(toast.contains("10 MB"), "toast should name the cap, got: {toast}");
+        assert!(
+            toast.contains("10 MB"),
+            "toast should name the cap, got: {toast}"
+        );
     }
 
     #[tokio::test]
@@ -8564,17 +8629,49 @@ mod tests {
         std::fs::write(&path, b"\x89PNG-bytes").expect("write fixture");
         let dropped = path.display().to_string();
 
-        // Simulate a terminal that types the drop as keystrokes: the path
-        // lands in the composer, then the burst is recognised.
+        // Simulate a terminal that types the drop as keystrokes: each char
+        // lands in the composer, then the burst is recognised and routed.
         app.composer.insert_str(&dropped);
         assert!(app.reroute_drop_burst(&dropped), "burst should be routed");
         assert!(app.composer.is_empty(), "path stripped from composer");
         assert_eq!(app.pending_images.len(), 1, "image attached instead");
 
-        // A burst that is not the composer's tail is left untouched.
-        app.composer.insert_str("prefix");
-        assert!(!app.reroute_drop_burst(&dropped));
-        assert_eq!(app.composer.value(), "prefix");
+        // A non-path burst is left untouched.
+        app.composer.insert_str("hello");
+        assert!(!app.reroute_drop_burst("not a path"));
+        assert_eq!(app.composer.value(), "hello");
+    }
+
+    #[tokio::test]
+    async fn drop_debug_toast_only_fires_when_enabled() {
+        let mut app = test_app().await;
+        let dir = crate::improve::testing::temp_dir("drop-debug");
+        let path = dir.path.join("pic.jpg");
+        std::fs::write(&path, b"\xff\xd8\xff-jpeg").expect("write fixture");
+        let dropped = path.display().to_string();
+
+        // Diagnostics off (the default): the drop routes silently. The attach
+        // toast still fires, but no raw-payload echo.
+        assert!(!app.debug_drops);
+        app.on_paste(&dropped);
+        let (msg, _) = app.toast.as_ref().expect("attach toast fires");
+        assert!(
+            !msg.starts_with("drop:"),
+            "no debug echo without the flag, got: {msg}"
+        );
+        assert_eq!(app.pending_images.len(), 1);
+
+        // With NANOMITE_DEBUG_DROPS=1 the raw payload is recorded. The toast
+        // echo is transient (the queued-image toast overwrites it), so the
+        // durable channel is the log file.
+        let mut app = test_app().await;
+        app.debug_drops = true;
+        app.on_paste(&dropped);
+        let log = std::fs::read_to_string("/tmp/nanomite-drops.log").unwrap_or_default();
+        assert!(
+            log.contains(&dropped),
+            "drop log should contain the raw payload, got: {log:?}"
+        );
     }
 
     #[tokio::test]

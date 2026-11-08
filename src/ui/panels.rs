@@ -299,14 +299,12 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
         // Queued images waiting to be sent (drag-and-dropped or /image).
         if !app.pending_images.is_empty() {
             let n = app.pending_images.len();
-            let names: Vec<String> = app
-                .pending_images
-                .iter()
-                .map(|i| i.name.clone())
-                .collect();
+            let names: Vec<String> = app.pending_images.iter().map(|i| i.name.clone()).collect();
             left.push(Span::styled(
                 format!("  {n} image(s) queued: {}", names.join(", ")),
-                Style::default().fg(theme.warn()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.warn())
+                    .add_modifier(Modifier::BOLD),
             ));
         }
         // Quiet one-time note when persistent memory is not attached. It
@@ -589,17 +587,7 @@ fn model_badge(provider_id: &str, model: &str, offline: bool) -> String {
     if offline {
         return "free".to_string();
     }
-    let id = format!("{provider_id} {model}").to_ascii_lowercase();
-    if id.contains("free")
-        || id.contains(":free")
-        || id.contains("-flash")
-        || id.contains("flash-lite")
-        || id.contains("nano")
-        || id.contains("mini")
-        || id.contains("haiku")
-        || id.contains("8b")
-        || id.contains("small")
-    {
+    if model_is_fast(provider_id, model) {
         "free · fast".to_string()
     } else {
         String::new()
@@ -792,8 +780,7 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
         // Right-side opencode-style Free/Fast badge: local/flash/nano/mini
         // runtimes get a quiet label, everything else shows nothing here.
         let badge = match &item.value {
-            PickerValue::ProviderModel { model, .. }
-            | PickerValue::Model(model) => {
+            PickerValue::ProviderModel { model, .. } | PickerValue::Model(model) => {
                 let provider = match &item.value {
                     PickerValue::ProviderModel { provider, .. } => provider.as_str(),
                     _ => app.cfg.preset.as_str(),
@@ -1029,6 +1016,18 @@ pub fn command_items(app: &App) -> Vec<PickerItem> {
         label: format!("Reasoning  ·  {}", app.cfg.reasoning.label()),
         hint: "/reasoning".into(),
         value: PickerValue::Action(Action::CycleReasoning),
+        current: false,
+    });
+    items.push(PickerItem {
+        label: format!(
+            "Favorites  ·  {}",
+            match app.cfg.model_favorites.len() {
+                0 => "none".to_string(),
+                n => n.to_string(),
+            }
+        ),
+        hint: "/favorites · ctrl+f in /model".into(),
+        value: PickerValue::Command(Command::Favorites),
         current: false,
     });
     items.push(PickerItem::action(

@@ -1273,8 +1273,7 @@ impl Config {
                 stored.compact.unwrap_or(false)
             },
             model_favorites: (if use_env {
-                first_env_one("NANOMITE_MODEL_FAVORITES")
-                    .map(|raw| parse_disabled_tools(&raw))
+                first_env_one("NANOMITE_MODEL_FAVORITES").map(|raw| parse_disabled_tools(&raw))
             } else {
                 None
             })

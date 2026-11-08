@@ -22,13 +22,7 @@ fn image_size_label_local(bytes: usize) -> String {
 /// images are queued for drag-and-drop / /image. Each chip shows the inline
 /// image glyph, the file name and size, and the on-disk location so the user
 /// can see exactly where the dragged png/jpg lives.
-fn render_image_chips(
-    frame: &mut Frame,
-    area: Rect,
-    app: &App,
-    y: u16,
-    width: usize,
-) -> u16 {
+fn render_image_chips(frame: &mut Frame, area: Rect, app: &App, y: u16, width: usize) -> u16 {
     if app.pending_images.is_empty() {
         return y;
     }

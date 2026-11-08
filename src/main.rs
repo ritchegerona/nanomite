@@ -14,7 +14,12 @@ const ANIMATION_TICK: Duration = Duration::from_millis(90);
 
 /// A printable-char pause longer than this ends a typed burst. Human typing is
 /// far slower than this; a terminal that *types* a dropped path is far faster.
-const BURST_GAP: Duration = Duration::from_millis(25);
+/// Ghostty 1.4 on macOS delivers drag-and-drop as simulated typing (ghostty
+/// #13817: no bracketed paste), and its per-char delay can approach this gap,
+/// so the threshold is generous — the cost of a wider gap is only a slightly
+/// later drop detection, never a lost keystroke (`on_key` always inserts
+/// immediately; the burst only strips recognized paths afterwards).
+const BURST_GAP: Duration = Duration::from_millis(60);
 
 /// Groups the printable characters of a fast keystroke burst so a drop that
 /// arrives as typed text (rather than a bracketed paste) can be recognised.
@@ -48,7 +53,23 @@ impl TypedBurst {
     }
 
     /// Ends the open burst (a non-char key arrived, or the animation tick
-    /// fired). Returns its contents when non-empty.
+    /// fired while typing was already paused). Returns its contents when
+    /// non-empty. `idle_since_tick` distinguishes "the tick fired but the
+    /// user is mid-word" (keep buffering) from "typing genuinely stopped"
+    /// (close the burst) — a tick alone is not a burst boundary, otherwise
+    /// simulated-typing drops (Ghostty 1.4 macOS) get chopped mid-path.
+    fn flush_on_tick(&mut self) -> Option<String> {
+        match self.last {
+            Some(t) if t.elapsed() > BURST_GAP && !self.buf.is_empty() => {
+                Some(std::mem::take(&mut self.buf))
+            }
+            // Typing paused briefly but the gap is under BURST_GAP: the
+            // burst stays open, nothing to close yet.
+            _ => None,
+        }
+    }
+
+    /// Ends the open burst unconditionally (a non-char key arrived).
     fn flush(&mut self) -> Option<String> {
         self.last = None;
         if self.buf.is_empty() {
@@ -301,9 +322,13 @@ async fn main() -> io::Result<()> {
                 continue;
             }
             _ = ticker.tick() => {
-                // A typed burst that ended without another event still needs
-                // closing so a dropped path can be re-routed.
-                if let Some(closed) = burst.flush() {
+                // The tick is NOT a burst boundary: only close the burst when
+                // typing has actually paused longer than BURST_GAP. Ghostty
+                // 1.4 on macOS types dropped paths with per-char delays that
+                // span ticks; an unconditional flush chopped the path into
+                // fragments that failed the on-disk check and landed as
+                // literal text (the "image won't attach" bug).
+                if let Some(closed) = burst.flush_on_tick() {
                     app.reroute_drop_burst(&closed);
                 }
                 app.on_tick();
