@@ -14,6 +14,10 @@ pub mod hacker;
 pub mod hooks;
 pub mod improve;
 pub mod learn;
+#[cfg(feature = "tor")]
+pub mod nanomite_tor;
+#[cfg(feature = "vpn")]
+pub mod nanomite_vpn;
 // The memory engine exposes a deliberate API superset of what the TUI consumes
 // today (backup/restore, consolidation, listing helpers); unused members of a
 // published library surface are not dead code.

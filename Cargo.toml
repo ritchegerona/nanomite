@@ -15,6 +15,7 @@ ratatui = { version = "0.30.2", features = ["crossterm"] }
 tokio = { version = "1.53.2", features = ["full"] }
 reqwest = { version = "0.13.5", features = ["json", "stream", "blocking", "form"] }
 serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1.17", features = ["v4", "serde"], optional = true }
 serde_json = "1.0"
 regex = "1.10"
 walkdir = "2.5"
@@ -36,6 +37,15 @@ rusqlite = { version = "0.37", default-features = false, features = ["bundled"] 
 # dependency graph (via the optional pdf-extract feature); a direct dep makes
 # the hash explicit and survives `--no-default-features` builds.
 sha2 = "0.10"
+# NanomiteVPN - WireGuard-inspired personal VPN
+ring = { version = "0.17", optional = true }
+# NanomiteTOR - v3 onion address derivation (SHA3-256 checksum).
+sha3 = { version = "0.10", optional = true }
+blake3 = { version = "1.5", optional = true }
+hex = { version = "0.4", optional = true }
+getrandom = { version = "0.3", optional = true }
+stun-client = { version = "0.1", optional = true }
+clap = { version = "4.5", features = ["derive"], optional = true }
 
 # --- file intelligence (extract layer) -------------------------------------
 # Every parser dependency is optional and pulled in by the matching
@@ -43,11 +53,19 @@ sha2 = "0.10"
 csv = { version = "1.3", optional = true }
 quick-xml = { version = "0.42", optional = true }
 toml = { version = "1", optional = true }
+base64 = "0.22"
 yaml-rust2 = { version = "0.13", optional = true }
 # Zip containers only need deflate; the default feature set drags in
 # aes/zstd/lzma/zopfli which we neither want to compile nor would ever run.
 zip = { version = "9", default-features = false, features = ["deflate-flate2"], optional = true }
 pdf-extract = { version = "0.12", optional = true }
+
+# tokio-tun is Linux-only (TUN/TAP via ioctl). On other platforms we use a stub.
+# NOTE: this section must stay AFTER all [dependencies] entries: a table header
+# switches context, so placed above, every dep below it would become
+# Linux-only and silently vanish from macOS/Windows builds.
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-tun = { version = "0.4", default-features = false }
 
 [features]
 default = [
@@ -55,6 +73,24 @@ default = [
     "format-tabular",
     "format-documents",
     "format-pdf",
+]
+# NanomiteVPN module
+vpn = [
+    "dep:ring",
+    "dep:blake3",
+    "dep:getrandom",
+    "dep:stun-client",
+    "dep:clap",
+    "dep:hex",
+    "dep:uuid",
+]
+# NanomiteTOR module (library-only; requires an external `tor` binary at runtime)
+tor = [
+    "dep:uuid",
+    "dep:sha3",
+    "dep:ring",
+    "dep:getrandom",
+    "dep:hex",
 ]
 # JSON/YAML/TOML/XML parsing
 format-structured = ["dep:toml", "dep:yaml-rust2", "dep:quick-xml"]
@@ -68,6 +104,10 @@ format-pdf = ["dep:pdf-extract"]
 [[bench]]
 name = "perf"
 harness = false
+
+[[example]]
+name = "smoke_vpn_tor"
+required-features = ["vpn", "tor"]
 
 
 [dev-dependencies]
