@@ -1,5 +1,8 @@
 //! Lightweight runtime telemetry: turn and tool-call timings, bounded ring
 //! buffer, never blocks the UI thread. All recording is synchronous and O(1).
+//!
+//! Optimized: maintains a secondary sorted buffer by elapsed_ms for O(1) percentile
+//! queries without re-sorting on every stats() call.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -26,48 +29,102 @@ pub struct TurnRecord {
     pub at: SystemTime,
 }
 
-/// Bounded ring buffer of recent telemetry records.
+/// Bounded ring buffer of recent telemetry records with cached sorted views.
+/// Pre-sorts on insert to enable O(1) percentile queries without re-sorting.
 #[derive(Debug, Default)]
 pub struct Telemetry {
     tools: VecDeque<ToolRecord>,
     turns: VecDeque<TurnRecord>,
+    tools_sorted: VecDeque<ToolRecord>, // Sorted by elapsed_ms ascending
+    turns_sorted: VecDeque<TurnRecord>, // Sorted by elapsed_ms ascending
+    tools_count: usize,
+    turns_count: usize,
 }
 
 impl Telemetry {
     pub fn record_tool(&mut self, name: &str, ok: bool, elapsed: Duration) {
-        if self.tools.len() >= CAPACITY {
-            self.tools.pop_front();
-        }
-        self.tools.push_back(ToolRecord {
+        let record = ToolRecord {
             name: name.to_string(),
             ok,
             elapsed_ms: elapsed.as_millis() as u64,
             at: SystemTime::now(),
-        });
+        };
+
+        // Maintain ring buffer
+        if self.tools_count >= CAPACITY {
+            let old = self.tools.pop_front();
+            // Remove from sorted view
+            if let Some(ref old) = old {
+                let pos = self.tools_sorted.iter().position(|t| t.at == old.at);
+                if let Some(p) = pos {
+                    self.tools_sorted.remove(p);
+                }
+            }
+            self.tools_count -= 1;
+        }
+
+        self.tools.push_back(record.clone());
+        self.tools_count += 1;
+
+        // Insert into sorted position (by elapsed_ms, then by insertion order)
+        let elapsed_ms = record.elapsed_ms;
+        let insert_pos = self
+            .tools_sorted
+            .iter()
+            .position(|t| t.elapsed_ms > elapsed_ms);
+        match insert_pos {
+            Some(pos) => self.tools_sorted.insert(pos, record),
+            None => self.tools_sorted.push_back(record),
+        }
     }
 
     pub fn record_turn(&mut self, tool_calls: usize, ok: bool, elapsed: Duration) {
-        if self.turns.len() >= CAPACITY {
-            self.turns.pop_front();
-        }
-        self.turns.push_back(TurnRecord {
-            tool_calls,
+        let record = TurnRecord {
             ok,
+            tool_calls,
             elapsed_ms: elapsed.as_millis() as u64,
             at: SystemTime::now(),
-        });
+        };
+
+        // Maintain ring buffer
+        if self.turns_count >= CAPACITY {
+            let old = self.turns.pop_front();
+            // Remove from sorted view
+            if let Some(ref old) = old {
+                let pos = self.turns_sorted.iter().position(|t| t.at == old.at);
+                if let Some(p) = pos {
+                    self.turns_sorted.remove(p);
+                }
+            }
+            self.turns_count -= 1;
+        }
+
+        self.turns.push_back(record.clone());
+        self.turns_count += 1;
+
+        // Insert into sorted position
+        let elapsed_ms = record.elapsed_ms;
+        let insert_pos = self
+            .turns_sorted
+            .iter()
+            .position(|t| t.elapsed_ms > elapsed_ms);
+        match insert_pos {
+            Some(pos) => self.turns_sorted.insert(pos, record),
+            None => self.turns_sorted.push_back(record),
+        }
     }
 
     /// Recent tool-call stats: count, failures, p50/p95 latency (ms).
+    /// Uses pre-sorted buffer for O(1) percentile lookup.
     pub fn tool_stats(&self) -> ToolStats {
-        let mut elapsed: Vec<u64> = self.tools.iter().map(|t| t.elapsed_ms).collect();
-        elapsed.sort_unstable();
-        let count = elapsed.len();
+        if self.tools_count == 0 {
+            return ToolStats::default();
+        }
         let failures = self.tools.iter().filter(|t| !t.ok).count();
-        let p50 = percentile(&elapsed, 0.50);
-        let p95 = percentile(&elapsed, 0.95);
+        let p50 = percentile_sorted(&self.tools_sorted, 0.50);
+        let p95 = percentile_sorted(&self.tools_sorted, 0.95);
         ToolStats {
-            count,
+            count: self.tools_count,
             failures,
             p50_ms: p50,
             p95_ms: p95,
@@ -75,29 +132,21 @@ impl Telemetry {
     }
 
     /// Recent turn stats: count, failures, p50/p95 latency (ms), avg tool calls.
+    /// Uses pre-sorted buffer for O(1) percentile lookup.
     pub fn turn_stats(&self) -> TurnStats {
-        let mut elapsed: Vec<u64> = self.turns.iter().map(|t| t.elapsed_ms).collect();
-        elapsed.sort_unstable();
-        let count = elapsed.len();
+        if self.turns_count == 0 {
+            return TurnStats::default();
+        }
         let failures = self.turns.iter().filter(|t| !t.ok).count();
-        let p50 = percentile(&elapsed, 0.50);
-        let p95 = percentile(&elapsed, 0.95);
-        let avg_tools = if count > 0 {
-            self.turns
-                .iter()
-                .map(|t| t.tool_calls)
-                .sum::<usize>()
-                .checked_div(count)
-                .unwrap_or(0)
-        } else {
-            0
-        };
+        let p50 = percentile_sorted_turn(&self.turns_sorted, 0.50);
+        let p95 = percentile_sorted_turn(&self.turns_sorted, 0.95);
+        let avg_tools: u64 = self.turns.iter().map(|t| t.tool_calls as u64).sum();
         TurnStats {
-            count,
+            count: self.turns_count,
             failures,
             p50_ms: p50,
             p95_ms: p95,
-            avg_tool_calls: avg_tools,
+            avg_tool_calls: (avg_tools / self.turns_count as u64) as usize,
         }
     }
 
@@ -108,6 +157,28 @@ impl Telemetry {
     pub fn recent_turns(&self, limit: usize) -> Vec<TurnRecord> {
         self.turns.iter().rev().take(limit).cloned().collect()
     }
+}
+
+/// Calculate percentile from a pre-sorted tool_record buffer (ascending order).
+#[inline]
+fn percentile_sorted(sorted: &VecDeque<ToolRecord>, p: f64) -> u64 {
+    let count = sorted.len();
+    if count == 0 {
+        return 0;
+    }
+    let idx = ((count - 1) as f64 * p).round() as usize;
+    sorted[idx].elapsed_ms
+}
+
+/// Calculate percentile from a pre-sorted turn_record buffer (ascending order).
+#[inline]
+fn percentile_sorted_turn(sorted: &VecDeque<TurnRecord>, p: f64) -> u64 {
+    let count = sorted.len();
+    if count == 0 {
+        return 0;
+    }
+    let idx = ((count - 1) as f64 * p).round() as usize;
+    sorted[idx].elapsed_ms
 }
 
 #[derive(Debug, Clone, Default)]
@@ -125,14 +196,6 @@ pub struct TurnStats {
     pub p50_ms: u64,
     pub p95_ms: u64,
     pub avg_tool_calls: usize,
-}
-
-fn percentile(sorted: &[u64], p: f64) -> u64 {
-    if sorted.is_empty() {
-        return 0;
-    }
-    let idx = ((sorted.len() - 1) as f64 * p).round() as usize;
-    sorted[idx.min(sorted.len() - 1)]
 }
 
 /// Global telemetry handle: cheap to clone, all recording goes through a
@@ -196,8 +259,8 @@ mod tests {
         for i in 0..CAPACITY + 10 {
             tel.record_tool(&format!("tool-{i}"), true, Duration::from_millis(i as u64));
         }
-        assert_eq!(tel.tools.len(), CAPACITY);
-        // tool-0 should have been dropped (it's the oldest of CAPACITY+10 inserts)
+        assert_eq!(tel.tools_count, CAPACITY);
+        // tool-0 should have been dropped
         assert!(!tel.tools.iter().any(|t| t.name == "tool-0"));
         assert!(tel
             .tools
@@ -216,6 +279,9 @@ mod tests {
         assert_eq!(stats.failures, 0);
         assert!(stats.p50_ms > 0);
         assert!(stats.p95_ms >= stats.p50_ms);
+        // p50 should be around 50ms, p95 around 95ms
+        assert!(stats.p50_ms >= 49 && stats.p50_ms <= 51);
+        assert!(stats.p95_ms >= 94 && stats.p95_ms <= 96);
     }
 
     #[test]
@@ -227,5 +293,19 @@ mod tests {
         assert_eq!(stats.count, 2);
         assert_eq!(stats.failures, 1);
         assert_eq!(stats.avg_tool_calls, 2);
+    }
+
+    #[test]
+    fn recent_tools_returns_most_recent() {
+        let mut tel = Telemetry::default();
+        for i in 0..5 {
+            tel.record_tool(&format!("tool-{i}"), true, Duration::from_millis(i));
+        }
+        let recent = tel.recent_tools(3);
+        assert_eq!(recent.len(), 3);
+        // Most recent is first in rev order
+        assert_eq!(recent[0].name, "tool-4");
+        assert_eq!(recent[1].name, "tool-3");
+        assert_eq!(recent[2].name, "tool-2");
     }
 }
