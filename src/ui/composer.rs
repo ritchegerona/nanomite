@@ -2,11 +2,75 @@ use super::text;
 use super::theme::glyph;
 use crate::app::App;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 use ratatui::Frame;
 use std::collections::VecDeque;
+
+/// Mirrors `image_size_label` in `app/mod.rs` so the UI layer can render
+/// image chips without reaching into `App` internals.
+fn image_size_label_local(bytes: usize) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{} KB", bytes.div_ceil(1024))
+    }
+}
+
+/// Renders a row of inline image preview chips above the composer input when
+/// images are queued for drag-and-drop / /image. Each chip shows the inline
+/// image glyph, the file name and size, and the on-disk location so the user
+/// can see exactly where the dragged png/jpg lives.
+fn render_image_chips(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    y: u16,
+    width: usize,
+) -> u16 {
+    if app.pending_images.is_empty() {
+        return y;
+    }
+    let theme = &app.theme;
+    let mut x = area.x as usize;
+    let mut spans: Vec<Span> = Vec::new();
+    let budget = width.saturating_sub(4); // leave room for the prompt glyph
+    for image in &app.pending_images {
+        let label = format!(
+            "{} {name} · {size} · {path}",
+            glyph::IMAGE,
+            name = image.name,
+            size = image_size_label_local(image.bytes),
+            path = image.path.display(),
+        );
+        let chip = format!(" {label} ");
+        if x + chip.len() > area.x as usize + budget {
+            break;
+        }
+        spans.push(Span::styled(
+            chip.clone(),
+            Style::default()
+                .fg(theme.warn())
+                .add_modifier(Modifier::BOLD),
+        ));
+        x += chip.len() + 1;
+    }
+    if !spans.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
+        );
+        y + 1
+    } else {
+        y
+    }
+}
 
 /// Multi-line prompt buffer with cursor, history and wrapped-row math.
 #[derive(Clone)]
@@ -547,6 +611,9 @@ fn render_compact(
     let text_x = area.x + 2;
     let text_w = area.width.saturating_sub(2);
 
+    let y = render_image_chips(frame, area, app, text_top, text_w.into());
+    let text_top = y;
+
     if app.composer.is_empty() {
         let hint = if busy {
             "the agent is working - type to queue"
@@ -667,8 +734,19 @@ pub fn render(
         return None;
     }
 
-    let text_top = inner.y;
-    let text_h = inner.height as usize;
+    let mut text_top = inner.y;
+    let mut text_h = inner.height as usize;
+    let text_x = inner.x + 2;
+    let text_w = inner.width.saturating_sub(2);
+
+    // Inline image chips sit above the input line: they claim one row so the
+    // queued png/jpg is visible with its name, size and on-disk location.
+    text_top = render_image_chips(frame, inner, app, text_top, text_w as usize);
+    text_h = text_h.saturating_sub(text_top.saturating_sub(inner.y) as usize);
+
+    if text_h == 0 {
+        return None;
+    }
 
     let prompt = Span::styled(
         format!("{} ", glyph::PROMPT),
@@ -687,9 +765,6 @@ pub fn render(
             height: 1,
         },
     );
-
-    let text_x = inner.x + 2;
-    let text_w = inner.width.saturating_sub(2);
 
     if app.composer.is_empty() {
         let hint = if busy {

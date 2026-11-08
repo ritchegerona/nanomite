@@ -14,6 +14,7 @@ pub enum Command {
     Editor,
     Exit,
     Export,
+    Favorites,
     Help,
     Image,
     Init,
@@ -187,6 +188,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "compose the prompt in $EDITOR (alt+e)",
         kind: Command::Editor,
+    },
+    Entry {
+        command: "/favorites",
+        aliases: &["/fav"],
+        hint: "list favorited models and remove one - /fav <model> (ctrl+f in /model)",
+        kind: Command::Favorites,
     },
     Entry {
         command: "/image",

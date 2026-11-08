@@ -630,6 +630,10 @@ pub struct Config {
     pub step_timeout_ms: u64,
     /// Disable animations (spinners, fades) for reduced-motion preference.
     pub reduced_motion: bool,
+    /// Favorited model ids, pinned to the top of the `/model` picker under a
+    /// `Favorites` heading (opencode-style `ctrl+f`). Persisted as the
+    /// `[model]` section's `favorites` key.
+    pub model_favorites: Vec<String>,
     /// opencode-style follow-up suggestions: after each finished turn a tiny
     /// side-call asks the model for 3 short next-step prompts, shown as a
     /// strip above the composer. Persisted; `NANOMITE_SUGGESTIONS` overrides.
@@ -679,6 +683,8 @@ struct Stored {
     suggestions: Option<bool>,
     compact: Option<bool>,
     confirm_external: Option<bool>,
+    /// `[model]` section: favorited model ids, shown first in `/model`.
+    model_favorites: Option<Vec<String>>,
     // `[hacker]` section.
     hacker_enabled: Option<bool>,
     hacker_scope: Option<String>,
@@ -761,6 +767,9 @@ fn parse_stored(text: &str) -> Stored {
                 "disabled_tools" => stored.disabled_tools = Some(value),
                 "tool_policy" => stored.tool_policy = Some(value),
                 "prompt_file" => stored.prompt_file = Some(value),
+                "favorites" => {
+                    stored.model_favorites = Some(parse_disabled_tools(&value));
+                }
                 "reduced_motion" => stored.reduced_motion = parse_bool_opt(&value),
                 "suggestions" => stored.suggestions = parse_bool_opt(&value),
                 "compact" => stored.compact = parse_bool_opt(&value),
@@ -880,6 +889,16 @@ fn stored_text(cfg: &Config) -> String {
         lines.push("confirm_external = false".to_string());
     }
     lines.push(String::new());
+    // Favorite models. A `[model]` section keeps the table explicit; the list
+    // is quoted CSV so a model id containing a comma still round-trips.
+    if !cfg.model_favorites.is_empty() {
+        lines.push("[model]".to_string());
+        lines.push(format!(
+            "favorites = {}",
+            quote(&cfg.model_favorites.join(","))
+        ));
+        lines.push(String::new());
+    }
     // Per-provider keys. Kept as a section so several providers stay configured
     // at once; the active provider's key is also mirrored in the top-level
     // `api_key` above for older readers.
@@ -919,7 +938,8 @@ fn stored_text(cfg: &Config) -> String {
         lines.push(format!("topic = {}", quote(topic)));
     }
     lines.push(String::new());
-    // Auto-update behavior
+    // Auto-update behavior. Its own top-level key: writing it after the
+    // `[learn]` header used to file it under that section on reload.
     lines.push(format!("autoupdate = {}", quote(&cfg.autoupdate)));
     lines.push(String::new());
     lines.join("\n")
@@ -1252,6 +1272,14 @@ impl Config {
             } else {
                 stored.compact.unwrap_or(false)
             },
+            model_favorites: (if use_env {
+                first_env_one("NANOMITE_MODEL_FAVORITES")
+                    .map(|raw| parse_disabled_tools(&raw))
+            } else {
+                None
+            })
+            .or_else(|| stored.model_favorites.clone())
+            .unwrap_or_default(),
             learning_daily: if use_env {
                 match first_env_one("NANOMITE_LEARN_DAILY") {
                     Some(v) => parse_bool(&v),
@@ -1361,6 +1389,63 @@ impl Config {
         self.provider_keys
             .get(&provider.trim().to_ascii_lowercase())
             .cloned()
+    }
+
+    /// Is this model id favorited? Case-insensitive: model ids come from many
+    /// endpoints with inconsistent casing, and a favorite should survive that.
+    pub fn is_model_favorite(&self, model: &str) -> bool {
+        let needle = model.trim().to_ascii_lowercase();
+        !needle.is_empty()
+            && self
+                .model_favorites
+                .iter()
+                .any(|f| f.trim().to_ascii_lowercase() == needle)
+    }
+
+    /// Adds or removes a favorite. Returns `true` when the model is now
+    /// favorited. The list is de-duplicated case-insensitively and persisted
+    /// immediately, like every other setup change.
+    pub fn toggle_model_favorite(&mut self, model: &str) -> bool {
+        let needle = model.trim().to_ascii_lowercase();
+        if needle.is_empty() {
+            return false;
+        }
+        if self.is_model_favorite(&needle) {
+            self.model_favorites
+                .retain(|f| f.trim().to_ascii_lowercase() != needle);
+            self.save();
+            false
+        } else {
+            if let Some(existing) = self
+                .model_favorites
+                .iter_mut()
+                .find(|f| f.trim().to_ascii_lowercase() == needle)
+            {
+                *existing = model.trim().to_string();
+            } else {
+                self.model_favorites.push(model.trim().to_string());
+            }
+            self.save();
+            true
+        }
+    }
+
+    /// Removes a single model from the favorites list. Returns true when a
+    /// favorite was removed. Case-insensitive; persisted immediately.
+    pub fn remove_model_favorite(&mut self, model: &str) -> bool {
+        let needle = model.trim().to_ascii_lowercase();
+        if needle.is_empty() {
+            return false;
+        }
+        let before = self.model_favorites.len();
+        self.model_favorites
+            .retain(|f| f.trim().to_ascii_lowercase() != needle);
+        if self.model_favorites.len() != before {
+            self.save();
+            true
+        } else {
+            false
+        }
     }
 
     /// Switches endpoint, key source and default model in one move.

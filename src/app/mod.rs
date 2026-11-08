@@ -813,11 +813,14 @@ pub struct SearchState {
     pub current: usize,
 }
 
-/// An image attachment queued by `/image` and consumed by the next turn.
+/// An image attachment queued by `/image` or dropped into the chatbox and
+/// consumed by the next turn.
 #[derive(Debug, Clone)]
 pub struct PendingImage {
     /// Base file name, shown in the transcript badge.
     pub name: String,
+    /// Full on-disk path where the image resides (shown for drag-and-drops).
+    pub path: PathBuf,
     /// `data:<mime>;base64,<payload>` — sent as an `image_url` content part.
     pub data_url: String,
     /// Raw byte size, for the badge.
@@ -1183,6 +1186,7 @@ fn build_image_attachment(arg: &str, cwd: &std::path::Path) -> Result<PendingIma
         .unwrap_or_else(|| "image".into());
     Ok(PendingImage {
         name,
+        path: full.clone(),
         data_url: format!("data:{mime};base64,{}", base64_encode(&bytes)),
         bytes: bytes.len(),
     })
@@ -1247,6 +1251,7 @@ fn process_file_reference(
         return Ok((
             Some(PendingImage {
                 name,
+                path: full.clone(),
                 data_url: format!("data:{mime};base64,{}", base64_encode(&bytes)),
                 bytes: bytes.len(),
             }),
@@ -1400,12 +1405,19 @@ fn image_size_label(bytes: usize) -> String {
     }
 }
 
-/// Badge line prepended to a user entry carrying `image`.
+/// Badge line prepended to a user entry carrying `image`. For drag-and-drops
+/// the on-disk path is shown so the user can see where the image resides.
 fn image_badge(image: &PendingImage) -> String {
+    let location = image
+        .path
+        .to_str()
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| image.name.clone());
     format!(
-        "[image: {} · {}]",
+        "[image: {} · {} · {}]",
         image.name,
-        image_size_label(image.bytes)
+        image_size_label(image.bytes),
+        location
     )
 }
 
@@ -1852,7 +1864,7 @@ pub struct App {
     confirm_grants: Arc<std::sync::Mutex<SessionGrants>>,
     /// Images queued by `/image`, attached to the next user turn and then
     /// cleared. Bounded by `MAX_PENDING_IMAGES`.
-    pending_images: Vec<PendingImage>,
+    pub(crate) pending_images: Vec<PendingImage>,
     /// Self-improvement engine. Opening it only creates a data directory, so it
     /// is always attached in production.
     improve: Option<Arc<ImproveEngine>>,
@@ -1876,6 +1888,13 @@ pub struct App {
     tx: UnboundedSender<AgentEvent>,
     models_rx: UnboundedReceiver<ModelsResult>,
     models_tx: UnboundedSender<ModelsResult>,
+    /// The most recent grouped `/model` result, so a favorite toggle can
+    /// rebuild the picker's rows without re-querying every endpoint.
+    last_model_groups: Vec<ProviderModels>,
+    /// Cursor position the model picker was left at, so reopening the picker
+    /// drops the user back on the model they were considering instead of the
+    /// top of the list.
+    picker_cursor: usize,
     memory_rx: UnboundedReceiver<(u64, MemoryResult)>,
     memory_tx: UnboundedSender<(u64, MemoryResult)>,
     /// Bumped on every `/memory` open: stale rows from an older query are dropped.
@@ -2069,6 +2088,8 @@ impl App {
             tx,
             models_rx,
             models_tx,
+            last_model_groups: Vec::new(),
+            picker_cursor: 0,
             memory_rx,
             memory_tx,
             memory_gen: 0,
@@ -3172,7 +3193,9 @@ impl App {
             Command::Panel => self.open_board(args),
             Command::Reasoning => self.cycle_reasoning(),
             Command::Copy => self.copy_selection(),
-            Command::Image => self.attach_image(args),
+            Command::Image => {
+                self.attach_image(args);
+            }
             Command::Redo => self.redo(),
             Command::Sessions => self.open_sessions(),
             Command::Share => self.share_session(),
@@ -3199,6 +3222,7 @@ impl App {
             Command::Next => self.next_turn(),
             Command::Learn => self.run_learn(args),
             Command::Update => self.handle_update(args),
+            Command::Favorites => self.run_favorites(args),
         }
         self.mark_dirty();
     }
@@ -3283,6 +3307,30 @@ impl App {
                 self.toast(format!("usage: /update [check] (got `{other}`)"));
             }
         }
+    }
+
+    /// `/favorites [<model>]`: list favorited models, or remove one by name.
+    /// With no args it shows all favorites as a toast; with a model id it
+    /// toggles that model off the favorites list.
+    fn run_favorites(&mut self, args: &str) {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            let favs: Vec<&str> = self.cfg.model_favorites.iter().map(|s| s.as_str()).collect();
+            if favs.is_empty() {
+                self.toast("no favorited models - ctrl+f in /model to pin one");
+            } else {
+                self.toast(format!("favorited: {}", favs.join(", ")));
+            }
+            self.mark_dirty();
+            return;
+        }
+        let removed = self.cfg.remove_model_favorite(trimmed);
+        self.toast(if removed {
+            format!("{trimmed} removed from favorites")
+        } else {
+            format!("{trimmed} is not favorited")
+        });
+        self.mark_dirty();
     }
 
     /// Performs the full update: fetch, pull, rebuild.
@@ -3778,16 +3826,16 @@ impl App {
     /// Reading and encoding run on the blocking pool; the result returns via
     /// `Control::ImageAttached`. Test builds have no control channel, so the
     /// result is computed inline and applied directly.
-    fn attach_image(&mut self, arg: &str) {
+    fn attach_image(&mut self, arg: &str) -> bool {
         if arg.trim().is_empty() {
             self.toast("usage: /image <path-to-image>");
             self.mark_dirty();
-            return;
+            return false;
         }
         if self.pending_images.len() >= MAX_PENDING_IMAGES {
             self.toast("too many queued images - send the message first");
             self.mark_dirty();
-            return;
+            return false;
         }
         if self.control_tx.is_some() {
             let arg = arg.to_string();
@@ -3800,12 +3848,15 @@ impl App {
                 }
             });
             self.toast("reading image…");
+            true
         } else {
             // Headless/test path: no control channel means nobody would
             // deliver the result, so compute and apply it right here.
-            self.on_image_attached(build_image_attachment(arg.trim(), &self.cwd));
+            let built = build_image_attachment(arg.trim(), &self.cwd);
+            let ok = built.is_ok();
+            self.on_image_attached(built);
+            ok
         }
-        self.mark_dirty();
     }
 
     /// Delivers pasted text to the focused overlay's text field, if it has
@@ -3897,8 +3948,9 @@ impl App {
         let mut files = 0usize;
         for path in tokens {
             if is_image_path(&path) {
-                self.attach_image(&path);
-                images += 1;
+                if self.attach_image(&path) {
+                    images += 1;
+                }
             } else {
                 if !self.composer.is_empty() && !self.composer.value().ends_with(' ') {
                     self.composer.insert(' ');
@@ -3949,8 +4001,11 @@ impl App {
             Ok(image) => {
                 let label = image_size_label(image.bytes);
                 let name = image.name.clone();
+                let location = image.path.display().to_string();
                 self.pending_images.push(image);
-                self.toast(format!("attached {name} ({label}) - send the message"));
+                self.toast(format!(
+                    "attached {name} ({label}) at {location} - send the message"
+                ));
             }
             Err(reason) => self.toast(reason),
         }
@@ -4427,16 +4482,25 @@ impl App {
     }
 
     pub fn open_model_picker(&mut self) {
-        let mut picker = Picker::new(PickerMode::Model, self.model_items(Vec::new()));
-        picker.loading = true;
-        self.overlay = Some(Overlay::Picker(picker));
-
         // Query every configured provider in parallel and group the results by
         // provider. A provider that fails or returns nothing is dropped, so the
-        // list never shows a dead endpoint's models.
+        // list never shows a dead endpoint's models. Favorites are re-sectioned
+        // from these groups by `grouped_model_items`.
         let active_id = self.cfg.preset.clone();
-        let active = Arc::clone(self.runtime.provider());
         let targets = self.provider_targets();
+        if targets.is_empty() {
+            // Nothing to query: show the current model straight away instead of
+            // spinning on a fetch that can never answer.
+            let picker = Picker::new(PickerMode::Model, self.grouped_model_items(Vec::new()));
+            self.overlay = Some(Overlay::Picker(picker));
+            self.mark_dirty();
+            return;
+        }
+        let mut picker = Picker::new(PickerMode::Model, self.model_items(Vec::new()));
+        picker.cursor = self.picker_cursor;
+        picker.loading = true;
+        self.overlay = Some(Overlay::Picker(picker));
+        let active = Arc::clone(self.runtime.provider());
         let tx = self.models_tx.clone();
         self.handle.spawn(async move {
             let fetches = targets.into_iter().map(|target| {
@@ -4476,9 +4540,41 @@ impl App {
     }
 
     /// Rows for the grouped model picker: a provider title followed by its
-    /// models. The active model always appears, even if its provider failed.
+    /// models. Favorited models are pinned to the top under their own
+    /// `Favorites` heading (opencode-style `ctrl+f`). The active model always
+    /// appears, even if its provider failed.
     fn grouped_model_items(&self, groups: Vec<ProviderModels>) -> Vec<PickerItem> {
         let mut items = Vec::new();
+
+        // Favorites first, restated as the full ProviderModel value they point
+        // at, so picking one still switches provider when needed. Duplicates
+        // are fine: the same model may sit in both Favorites and its provider
+        // section, exactly like opencode's menu.
+        let favorites: Vec<PickerItem> = groups
+            .iter()
+            .flat_map(|group| {
+                group.models.iter().filter_map(move |model| {
+                    if !self.cfg.is_model_favorite(model) {
+                        return None;
+                    }
+                    let current = group.id == self.cfg.preset && *model == self.cfg.model;
+                    Some(PickerItem {
+                        current,
+                        label: model.clone(),
+                        hint: String::new(),
+                        value: PickerValue::ProviderModel {
+                            provider: group.id.clone(),
+                            model: model.clone(),
+                        },
+                    })
+                })
+            })
+            .collect();
+        if !favorites.is_empty() {
+            items.push(PickerItem::header("Favorites"));
+            items.extend(favorites);
+        }
+
         for group in groups {
             items.push(PickerItem::header(&group.label));
             for model in group.models {
@@ -4547,6 +4643,7 @@ impl App {
         );
         match result {
             ModelsResult::Grouped(groups) if for_picker => {
+                self.last_model_groups = groups.clone();
                 let rows = self.grouped_model_items(groups);
                 if let Some(Overlay::Picker(picker)) = &mut self.overlay {
                     picker.set_source(rows, None);
@@ -4583,6 +4680,38 @@ impl App {
             }
         }
         self.mark_dirty();
+    }
+
+    /// Rebuilds the open model picker's rows from the most recent endpoint
+    /// result so structural edits (favorites) show up without re-querying.
+    /// The filter text and cursor are preserved; a picker that is mid-fetch is
+    /// left alone, its own result will rebuild the rows when it lands.
+    fn refresh_model_picker_rows(&mut self) {
+        let Some(Overlay::Picker(picker)) = &mut self.overlay else {
+            return;
+        };
+        if picker.mode != PickerMode::Model || picker.loading {
+            return;
+        }
+        let cursor = picker.cursor;
+        let query = picker.filter.value().to_string();
+        let rows = self.grouped_model_items(self.last_model_groups.clone());
+        if let Some(Overlay::Picker(picker)) = &mut self.overlay {
+            picker.set_source(rows, Some(cursor));
+            if !query.is_empty() {
+                picker.filter.insert_str(&query);
+                picker.apply_filter();
+            }
+            self.overlay = Some(Overlay::Picker(picker.clone()));
+        }
+        self.mark_dirty();
+    }
+
+    /// `ctrl+a` in the `/model` picker: jump straight to the provider menu,
+    /// the same surface `/connect` opens.
+    fn open_provider_menu_from_picker(&mut self) {
+        self.close_overlay();
+        self.open_provider_menu();
     }
 
     // -- /panel -------------------------------------------------------------
@@ -5598,6 +5727,13 @@ impl App {
     }
 
     pub fn close_overlay(&mut self) {
+        // Remember where the model picker was left so reopening it drops the
+        // user back on the model they were considering instead of the top.
+        if let Some(Overlay::Picker(picker)) = &self.overlay {
+            if picker.mode == PickerMode::Model {
+                self.picker_cursor = picker.cursor;
+            }
+        }
         if self.overlay.take().is_some() {
             self.mark_dirty();
         }
@@ -7099,6 +7235,7 @@ impl App {
                 self.mark_dirty();
             }
             Overlay::Picker(mut picker) => {
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
                 match key.code {
                     KeyCode::Esc => {
                         self.close_overlay();
@@ -7122,6 +7259,29 @@ impl App {
                         })
                     }
                     KeyCode::Backspace => picker.filter.backspace(),
+                    // opencode-style model-picker shortcuts, Model mode only.
+                    KeyCode::Char('f') if ctrl && picker.mode == PickerMode::Model => {
+                        let model = match picker.selection() {
+                            Some(PickerValue::Model(m)) | Some(PickerValue::ProviderModel { model: m, .. }) => Some(m),
+                            _ => None,
+                        };
+                        drop(picker);
+                        if let Some(model) = model {
+                            let now_fav = self.cfg.toggle_model_favorite(&model);
+                            self.refresh_model_picker_rows();
+                            self.toast(if now_fav {
+                                format!("{model} favorited")
+                            } else {
+                                format!("{model} unfavorited")
+                            });
+                        }
+                        return;
+                    }
+                    KeyCode::Char('a') if ctrl && picker.mode == PickerMode::Model => {
+                        drop(picker);
+                        self.open_provider_menu_from_picker();
+                        return;
+                    }
                     KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                         picker.filter.insert(c)
                     }
@@ -8318,10 +8478,14 @@ mod tests {
         assert_eq!(image_size_label(3 * 1024 * 1024 + 262_144), "3.2 MB");
         let image = PendingImage {
             name: "shot.png".into(),
+            path: std::path::PathBuf::from("/somewhere/shot.png"),
             data_url: "data:image/png;base64,QQ==".into(),
             bytes: 2048,
         };
-        assert_eq!(image_badge(&image), "[image: shot.png · 2 KB]");
+        assert_eq!(
+            image_badge(&image),
+            "[image: shot.png · 2 KB · /somewhere/shot.png]"
+        );
     }
 
     #[tokio::test]
@@ -8334,6 +8498,48 @@ mod tests {
         let pasted = format!("'{}'", path.display());
         app.on_paste(&pasted);
         assert_eq!(app.pending_images.len(), 1, "dropped png queues");
+    }
+
+    #[tokio::test]
+    async fn paste_routes_dropped_jpg_with_spaces_and_shows_location() {
+        let mut app = test_app().await;
+        let dir = crate::improve::testing::temp_dir("paste-jpg-spaces");
+        let path = dir.path.join("my photo.jpg");
+        std::fs::write(&path, b"\xff\xd8\xff fake-jpg").expect("write fixture");
+        // Terminals drop files as a quoted pasted path; spaces must survive.
+        let pasted = format!("'{}'", path.display());
+        app.on_paste(&pasted);
+        assert_eq!(app.pending_images.len(), 1, "dropped jpg queues");
+        let img = &app.pending_images[0];
+        assert_eq!(img.name, "my photo.jpg");
+        assert!(img.path.to_str().unwrap().contains("my photo.jpg"));
+        // The badge reports the name, size and the actual file location.
+        let badge = image_badge(img);
+        assert!(badge.contains("my photo.jpg"));
+        assert!(badge.contains(path.to_str().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn paste_rejects_oversized_image_with_size_cap_toast() {
+        let mut app = test_app().await;
+        let dir = crate::improve::testing::temp_dir("paste-oversize");
+        // 11 MB of junk — one MB over the cap.
+        let bytes = vec![0u8; 11 * 1024 * 1024];
+        let path = dir.path.join("huge.jpg");
+        std::fs::write(&path, &bytes).expect("write fixture");
+        let pasted = format!("'{}'", path.display());
+        app.on_paste(&pasted);
+        // The image must NOT queue: the 10 MB cap blocks it.
+        assert!(
+            app.pending_images.is_empty(),
+            "oversized image must not queue"
+        );
+        let toast = app.toast.as_ref().unwrap().0.clone();
+        assert!(
+            toast.contains("is over the"),
+            "toast should report the size cap, got: {toast}"
+        );
+        assert!(toast.contains("10 MB"), "toast should name the cap, got: {toast}");
     }
 
     #[tokio::test]

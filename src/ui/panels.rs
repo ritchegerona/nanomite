@@ -296,6 +296,19 @@ pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
             format!("{} ready", glyph::DOT),
             Style::default().fg(theme.faint()),
         ));
+        // Queued images waiting to be sent (drag-and-dropped or /image).
+        if !app.pending_images.is_empty() {
+            let n = app.pending_images.len();
+            let names: Vec<String> = app
+                .pending_images
+                .iter()
+                .map(|i| i.name.clone())
+                .collect();
+            left.push(Span::styled(
+                format!("  {n} image(s) queued: {}", names.join(", ")),
+                Style::default().fg(theme.warn()).add_modifier(Modifier::BOLD),
+            ));
+        }
         // Quiet one-time note when persistent memory is not attached. It
         // sits next to "ready" rather than in the toast slot: an absent or
         // unwritable memory directory is a normal state, not a failure.
@@ -569,6 +582,45 @@ pub fn help(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
+/// Maps a model id to a right-side badge, the way opencode's model menu does
+/// (its "Free"/"Fast" column): free local runtimes, and endpoints that serve
+/// free/flash tiers, get a quiet label; everything else shows the provider.
+fn model_badge(provider_id: &str, model: &str, offline: bool) -> String {
+    if offline {
+        return "free".to_string();
+    }
+    let id = format!("{provider_id} {model}").to_ascii_lowercase();
+    if id.contains("free")
+        || id.contains(":free")
+        || id.contains("-flash")
+        || id.contains("flash-lite")
+        || id.contains("nano")
+        || id.contains("mini")
+        || id.contains("haiku")
+        || id.contains("8b")
+        || id.contains("small")
+    {
+        "free · fast".to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Is this model id one of the fast/flash tiers? Mirrors [`model_badge`] so
+/// the highlight row and normal rows agree on what gets a badge.
+fn model_is_fast(provider_id: &str, model: &str) -> bool {
+    let id = format!("{provider_id} {model}").to_ascii_lowercase();
+    id.contains("free")
+        || id.contains(":free")
+        || id.contains("-flash")
+        || id.contains("flash-lite")
+        || id.contains("nano")
+        || id.contains("mini")
+        || id.contains("haiku")
+        || id.contains("8b")
+        || id.contains("small")
+}
+
 /// Command / provider / model picker overlay.
 pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
     let theme = &app.theme;
@@ -579,6 +631,7 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
     let inner_w = area.width.saturating_sub(4) as usize;
     let inner_h = area.height.saturating_sub(2) as usize;
 
+    let is_model = picker.mode == crate::app::PickerMode::Model;
     let query = picker.filter.value().to_string();
     let mut lines = vec![
         Line::from(vec![
@@ -588,7 +641,11 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
             ),
             Span::styled(
                 if query.is_empty() {
-                    picker.placeholder().to_string()
+                    if is_model {
+                        "search".to_string()
+                    } else {
+                        picker.placeholder().to_string()
+                    }
                 } else {
                     query.clone()
                 },
@@ -911,7 +968,7 @@ fn footer_key(app: &App) -> String {
         None => String::from("none"),
     };
     format!(
-        "{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}|{}",
         app.usage.prompt_tokens,
         app.usage.completion_tokens,
         app.usage.total_tokens,
@@ -921,6 +978,7 @@ fn footer_key(app: &App) -> String {
             .unwrap_or(0),
         // Mode affects the footer (mode name on right), so include it in the key.
         app.cfg.tool_policy.as_str(),
+        app.pending_images.len(),
         search,
     )
 }

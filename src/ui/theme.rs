@@ -593,6 +593,9 @@ pub mod glyph {
     pub const CURSOR: &str = "▍";
     /// Mask character for secrets in the /connect form.
     pub const BULLET: &str = "•";
+    /// Inline image thumbnail marker shown in the composer next to the image
+    /// badge so a dropped png/jpg is visually distinct from plain text.
+    pub const IMAGE: &str = "🖼";
     /// Context-meter cells: filled and empty.
     pub const BLOCK: &str = "█";
     pub const BLOCK_LIGHT: &str = "░";
