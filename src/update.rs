@@ -10,6 +10,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::update_signing::{verify_signature, UpdateSigning, VerifyResult};
+
 /// How long a single git or cargo step may run before the update gives up.
 const STEP_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -57,6 +59,54 @@ pub fn run() -> io::Result<()> {
     if behind == 0 && !tag_newer {
         println!("nanomite v{current} is up to date");
         return Ok(());
+    }
+
+    // Authenticated self-update: verify the release signature before pulling
+    // and rebuilding. A release must be signed by the maintainer's key; an
+    // unsigned release is refused unless NANOMITE_UPDATE_ALLOW_UNSIGNED=1.
+    let signing = UpdateSigning::from_env();
+    if let Some(tag) = latest_tag.as_deref() {
+        let commit = git_opt(&repo, &["rev-list", "-n", "1", tag]);
+        let payload = commit.as_deref().unwrap_or(tag);
+        let signature = git_opt(&repo, &["show", &format!("{tag}:{tag}.sig")]);
+        let result = match signature.as_deref() {
+            None => VerifyResult::Unsigned,
+            Some(sig) if sig.trim().is_empty() => VerifyResult::Unsigned,
+            Some(sig) => match &signing.key {
+                Some(key) => {
+                    if verify_signature(key, payload, sig) {
+                        VerifyResult::Verified
+                    } else {
+                        VerifyResult::Tampered
+                    }
+                }
+                None => VerifyResult::Unsigned,
+            },
+        };
+
+        match result {
+            VerifyResult::Verified => {
+                println!("signature verified for tag {tag}");
+            }
+            VerifyResult::Unsigned => {
+                if signing.requires_signature() {
+                    return Err(io::Error::other(format!(
+                        "refusing unsigned update to tag {tag}: no valid signature found. Set NANOMITE_UPDATE_ALLOW_UNSIGNED=1 to bypass (not recommended)."
+                    )));
+                }
+                println!("warning: unsigned update to tag {tag} (allow_unsigned set)");
+            }
+            VerifyResult::Tampered => {
+                return Err(io::Error::other(format!(
+                    "refusing update to tag {tag}: signature does not match — the release may have been tampered with"
+                )));
+            }
+            VerifyResult::Malformed => {
+                return Err(io::Error::other(format!(
+                    "refusing update to tag {tag}: malformed signature file"
+                )));
+            }
+        }
     }
 
     if behind > 0 {
