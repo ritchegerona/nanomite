@@ -72,6 +72,13 @@ pub struct Palette {
     pub code: Rgb,
     /// Block-quoted prose.
     pub quote: Rgb,
+
+    /// Fenced code: called functions and method names.
+    pub code_function: Rgb,
+    /// Fenced code: types, structs, classes, traits, variants.
+    pub code_type: Rgb,
+    /// Fenced code: ALL_CAPS constants and attributes.
+    pub code_constant: Rgb,
 }
 
 /// Single-hue high contrast, easy on low-contrast panels.
@@ -100,6 +107,9 @@ const MONO: Palette = Palette {
     tool: (168, 168, 168),
     code: (150, 190, 150),
     quote: (140, 140, 140),
+    code_function: (228, 228, 228),
+    code_type: (198, 198, 198),
+    code_constant: (240, 240, 240),
 };
 
 /// Cool slate ground with a periwinkle accent.
@@ -128,6 +138,9 @@ const MIDNIGHT: Palette = Palette {
     tool: (150, 160, 184),
     code: (166, 194, 141),
     quote: (140, 148, 168),
+    code_function: (220, 220, 170),
+    code_type: (120, 190, 190),
+    code_constant: (206, 161, 110),
 };
 
 /// nanomite brand: near-black ground with teal and orange.
@@ -156,6 +169,9 @@ const GRAPHITE: Palette = Palette {
     tool: (176, 184, 200),
     code: (176, 200, 160),
     quote: (130, 145, 165),
+    code_function: (230, 200, 140),
+    code_type: (105, 200, 200),
+    code_constant: (235, 175, 120),
 };
 
 /// Resident Evil — Umbrella Corporation: near-black ground, blood-red accent,
@@ -185,6 +201,9 @@ const UMBRELLA: Palette = Palette {
     tool: (192, 152, 160),
     code: (168, 196, 156),
     quote: (152, 142, 146),
+    code_function: (214, 180, 110),
+    code_type: (110, 190, 190),
+    code_constant: (210, 150, 100),
 };
 
 /// Dracula — Popular purple/pink theme: deep purple ground, vibrant pink accent.
@@ -214,6 +233,9 @@ const DRACULA: Palette = Palette {
     tool: (189, 147, 249),
     code: (139, 233, 253),
     quote: (241, 250, 140),
+    code_function: (80, 250, 123),
+    code_type: (139, 233, 253),
+    code_constant: (255, 184, 108),
 };
 
 /// Cyberpunk — Neon-drenched dark theme: hot pink + cyan on near-black.
@@ -243,6 +265,9 @@ const CYBERPUNK: Palette = Palette {
     tool: (255, 0, 128),
     code: (0, 255, 200),
     quote: (255, 255, 0),
+    code_function: (255, 220, 80),
+    code_type: (80, 250, 255),
+    code_constant: (255, 120, 200),
 };
 
 /// Hacker — phosphor green on black: classic terminal-noir, matrix green.
@@ -271,6 +296,9 @@ const HACKER: Palette = Palette {
     tool: (140, 230, 140),
     code: (150, 255, 150),
     quote: (90, 160, 90),
+    code_function: (140, 255, 140),
+    code_type: (100, 220, 100),
+    code_constant: (200, 255, 120),
 };
 
 /// Mr. Robot — fsociety red on warm charcoal: cable-static darks, sharp red.
@@ -299,6 +327,9 @@ const MR_ROBOT: Palette = Palette {
     tool: (196, 152, 148),
     code: (170, 196, 150),
     quote: (146, 134, 130),
+    code_function: (230, 200, 140),
+    code_type: (105, 200, 200),
+    code_constant: (235, 175, 120),
 };
 
 /// Anonymous — grey-hat monochrome: silver on black, cold and faceless.
@@ -327,6 +358,41 @@ const ANONYMOUS: Palette = Palette {
     tool: (170, 170, 180),
     code: (170, 200, 170),
     quote: (136, 136, 144),
+    code_function: (220, 220, 170),
+    code_type: (120, 190, 190),
+    code_constant: (206, 161, 110),
+};
+
+/// Nord — arctic north: pale snow on deep polar-night blue-grey.
+/// Clean, low-contrast, easy on the eyes for long sessions.
+const NORD: Palette = Palette {
+    neutral: (46, 52, 64),
+    panel_bg: (59, 66, 82),
+    element_bg: (67, 76, 94),
+    text: (229, 233, 240),
+    strong: (236, 239, 244),
+    muted: (143, 188, 187),
+    faint: (76, 86, 106),
+    border: (76, 86, 106),
+    border_focus: (136, 192, 208),
+    border_subtle: (67, 76, 94),
+    accent: (136, 192, 208),
+    accent_soft: (129, 161, 193),
+    success: (163, 190, 140),
+    danger: (191, 97, 106),
+    warn: (235, 203, 139),
+    mode_plan: (235, 203, 139),
+    mode_coder: (136, 192, 208),
+    mode_build: (163, 190, 140),
+    mode_hacker: (191, 97, 106),
+    diff_add: (163, 190, 140),
+    diff_delete: (191, 97, 106),
+    tool: (180, 135, 174),
+    code: (136, 192, 208),
+    quote: (94, 129, 172),
+    code_function: (233, 205, 140),
+    code_type: (129, 197, 197),
+    code_constant: (213, 166, 120),
 };
 
 /// Selectable palettes.
@@ -345,10 +411,12 @@ pub enum ThemeId {
     MrRobot,
     /// Grey-hat silver on black.
     Anonymous,
+    /// Arctic north — pale snow on deep polar-night blue-grey.
+    Nord,
 }
 
 impl ThemeId {
-    pub const ALL: [ThemeId; 9] = [
+    pub const ALL: [ThemeId; 10] = [
         ThemeId::Mono,
         ThemeId::Midnight,
         ThemeId::Graphite,
@@ -358,6 +426,7 @@ impl ThemeId {
         ThemeId::Hacker,
         ThemeId::MrRobot,
         ThemeId::Anonymous,
+        ThemeId::Nord,
     ];
 
     pub fn label(self) -> &'static str {
@@ -371,6 +440,7 @@ impl ThemeId {
             ThemeId::Hacker => "hacker",
             ThemeId::MrRobot => "mr-robot",
             ThemeId::Anonymous => "anonymous",
+            ThemeId::Nord => "nord",
         }
     }
 
@@ -386,6 +456,7 @@ impl ThemeId {
             ThemeId::Hacker => &HACKER,
             ThemeId::MrRobot => &MR_ROBOT,
             ThemeId::Anonymous => &ANONYMOUS,
+            ThemeId::Nord => &NORD,
         }
     }
 
@@ -529,6 +600,16 @@ impl Theme {
     pub fn quote(&self) -> Color {
         self.pick(self.palette().quote, Color::DarkGray)
     }
+
+    pub fn code_function(&self) -> Color {
+        self.pick(self.palette().code_function, Color::LightYellow)
+    }
+    pub fn code_type(&self) -> Color {
+        self.pick(self.palette().code_type, Color::LightCyan)
+    }
+    pub fn code_constant(&self) -> Color {
+        self.pick(self.palette().code_constant, Color::LightYellow)
+    }
     /// Slightly raised background for overlays and the composer.
     pub fn panel_bg(&self) -> Color {
         self.pick(self.palette().panel_bg, Color::Indexed(235))
@@ -629,6 +710,7 @@ mod tests {
         assert_eq!(ThemeId::from_label("MR_ROBOT"), Some(ThemeId::MrRobot));
         assert_eq!(ThemeId::from_label("Hacker"), Some(ThemeId::Hacker));
         assert_eq!(ThemeId::from_label("Anonymous"), Some(ThemeId::Anonymous));
+        assert_eq!(ThemeId::from_label("Nord"), Some(ThemeId::Nord));
     }
 
     #[test]
@@ -696,7 +778,7 @@ mod tests {
             assert!(!id.label().is_empty());
             assert!(id.label().chars().all(|c| !c.is_uppercase()));
         }
-        assert_eq!(ThemeId::ALL.len(), 9);
+        assert_eq!(ThemeId::ALL.len(), 10);
     }
 
     #[test]

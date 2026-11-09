@@ -26,6 +26,35 @@ const DEFAULT_LIMIT: usize = 8;
 /// Hard page-size ceiling for tool callers, independent of the policy default.
 const MAX_TOOL_LIMIT: usize = 50;
 
+/// Tags as the model sent them: a JSON array of strings, or one
+/// comma/semicolon-separated string. Weaker models frequently send the
+/// latter; failing the whole call over tag shape wastes a retry.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum TagsInput {
+    List(Vec<String>),
+    One(String),
+}
+
+/// Deserializes `tags` from either shape, splitting the string form on
+/// commas/semicolons and dropping empty entries.
+fn flexible_tags<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<TagsInput>::deserialize(deserializer)?;
+    Ok(match raw {
+        Some(TagsInput::List(vec)) => Some(vec),
+        Some(TagsInput::One(s)) => Some(
+            s.split([',', ';'])
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect(),
+        ),
+        None => None,
+    })
+}
+
 // -- arguments ----------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -57,7 +86,7 @@ pub struct MemorySaveArgs {
     pub content: String,
     #[serde(default)]
     pub summary: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "flexible_tags")]
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub project: Option<String>,
@@ -81,7 +110,7 @@ pub struct MemoryUpdateArgs {
     pub content: Option<String>,
     #[serde(default)]
     pub summary: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "flexible_tags")]
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub category: Option<String>,
@@ -448,10 +477,10 @@ pub fn memory_tool_schemas() -> Vec<Tool> {
             json!({
                 "type": "object",
                 "properties": {
-                    "category": { "type": "string", "description": category_note },
+                    "category": { "type": "string", "enum": MemoryCategory::names(), "description": category_note },
                     "content": { "type": "string", "description": "The durable fact in plain prose" },
                     "summary": { "type": "string", "description": "Optional short summary used as the title" },
-                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional searchable tags" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional searchable tags as a JSON array of individual strings (never one comma-separated string)" },
                     "project": { "type": "string", "description": "Optional project key" },
                     "importance": { "type": "number", "description": "0.0-1.0 retrieval priority (default 0.5)" },
                     "expires_in_days": { "type": "integer", "description": "Optional retention window in days" }
@@ -481,8 +510,8 @@ pub fn memory_tool_schemas() -> Vec<Tool> {
                     "id": { "type": "string", "description": "Memory id (mem_...)" },
                     "content": { "type": "string", "description": "Replacement content" },
                     "summary": { "type": "string", "description": "Replacement summary" },
-                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Replacement tag set" },
-                    "category": { "type": "string", "description": category_note },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Replacement tag set as a JSON array of individual strings (never one comma-separated string)" },
+                    "category": { "type": "string", "enum": MemoryCategory::names(), "description": category_note },
                     "project": { "type": "string", "description": "Replacement project key" },
                     "importance": { "type": "number", "description": "0.0-1.0 retrieval priority" }
                 },
@@ -509,7 +538,7 @@ pub fn memory_tool_schemas() -> Vec<Tool> {
             json!({
                 "type": "object",
                 "properties": {
-                    "category": { "type": "string", "description": category_note },
+                    "category": { "type": "string", "enum": MemoryCategory::names(), "description": category_note },
                     "project": { "type": "string", "description": "Filter by project key" },
                     "tag": { "type": "string", "description": "Filter by one tag" },
                     "limit": { "type": "integer", "description": "Max results (default 8, max 50)" },
@@ -703,6 +732,43 @@ mod tests {
         for hit in &found.results {
             assert!(hit.content.chars().count() <= PREVIEW_CHARS + 1);
         }
+    }
+
+    #[test]
+    fn save_accepts_comma_separated_tags_string() {
+        // Weaker models send tags as one string; the call must succeed with
+        // the tags split, not fail the whole save.
+        let args: MemorySaveArgs = serde_json::from_value(json!({
+            "category": "user",
+            "content": "display code for review",
+            "tags": "coding, review"
+        }))
+        .expect("string tags deserialize");
+        assert_eq!(args.tags, Some(vec!["coding".into(), "review".into()]));
+
+        let tools = tools();
+        let saved = tools.save(args).expect("save succeeds");
+        let got = tools.get(MemoryGetArgs { id: saved.id }).expect("get");
+        assert_eq!(got.record.tags, vec!["coding", "review"]);
+    }
+
+    #[test]
+    fn save_accepts_tags_array_and_semicolons() {
+        let array: MemorySaveArgs = serde_json::from_value(json!({
+            "category": "user",
+            "content": "x",
+            "tags": ["a", "b"]
+        }))
+        .expect("array tags deserialize");
+        assert_eq!(array.tags, Some(vec!["a".into(), "b".into()]));
+
+        let semis: MemorySaveArgs = serde_json::from_value(json!({
+            "category": "user",
+            "content": "x",
+            "tags": "a; b ,,"
+        }))
+        .expect("semicolon tags deserialize");
+        assert_eq!(semis.tags, Some(vec!["a".into(), "b".into()]));
     }
 
     #[test]

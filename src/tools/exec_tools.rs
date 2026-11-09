@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::io::Read;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +54,10 @@ pub(crate) fn force_cancelled() -> bool {
 pub(crate) const MAX_OUTPUT: usize = 16 * 1024;
 /// Wall-clock ceiling for one command.
 pub(crate) const MAX_TIMEOUT_MS: u64 = 120_000;
+
+/// Live-output sink: receives `(is_stderr, bytes)` chunks while a process
+/// runs, so callers can stream command output to the UI.
+type OutputSink<'a> = dyn FnMut(bool, &[u8]) + Send + 'a;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunCommandArgs {
@@ -106,6 +111,86 @@ pub struct ExecTools {
     root: PathBuf,
 }
 
+// ===== Native Port Scanner ======================================================
+// Fast, concurrent TCP connect scan implemented in pure Rust.
+// Available as the `scan_ports` tool in the regular catalog (no auth required).
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanPortsArgs {
+    /// Target host (hostname or IP). Will be resolved to IPs.
+    pub host: String,
+    /// Ports to scan. If omitted, scans common ports.
+    #[serde(default)]
+    pub ports: Option<Vec<u16>>,
+    /// Per-connection timeout in milliseconds (default 800ms).
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// Maximum concurrent connections (default 100).
+    #[serde(default)]
+    pub concurrency: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanPortsResult {
+    pub host: String,
+    pub resolved_ips: Vec<String>,
+    pub open_ports: Vec<OpenPort>,
+    pub scanned: usize,
+    pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenPort {
+    pub ip: String,
+    pub port: u16,
+    pub service: Option<String>,
+}
+
+/// Default ports to scan when none specified (common services).
+const DEFAULT_SCAN_PORTS: &[u16] = &[
+    21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 465, 587, 993, 995, 1433, 1521,
+    3306, 3389, 5432, 5900, 6379, 8080, 8443, 8888, 9200, 27017,
+];
+
+/// Well-known service names for common ports.
+fn service_name(port: u16) -> Option<String> {
+    let name = match port {
+        21 => "ftp",
+        22 => "ssh",
+        23 => "telnet",
+        25 => "smtp",
+        53 => "dns",
+        80 => "http",
+        110 => "pop3",
+        111 => "rpcbind",
+        135 => "msrpc",
+        139 => "netbios-ssn",
+        143 => "imap",
+        443 => "https",
+        445 => "microsoft-ds",
+        465 => "smtps",
+        587 => "submission",
+        993 => "imaps",
+        995 => "pop3s",
+        1433 => "ms-sql-s",
+        1521 => "oracle",
+        3306 => "mysql",
+        3389 => "rdp",
+        5432 => "postgresql",
+        5900 => "vnc",
+        6379 => "redis",
+        8080 => "http-alt",
+        8443 => "https-alt",
+        8888 => "sun-answerbook",
+        9200 => "elasticsearch",
+        27017 => "mongodb",
+        _ => return None,
+    };
+    Some(name.to_string())
+}
+
+// ===== End Native Port Scanner ================================================
+
 impl ExecTools {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
@@ -133,6 +218,18 @@ impl ExecTools {
     }
 
     pub fn run_command(&self, args: RunCommandArgs) -> Result<RunCommandResult, String> {
+        self.run_command_with_sink(args, None)
+    }
+
+    /// `run_command` with an optional live-output sink: each stdout/stderr
+    /// chunk arrives as `(is_stderr, bytes)` while the process runs, so the
+    /// UI can show command output as it happens. `None` behaves exactly like
+    /// [`Self::run_command`].
+    pub fn run_command_with_sink(
+        &self,
+        args: RunCommandArgs,
+        sink: Option<&mut OutputSink<'_>>,
+    ) -> Result<RunCommandResult, String> {
         if args.command.trim().is_empty() {
             return Err("refused: empty command".into());
         }
@@ -244,8 +341,10 @@ impl ExecTools {
                 let _ = stdin.flush();
             }
 
-            let (stdout, stderr, code, timed_out) =
-                run_with_timeout_child(child, timeout, &args.command)?;
+            let (stdout, stderr, code, timed_out) = match sink {
+                Some(cb) => run_with_timeout_child(child, timeout, &args.command, Some(cb))?,
+                None => run_with_timeout_child(child, timeout, &args.command, None)?,
+            };
 
             Ok(RunCommandResult {
                 command: args.command,
@@ -260,8 +359,10 @@ impl ExecTools {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
-            let (stdout, stderr, code, timed_out) =
-                run_with_timeout(&mut cmd, "sh", timeout, &args.command)?;
+            let (stdout, stderr, code, timed_out) = match sink {
+                Some(cb) => run_with_timeout_streaming(&mut cmd, "sh", timeout, &args.command, cb)?,
+                None => run_with_timeout(&mut cmd, "sh", timeout, &args.command)?,
+            };
 
             Ok(RunCommandResult {
                 command: args.command,
@@ -310,6 +411,100 @@ impl ExecTools {
             stderr,
             exit_code: code,
             timed_out,
+        })
+    }
+
+    /// Native Rust port scanner: concurrent TCP connect scan.
+    /// Returns open ports with service names.
+    pub fn scan_ports(&self, args: ScanPortsArgs) -> Result<ScanPortsResult, String> {
+        use std::thread;
+
+        if args.host.trim().is_empty() {
+            return Err("scan_ports: host is required".into());
+        }
+
+        // Resolve host to IPs
+        let ips: Vec<std::net::IpAddr> = (args.host.as_str(), 0)
+            .to_socket_addrs()
+            .map_err(|e| format!("DNS resolution failed: {e}"))?
+            .map(|s| s.ip())
+            .collect();
+
+        if ips.is_empty() {
+            return Err("no addresses resolved for host".into());
+        }
+
+        let ports = args.ports.unwrap_or_else(|| DEFAULT_SCAN_PORTS.to_vec());
+        if ports.is_empty() {
+            return Err("no ports to scan".into());
+        }
+
+        let timeout_ms = args.timeout_ms.unwrap_or(800).clamp(50, 10_000);
+        let concurrency = args.concurrency.unwrap_or(100).clamp(1, 500);
+        let timeout = Duration::from_millis(timeout_ms);
+
+        let mut open_ports = Vec::new();
+        let mut scanned = 0usize;
+
+        // Scan each resolved IP
+        for ip in &ips {
+            // Check cancellation before each batch
+            if force_cancelled() {
+                return Ok(ScanPortsResult {
+                    host: args.host,
+                    resolved_ips: ips.iter().map(|ip| ip.to_string()).collect(),
+                    open_ports,
+                    scanned,
+                    timed_out: true,
+                });
+            }
+
+            // Divide ports among worker threads (simpler than shared channels)
+            let chunk_size = ports.len().div_ceil(concurrency);
+            let port_chunks: Vec<Vec<u16>> = ports.chunks(chunk_size).map(|c| c.to_vec()).collect();
+
+            let handles: Vec<_> = port_chunks
+                .into_iter()
+                .map(|chunk| {
+                    let ip = *ip;
+                    thread::spawn(move || {
+                        let mut results = Vec::new();
+                        for port in chunk {
+                            if force_cancelled() {
+                                break;
+                            }
+                            let addr = SocketAddr::new(ip, port);
+                            let is_open =
+                                std::net::TcpStream::connect_timeout(&addr, timeout).is_ok();
+                            results.push((port, is_open));
+                        }
+                        results
+                    })
+                })
+                .collect();
+
+            // Collect results
+            for h in handles {
+                let results = h.join().unwrap_or_default();
+                scanned += results.len();
+                for (port, is_open) in results {
+                    if is_open {
+                        open_ports.push(OpenPort {
+                            ip: ip.to_string(),
+                            port,
+                            service: service_name(port),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(ScanPortsResult {
+            host: args.host,
+            resolved_ips: ips.iter().map(|ip| ip.to_string()).collect(),
+            open_ports,
+            scanned,
+            timed_out: false,
         })
     }
 }
@@ -422,6 +617,19 @@ pub(crate) fn kill_process_group(child: &std::process::Child) {
     let _ = child.kill();
 }
 
+/// Poll cadence for a child's exit: tight while a fast local tool is likely to
+/// finish (a fixed 40 ms sleep added a visible floor to every `python tools/…`
+/// call), then backing off so long-running commands cost almost no syscalls.
+pub(crate) fn poll_delay(elapsed: Duration) -> Duration {
+    if elapsed < Duration::from_millis(100) {
+        Duration::from_millis(1)
+    } else if elapsed < Duration::from_secs(1) {
+        Duration::from_millis(5)
+    } else {
+        Duration::from_millis(20)
+    }
+}
+
 /// Spawns `cmd` in its own process group, drains both pipes on helper threads,
 /// polls for exit, kills the whole group on timeout. Shared with the git tools,
 /// which run `git` directly instead of through a shell.
@@ -430,6 +638,20 @@ pub(crate) fn run_with_timeout(
     what: &str,
     timeout: Duration,
     label: &str,
+) -> Result<(String, String, i32, bool), String> {
+    run_with_timeout_streaming(cmd, what, timeout, label, &mut |_, _| {})
+}
+
+/// [`run_with_timeout`] with a live-output sink: while the process runs, each
+/// stdout/stderr chunk is handed to `on_chunk(is_stderr, bytes)` as it is
+/// read, so callers can stream command output to the UI. The returned
+/// strings stay the full, capped captures exactly as before.
+pub(crate) fn run_with_timeout_streaming(
+    cmd: &mut Command,
+    what: &str,
+    timeout: Duration,
+    label: &str,
+    on_chunk: &mut OutputSink<'_>,
 ) -> Result<(String, String, i32, bool), String> {
     // Unix: own process group so a timeout kill reaps grandchildren too.
     // Windows: no equivalent here; the direct-process kill still applies.
@@ -441,24 +663,57 @@ pub(crate) fn run_with_timeout(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("{what} failed to spawn: {e}"))?;
-    let mut stdout_pipe = child.stdout.take().expect("piped stdout");
-    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+    let stdout_pipe = child.stdout.take().expect("piped stdout");
+    let stderr_pipe = child.stderr.take().expect("piped stderr");
 
+    // Reader threads forward chunks to the waiter through a channel and
+    // accumulate the full capture for the final result, so nothing is lost
+    // even when the sink throttles.
+    let (chunk_tx, chunk_rx) = std::sync::mpsc::channel::<(bool, Vec<u8>)>();
+    let err_tx = chunk_tx.clone();
     let out_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf);
-        buf
+        let mut all = Vec::new();
+        let mut pipe = stdout_pipe;
+        let mut buf = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    all.extend_from_slice(&buf[..n]);
+                    if chunk_tx.send((false, buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        all
     });
     let err_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr_pipe.read_to_end(&mut buf);
-        buf
+        let mut all = Vec::new();
+        let mut pipe = stderr_pipe;
+        let mut buf = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    all.extend_from_slice(&buf[..n]);
+                    if err_tx.send((true, buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        all
     });
 
     let started = Instant::now();
     let mut timed_out = false;
     let mut interrupted = false;
     let status = loop {
+        // Forward whatever arrived, then poll the process.
+        while let Ok((is_err, chunk)) = chunk_rx.try_recv() {
+            on_chunk(is_err, &chunk);
+        }
         match child.try_wait() {
             Ok(Some(st)) => break Some(st),
             Ok(None) => {
@@ -476,11 +731,15 @@ pub(crate) fn run_with_timeout(
                     let _ = child.wait();
                     break None;
                 }
-                std::thread::sleep(Duration::from_millis(40));
+                std::thread::sleep(poll_delay(started.elapsed()));
             }
             Err(e) => return Err(format!("{what} wait failed: {e}")),
         }
     };
+    // Drain everything the pipes produced up to EOF.
+    while let Ok((is_err, chunk)) = chunk_rx.try_recv() {
+        on_chunk(is_err, &chunk);
+    }
 
     let stdout = out_handle.join().unwrap_or_default();
     let stderr = err_handle.join().unwrap_or_default();
@@ -507,25 +766,57 @@ pub(crate) fn run_with_timeout_child(
     mut child: std::process::Child,
     timeout: Duration,
     label: &str,
+    mut sink: Option<&mut OutputSink<'_>>,
 ) -> Result<(String, String, i32, bool), String> {
-    let mut stdout_pipe = child.stdout.take().expect("piped stdout");
-    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+    let stdout_pipe = child.stdout.take().expect("piped stdout");
+    let stderr_pipe = child.stderr.take().expect("piped stderr");
 
+    let (chunk_tx, chunk_rx) = std::sync::mpsc::channel::<(bool, Vec<u8>)>();
+    let err_tx = chunk_tx.clone();
     let out_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf);
-        buf
+        let mut all = Vec::new();
+        let mut pipe = stdout_pipe;
+        let mut buf = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    all.extend_from_slice(&buf[..n]);
+                    if chunk_tx.send((false, buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        all
     });
     let err_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr_pipe.read_to_end(&mut buf);
-        buf
+        let mut all = Vec::new();
+        let mut pipe = stderr_pipe;
+        let mut buf = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    all.extend_from_slice(&buf[..n]);
+                    if err_tx.send((true, buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        all
     });
 
     let started = Instant::now();
     let mut timed_out = false;
     let mut interrupted = false;
     let status = loop {
+        while let Ok((is_err, chunk)) = chunk_rx.try_recv() {
+            if let Some(cb) = sink.as_deref_mut() {
+                cb(is_err, &chunk);
+            }
+        }
         match child.try_wait() {
             Ok(Some(st)) => break Some(st),
             Ok(None) => {
@@ -541,11 +832,16 @@ pub(crate) fn run_with_timeout_child(
                     let _ = child.wait();
                     break None;
                 }
-                std::thread::sleep(Duration::from_millis(40));
+                std::thread::sleep(poll_delay(started.elapsed()));
             }
             Err(e) => return Err(format!("{label} wait failed: {e}")),
         }
     };
+    while let Ok((is_err, chunk)) = chunk_rx.try_recv() {
+        if let Some(cb) = sink.as_deref_mut() {
+            cb(is_err, &chunk);
+        }
+    }
 
     let stdout = out_handle.join().unwrap_or_default();
     let stderr = err_handle.join().unwrap_or_default();

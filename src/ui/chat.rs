@@ -11,15 +11,16 @@ use ratatui::Frame;
 /// Width of the left gutter reserved for role badges.
 pub const GUTTER: usize = 4;
 
-/// Rail that groups an assistant turn in cozy density. Exactly `GUTTER` cells
-/// wide so every body row shares one text column.
-const RAIL: &str = "  │ ";
-/// Branch marker for one tool call on the rail.
-const BRANCH: &str = "  ├ ";
-/// Fence header: the rule glyph itself completes the branch.
-const FENCE_HEAD: &str = "  ├";
-/// Fence footer closes the frame.
-const FENCE_FOOT: &str = "  ╰";
+/// Assistant turns, tool rows and code fences share one plain four-column
+/// indent — the old vertical rail glyph was dropped for a flatter, quieter
+/// transcript. The widths are load-bearing: every body row must stay exactly
+/// `GUTTER` cells wide so all text shares one column.
+const RAIL: &str = "    ";
+/// One tool call under the turn, same width as the body indent.
+const BRANCH: &str = "    ";
+/// Fence header/footer: same indent, minus the rule the fence draws itself.
+const FENCE_HEAD: &str = "   ";
+const FENCE_FOOT: &str = "   ";
 
 /// Transcripts up to this many entries get measured exactly before drawing.
 pub const WARM_LIMIT: usize = 400;
@@ -52,8 +53,8 @@ fn tool_icon(name: &str) -> &'static str {
 }
 
 /// The active tool mode as `(colour, title-cased label)`. opencode keys the
-/// user-turn node and the assistant footer to the agent colour; nanomite's
-/// equivalent of an agent is the tool mode.
+/// user-turn node to the agent colour; nanomite's equivalent of an agent is
+/// the tool mode. Assistant responses carry a green node instead.
 pub(crate) fn mode_parts(
     policy: crate::agent::policy::ToolPolicy,
     theme: &Theme,
@@ -199,9 +200,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     // Check if we have an active selection
     let selection = app.selection.clone();
 
-    // 2. Walk the virtual rows that intersect the viewport.
+    // 2. Walk the virtual rows that intersect the viewport. Offsets are
+    //    cumulative and sorted, so binary-search the first entry that can
+    //    intersect instead of walking the whole transcript from row zero -
+    //    this keeps frame time flat as the session grows to thousands of
+    //    entries.
     let mut row = top;
-    let mut idx = 0usize;
+    let mut idx = view
+        .offsets
+        .partition_point(|&off| off <= top)
+        .saturating_sub(1)
+        .min(entries.len().saturating_sub(1));
     while idx < entries.len() && row < bottom {
         let entry_start = view.offsets[idx];
         let entry_end = view.offsets[idx + 1];
@@ -544,8 +553,8 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
 
 /// Live one-line status above the cached body while the turn streams, at the
 /// same three-column indent as the rest of the assistant content. Terminal
-/// states render in the body itself: failures as `Error: …`, interrupts on
-/// the message footer.
+/// states render in the body itself: failures as `Error: …`; interrupts
+/// simply end the turn.
 fn status_line(
     entry: &Entry,
     theme: &Theme,
@@ -646,7 +655,7 @@ impl Entry {
             _ => {
                 let indent = if compact { 3 } else { 4 };
                 let text_w = inner.saturating_sub(indent).max(8);
-                let mut h = self.tools.len() as u16 + if compact { 0 } else { 1 }; // message footer
+                let mut h = self.tools.len() as u16;
                 if !self.tools.is_empty() {
                     h += 1; // gap between tool rows and the body
                 }
@@ -774,13 +783,29 @@ impl Entry {
         }
         lines.push(Line::from(spans));
 
-        // Completed block bodies: output or patch, shown once the tool has
-        // finished (running rows stay bare). Previews hang under the rail so
-        // the branch never breaks.
-        let preview_prefix = if rail { "  │   " } else { "     " };
+        // Bodies under the row: a command's live output while it runs (and
+        // its tail after it finishes), otherwise the bounded args preview -
+        // the code being written or edited, visible as it happens.
+        let preview_prefix = if rail { "      " } else { "     " };
         let preview_w = inner.saturating_sub(text::width(preview_prefix));
-        if with_previews && !tool.running {
-            if let Some(preview) = &tool.preview {
+        // For run_command the row label already carries the command line, so
+        // the body shows the output instead; the tail is capped like a
+        // preview so a chatty command cannot flood the transcript.
+        const OUTPUT_MAX_LINES: usize = 12;
+        let body: Option<String> = if tool.name == "run_command" {
+            tool.output
+                .as_deref()
+                .map(|out| {
+                    let lines: Vec<&str> = out.lines().collect();
+                    let start = lines.len().saturating_sub(OUTPUT_MAX_LINES);
+                    lines[start..].join("\n")
+                })
+                .filter(|out| !out.trim().is_empty())
+        } else {
+            tool.preview.clone()
+        };
+        if with_previews {
+            if let Some(preview) = &body {
                 if tool.name == "edit_file" {
                     let mut diff = DiffView::with_theme(*theme);
                     for raw in preview.split('\n') {
@@ -797,6 +822,26 @@ impl Entry {
                                 .map(|s| Span::styled(s.content.to_string(), s.style)),
                         );
                         lines.push(Line::from(spans));
+                    }
+                } else if tool.name == "write_file" {
+                    // The code being written, colored like a fenced block.
+                    // The extension drives the tokenizer, the same one the
+                    // transcript's fences use.
+                    let ext = tool
+                        .detail
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(&tool.detail)
+                        .rsplit_once('.')
+                        .map(|(_, e)| e.to_ascii_lowercase())
+                        .unwrap_or_default();
+                    let st = text::MarkdownStyles::new(theme);
+                    for line in text::highlighted_lines(preview, &ext, &st) {
+                        for seg in text::wrap_spans(line.spans, preview_w) {
+                            let mut spans: Vec<Span> = vec![Span::raw(preview_prefix.to_string())];
+                            spans.extend(seg.spans);
+                            lines.push(Line::from(spans));
+                        }
                     }
                 } else {
                     for raw in preview.split('\n') {
@@ -834,7 +879,7 @@ impl Entry {
         let inner = width.saturating_sub(GUTTER).max(8);
         let mut lines = Vec::new();
         let mut code_blocks = Vec::new();
-        let (mode_color, mode_label) = mode;
+        let (mode_color, _) = mode;
         let rail = !compact && self.role == EntryRole::Assistant;
 
         match self.role {
@@ -876,8 +921,8 @@ impl Entry {
                     }
                     return finish_build(lines, code_blocks);
                 }
-                // Rail-node prompt: a mode-coloured `◆` marks the user turn on
-                // the same left rail the assistant uses. No fill, no badge;
+                // Rail-node prompt: a mode-coloured `◆` marks the user turn,
+                // echoing the assistant indent. No fill, no badge;
                 // wrapped lines hang under the text column.
                 let node = Style::default().fg(mode_color);
                 let text_style = Style::default().fg(theme.strong());
@@ -926,7 +971,7 @@ impl Entry {
                 }
             }
             EntryRole::Assistant => {
-                // Cozy density draws the turn on a left rail; compact stays a
+                // Cozy density indents the turn one gutter; compact stays a
                 // flat three-column log.
                 let lead = if rail { RAIL } else { "   " };
                 let mut st = text::MarkdownStyles::new(theme);
@@ -956,21 +1001,34 @@ impl Entry {
                     let (md_lines, blocks) = text::markdown_with_blocks(&display_text, md_w, &st);
                     let opens: Vec<usize> = blocks.iter().map(|(s, _, _)| *s).collect();
                     let closes: Vec<usize> = blocks.iter().map(|(_, e, _)| *e).collect();
+                    // A green node marks the start of the response, echoing
+                    // the user turn's diamond; it occupies the same gutter
+                    // cells as the plain indent, so wrapping never shifts.
+                    let mut first_text = true;
                     for (idx, mut line) in md_lines.into_iter().enumerate() {
-                        // Fence frames borrow the rail: the header hangs off a
-                        // branch and the footer closes it, so a code block
-                        // reads as part of the turn rather than a second box.
-                        let prefix: &str = if !rail {
-                            "   "
-                        } else if opens.contains(&idx) {
-                            FENCE_HEAD
-                        } else if closes.contains(&idx) {
-                            FENCE_FOOT
+                        // Code blocks stay inside the turn's indent rather
+                        // than rendering as a separate box; the fence's own
+                        // rules mark the block's extent.
+                        let mut spans = Vec::with_capacity(line.spans.len() + 2);
+                        if rail && first_text {
+                            spans.push(Span::raw("  ".to_string()));
+                            spans.push(Span::styled(
+                                format!("{} ", glyph::NODE),
+                                Style::default().fg(theme.success()),
+                            ));
+                            first_text = false;
                         } else {
-                            RAIL
-                        };
-                        let mut spans = Vec::with_capacity(line.spans.len() + 1);
-                        spans.push(Span::raw(prefix.to_string()));
+                            let prefix: &str = if !rail {
+                                "   "
+                            } else if opens.contains(&idx) {
+                                FENCE_HEAD
+                            } else if closes.contains(&idx) {
+                                FENCE_FOOT
+                            } else {
+                                RAIL
+                            };
+                            spans.push(Span::raw(prefix.to_string()));
+                        }
                         spans.append(&mut line.spans);
                         lines.push(Line::from(spans));
                     }
@@ -1008,73 +1066,17 @@ impl Entry {
                         ));
                     }
                 }
-
-                // Message footer: Mode · time · model · duration · tok/s ·
-                // ↑prompt ↓completion, with the terminal state appended.
-                // Compact density drops it: the header carries the model and
-                // the /hud carries timing.
-                if !compact
-                    && matches!(self.phase, Phase::Done | Phase::Interrupted | Phase::Failed)
-                {
-                    let faint = Style::default().fg(theme.faint());
-                    let mut spans = vec![
-                        Span::raw("  ".to_string()),
-                        Span::styled(mode_label.to_string(), Style::default().fg(mode_color)),
-                        Span::styled(format!(" · {}", text::clock(self.at)), faint),
-                    ];
-                    if let Some(model) = &self.model {
-                        spans.push(Span::styled(
-                            format!(" · {}", text::truncate_head(model, 32)),
-                            faint,
-                        ));
-                    }
-                    if let Some(elapsed) = self.elapsed {
-                        spans.push(Span::styled(
-                            format!(" · {}", text::format_duration(elapsed)),
-                            faint,
-                        ));
-                        if let Some(usage) = &self.usage {
-                            let secs = elapsed.as_secs_f64();
-                            if secs >= 1.0 && usage.completion_tokens > 0 {
-                                let rate = f64::from(usage.completion_tokens) / secs;
-                                spans.push(Span::styled(format!(" · {rate:.1} tok/s"), faint));
-                            }
-                        }
-                    }
-                    if let Some(usage) = &self.usage {
-                        spans.push(Span::styled(
-                            format!(
-                                " · ↑{} ↓{}",
-                                text::format_tokens(u64::from(usage.prompt_tokens)),
-                                text::format_tokens(u64::from(usage.completion_tokens))
-                            ),
-                            faint,
-                        ));
-                    }
-                    match self.phase {
-                        Phase::Interrupted => spans.push(Span::styled(
-                            " · interrupted",
-                            Style::default().fg(theme.muted()),
-                        )),
-                        Phase::Failed => spans.push(Span::styled(
-                            " · failed",
-                            Style::default().fg(theme.danger()),
-                        )),
-                        _ => {}
-                    }
-                    lines.push(Line::from(spans));
-                }
             }
         }
 
         if let Some(err) = &self.error {
             lines.push(Line::default());
             let (err_prefix, err_cont) = if rail {
-                ("  │ Error: ", "  │        ")
+                ("    Error: ", "           ")
             } else {
                 ("   Error: ", "          ")
             };
-            let hint_prefix = if rail { "  │ " } else { "   " };
+            let hint_prefix = if rail { "    " } else { "   " };
             let wrapped = text::wrap_prefixed(
                 err,
                 err_prefix,

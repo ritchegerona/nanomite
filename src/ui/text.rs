@@ -375,9 +375,16 @@ pub struct MarkdownStyles {
     pub code_string: Style,
     pub code_comment: Style,
     pub code_number: Style,
-    /// Draw fenced blocks as rail frames (`├─ lang`, `│ code`, `╰─ n lines`)
-    /// instead of self-contained boxes. The transcript supplies the leading
-    /// `├`/`│`/`╰` prefix; this only changes the lines those prefixes join.
+    /// Called functions and method names.
+    pub code_function: Style,
+    /// Types, structs, classes, traits, capitalized variants.
+    pub code_type: Style,
+    /// ALL_CAPS constants and `#[attributes]`.
+    pub code_constant: Style,
+    /// Draw fenced blocks as flat frames (a `─── lang ───` rule, indented
+    /// code, a `─ N lines` closing rule) instead of self-contained boxes.
+    /// The transcript supplies the leading indent; this only changes the
+    /// lines that indent joins.
     pub rail: bool,
 }
 
@@ -402,6 +409,9 @@ impl MarkdownStyles {
             code_string: Style::default().fg(theme.success()),
             code_comment: Style::default().fg(theme.faint()),
             code_number: Style::default().fg(theme.warn()),
+            code_function: Style::default().fg(theme.code_function()),
+            code_type: Style::default().fg(theme.code_type()),
+            code_constant: Style::default().fg(theme.code_constant()),
             rail: false,
         }
     }
@@ -472,8 +482,8 @@ pub fn markdown_with_blocks(
                 let lang = std::mem::take(&mut fence_lang);
                 fence_start = 0;
                 if st.rail {
-                    // Rail frame: the transcript owns the leading `├`/`│`/`╰`,
-                    // so these lines only draw the rule, the code column and
+                    // Flat frame: the transcript owns the leading indent, so
+                    // these lines only draw the rule, the code column and
                     // the closing summary. No right border, so the full width
                     // stays available for the code itself.
                     let code_w = max_width.saturating_sub(1).max(8);
@@ -1025,6 +1035,20 @@ fn closes_within(chars: &[char], quote: char, limit: usize) -> bool {
 /// Highlights one source line into styled spans: strings, comments, numbers
 /// and keywords. `in_block` carries `/* … */` state across the lines of a
 /// block. Runs in O(line length) with no allocation beyond the spans.
+/// Highlights a multi-line snippet for inline previews (tool rows): each
+/// line is tokenized like a fenced block, block-comment state carried across
+/// lines. Plain-tag snippets fall back to unstyled lines.
+pub fn highlighted_lines(src: &str, lang_tag: &str, st: &MarkdownStyles) -> Vec<Line<'static>> {
+    let lang = code_lang(lang_tag);
+    if lang == CodeLang::Plain {
+        return src.split('\n').map(|l| Line::raw(l.to_string())).collect();
+    }
+    let mut in_block = false;
+    src.split('\n')
+        .map(|l| Line::from(highlight_code(l, lang, st, &mut in_block)))
+        .collect()
+}
+
 fn highlight_code(
     line: &str,
     lang: CodeLang,
@@ -1090,6 +1114,30 @@ fn highlight_code(
         }
 
         let ch = chars[i];
+
+        // Rust attributes light up through the closing bracket.
+        if lang == CodeLang::Slash && ch == '#' && chars.get(i + 1) == Some(&'[') {
+            push_run(&mut spans, &mut run, style);
+            let mut text = String::new();
+            let mut depth = 0usize;
+            while i < chars.len() {
+                text.push(chars[i]);
+                match chars[i] {
+                    '[' => depth += 1,
+                    ']' => {
+                        depth -= 1;
+                        i += 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            spans.push(Span::styled(text, st.code_constant));
+            continue;
+        }
 
         // Strings: double quotes and backticks everywhere; single quotes only
         // when they close within a few characters (char literal, not lifetime).
@@ -1162,7 +1210,8 @@ fn highlight_code(
             continue;
         }
 
-        // Identifiers: keywords light up, everything else stays default.
+        // Identifiers: keywords, ALL_CAPS constants, Capitalized types and
+        // calls light up; everything else stays default.
         if ch.is_alphabetic() || ch == '_' {
             let mut j = i;
             while j < chars.len() && is_ident_char(chars[j]) {
@@ -1172,6 +1221,19 @@ fn highlight_code(
             if code_keyword(&word) {
                 push_run(&mut spans, &mut run, style);
                 spans.push(Span::styled(word, st.code_keyword));
+            } else if word
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+                && word.chars().any(|c| c.is_ascii_uppercase())
+            {
+                push_run(&mut spans, &mut run, style);
+                spans.push(Span::styled(word, st.code_constant));
+            } else if word.starts_with(|c: char| c.is_ascii_uppercase()) {
+                push_run(&mut spans, &mut run, style);
+                spans.push(Span::styled(word, st.code_type));
+            } else if j < chars.len() && chars[j] == '(' && !word.starts_with('_') {
+                push_run(&mut spans, &mut run, style);
+                spans.push(Span::styled(word, st.code_function));
             } else {
                 run.push_str(&word);
             }
@@ -2002,6 +2064,43 @@ mod tests {
         assert!(second
             .iter()
             .any(|s| s.content == "let" && s.style == st.code_keyword));
+    }
+
+    #[test]
+    fn highlight_code_shows_functions_types_and_constants() {
+        let theme = Theme::detect();
+        let st = MarkdownStyles::new(&theme);
+        let mut in_block = false;
+        let spans = highlight_code(
+            "let v = Config::load(PATH).unwrap(); #[derive(Debug)]",
+            CodeLang::Slash,
+            &st,
+            &mut in_block,
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.content == "Config" && s.style == st.code_type),
+            "capitalized types light up: {spans:?}"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.content == "load" && s.style == st.code_function),
+            "called functions light up: {spans:?}"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.content == "PATH" && s.style == st.code_constant),
+            "ALL_CAPS constants light up: {spans:?}"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.content.starts_with("#[derive") && s.style == st.code_constant),
+            "attributes light up: {spans:?}"
+        );
     }
 
     #[test]

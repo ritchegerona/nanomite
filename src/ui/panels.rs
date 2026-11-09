@@ -2562,3 +2562,263 @@ pub fn draw_thinking_panel(frame: &mut Frame, area: Rect, app: &App, theme: &The
     }
     frame.render_widget(Paragraph::new(out), inner);
 }
+
+/// Renders the agent activity timeline panel.
+/// Shows live activities with timestamps and status indicators.
+pub fn activity_timeline(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(theme.faint_style())
+        .title(Line::from(vec![Span::styled(
+            " ACTIVITY ",
+            Style::default()
+                .fg(theme.accent())
+                .add_modifier(Modifier::BOLD),
+        )]));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let activities = &app.activity_timeline;
+    if activities.is_empty() {
+        let hint = if app.is_busy() {
+            "waiting for activity..."
+        } else {
+            "no activity yet"
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(hint, theme.faint_style())),
+            inner,
+        );
+        return;
+    }
+
+    // Show most recent activities that fit
+    let max_items = inner.height as usize;
+    let start = activities.len().saturating_sub(max_items);
+
+    let mut lines = Vec::new();
+    for activity in &activities[start..] {
+        let timestamp = chrono::DateTime::<chrono::Local>::from(
+            std::time::SystemTime::now() - activity.timestamp.elapsed(),
+        )
+        .format("%H:%M:%S")
+        .to_string();
+
+        let status_glyph = if activity.done {
+            glyph::CHECK
+        } else {
+            glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()]
+        };
+
+        let status_color = if activity.done {
+            theme.success()
+        } else {
+            theme.accent()
+        };
+
+        let mut spans = vec![
+            Span::styled(format!("{} ", timestamp), theme.faint_style()),
+            Span::styled(
+                format!("{} ", status_glyph),
+                Style::default().fg(status_color),
+            ),
+            Span::styled(&activity.action, theme.base()),
+        ];
+
+        if let Some(detail) = &activity.detail {
+            spans.push(Span::styled(" ", theme.base()));
+            spans.push(Span::styled(detail, theme.faint_style()));
+        }
+
+        lines.push(Line::from(spans));
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Renders the live diff viewer panel.
+/// Shows unified diffs for files being modified in real-time.
+pub fn live_diff_viewer(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(theme.faint_style())
+        .title(Line::from(vec![Span::styled(
+            " LIVE DIFF ",
+            Style::default()
+                .fg(theme.accent())
+                .add_modifier(Modifier::BOLD),
+        )]));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let diffs = &app.live_diffs;
+    if diffs.is_empty() {
+        let hint = if app.is_busy() {
+            "waiting for file changes..."
+        } else {
+            "no live diffs"
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(hint, theme.faint_style())),
+            inner,
+        );
+        return;
+    }
+
+    let mut lines = Vec::new();
+    for (path, diff) in diffs {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", glyph::NODE), theme.accent()),
+            Span::styled(path, theme.base().add_modifier(Modifier::UNDERLINED)),
+        ]));
+
+        // Parse and render diff with colors
+        for diff_line in diff.lines() {
+            let style = if diff_line.starts_with('+') {
+                Style::default().fg(theme.success())
+            } else if diff_line.starts_with('-') {
+                Style::default().fg(theme.danger())
+            } else if diff_line.starts_with('@') {
+                Style::default()
+                    .fg(theme.accent())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                theme.faint_style()
+            };
+
+            let display_line = if diff_line.len() > inner.width as usize - 2 {
+                &diff_line[..inner.width as usize - 2]
+            } else {
+                diff_line
+            };
+            lines.push(Line::from(Span::styled(
+                format!(" {}", display_line),
+                style,
+            )));
+        }
+        lines.push(Line::default()); // blank line between files
+    }
+
+    // Truncate to fit
+    if lines.len() > inner.height as usize {
+        lines.truncate(inner.height as usize);
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Renders the tool execution monitor panel.
+/// Shows live stdout/stderr from running commands.
+pub fn tool_monitor(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(theme.faint_style())
+        .title(Line::from(vec![Span::styled(
+            " TOOL MONITOR ",
+            Style::default()
+                .fg(theme.accent())
+                .add_modifier(Modifier::BOLD),
+        )]));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    // Find the currently running tool
+    let Some(active_idx) = app.active else {
+        frame.render_widget(
+            Paragraph::new(Span::styled("no active turn", theme.faint_style())),
+            inner,
+        );
+        return;
+    };
+
+    let Some(entry) = app.entries.get(active_idx) else {
+        return;
+    };
+
+    let running_tools: Vec<_> = entry.tools.iter().filter(|t| t.running).collect();
+    if running_tools.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Span::styled("no running tools", theme.faint_style())),
+            inner,
+        );
+        return;
+    }
+
+    let mut lines = Vec::new();
+    for tool in running_tools {
+        let elapsed = tool.started.elapsed();
+        let elapsed_str = text::format_duration(elapsed);
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", glyph::NODE), theme.accent()),
+            Span::styled(&tool.name, theme.base().add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" ({}) ", elapsed_str), theme.faint_style()),
+        ]));
+
+        if let Some(preview) = &tool.preview {
+            let preview_line = if preview.len() > inner.width as usize - 4 {
+                &preview[..inner.width as usize - 4]
+            } else {
+                preview
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  ↳ {}", preview_line),
+                theme.faint_style(),
+            )));
+        }
+
+        // Show live output from detail
+        for detail_line in tool.detail.lines() {
+            if detail_line.starts_with("[stdout]") {
+                let content = &detail_line[9..];
+                let display = if content.len() > inner.width as usize - 4 {
+                    &content[..inner.width as usize - 4]
+                } else {
+                    content
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("  > {}", display),
+                    theme.success(),
+                )));
+            } else if detail_line.starts_with("[stderr]") {
+                let content = &detail_line[9..];
+                let display = if content.len() > inner.width as usize - 4 {
+                    &content[..inner.width as usize - 4]
+                } else {
+                    content
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("  ! {}", display),
+                    theme.danger(),
+                )));
+            }
+        }
+
+        lines.push(Line::default());
+    }
+
+    // Truncate to fit
+    if lines.len() > inner.height as usize {
+        lines.truncate(inner.height as usize);
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}

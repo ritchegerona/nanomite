@@ -62,6 +62,7 @@ fn with_tool(name: &str, detail: &str, ok: bool) -> ToolRow {
         edit_path: None,
         edit_replacements: None,
         preview: None,
+        output: None,
         started: std::time::Instant::now(),
         elapsed: None,
         error: None,
@@ -277,7 +278,7 @@ async fn user_message_renders_as_a_raised_block() {
 }
 
 #[tokio::test]
-async fn assistant_footer_shows_mode_duration_and_rate() {
+async fn assistant_response_marks_a_green_node_without_a_footer() {
     let mut app = test_app().await;
     let mut entry = assistant("done work");
     entry.elapsed = Some(std::time::Duration::from_secs(5));
@@ -289,10 +290,19 @@ async fn assistant_footer_shows_mode_duration_and_rate() {
     app.entries.push(entry);
 
     let text = frame_text(&mut app, 92, 24);
-    // opencode's message footer: agent/mode name, then duration and tok/s.
-    assert!(text.contains("Plan"), "mode label missing:\n{text}");
-    assert!(text.contains("5.0s"), "duration missing:\n{text}");
-    assert!(text.contains("10.0 tok/s"), "token rate missing:\n{text}");
+    // The response opens with a node like the user prompt's diamond, and the
+    // old mode/duration/tok/s footer is gone entirely.
+    assert!(
+        text.lines()
+            .any(|l| l.contains("◆") && l.contains("done work")),
+        "green response node missing:\n{text}"
+    );
+    assert!(!text.contains("tok/s"), "footer leaked:\n{text}");
+    assert!(!text.contains("5.0s"), "footer duration leaked:\n{text}");
+    assert!(
+        !text.lines().any(|l| l.contains("Plan ·")),
+        "footer mode label leaked:\n{text}"
+    );
 }
 
 #[tokio::test]
@@ -863,13 +873,16 @@ async fn compact_density_shows_single_row_prompts() {
     );
     assert!(text.contains("done"), "response missing:\n{text}");
 
-    // Cozy density restores the rail node + footer.
+    // Cozy density keeps the response node; the footer stays gone.
     app.compact = false;
     app.entries[0].touch();
     app.entries[1].touch();
     let text = frame_text(&mut app, 92, 24);
-    assert!(text.contains("◆"), "cozy rail node missing:\n{text}");
-    assert!(text.contains("Plan"), "cozy footer missing:\n{text}");
+    assert!(text.contains("◆"), "cozy response node missing:\n{text}");
+    assert!(
+        !text.lines().any(|l| l.contains("Plan ·")),
+        "footer must stay removed:\n{text}"
+    );
 }
 
 #[tokio::test]
@@ -1127,21 +1140,21 @@ async fn tool_rows_are_visible_by_default() {
     assert!(text.contains("done building"), "response missing:\n{text}");
 
     // Hidden remains one toggle away — tool rows disappear from main chat.
-    // (Info panel still shows "Last: ✓ run_command" as a summary.)
+    // (Info panel still shows "Last: ✓ run_command" as a name-only summary,
+    // so the name+detail label identifies an actual row.)
     app.tool_display = ToolDisplay::Hidden;
     let text = frame_text(&mut app, 92, 24);
-    // The rail branch marker `├` only appears on actual tool rows in main chat.
     assert!(
-        !text.contains("├"),
+        !text.contains("run_command npm test"),
         "tool row leaked into main chat:\n{text}"
     );
     assert!(text.contains("done building"), "response missing:\n{text}");
 
-    // Rows level: the row appears in main chat with rail branch.
+    // Rows level: the row appears in main chat.
     app.tool_display = ToolDisplay::Rows;
     let text = frame_text(&mut app, 92, 24);
     assert!(
-        text.contains("├"),
+        text.contains("run_command npm test"),
         "tool row missing from main chat:\n{text}"
     );
 
@@ -1149,7 +1162,7 @@ async fn tool_rows_are_visible_by_default() {
     app.tool_display = ToolDisplay::Full;
     let text = frame_text(&mut app, 92, 24);
     assert!(
-        text.contains("├"),
+        text.contains("run_command npm test"),
         "tool row missing from main chat:\n{text}"
     );
 }
@@ -3376,10 +3389,15 @@ async fn double_esc_escalates_to_a_force_stop() {
     assert!(cancel.is_cancelled(), "first esc must request a stop");
     assert!(!cancel.is_forced(), "first esc must not kill the process");
 
-    // Second Esc escalates: force flag set, so a running tool is killed.
+    // Second Esc escalates: the force flag is set so a running tool's
+    // process group dies, and the turn is finalised immediately rather than
+    // waiting for a wedged runtime to notice.
+    let force_flag = app.cancel.as_ref().expect("cancel set").force_flag();
     app.on_key(esc());
-    let cancel = app.cancel.as_ref().expect("cancel set");
-    assert!(cancel.is_forced(), "double esc must force-stop");
+    assert!(
+        force_flag.load(std::sync::atomic::Ordering::SeqCst),
+        "double esc must force-stop"
+    );
 
     for _ in 0..100 {
         app.pump_engine();

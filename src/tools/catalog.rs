@@ -82,6 +82,11 @@ impl ToolSet {
                 category: Exec,
             },
             ToolSpec {
+                name: "scan_ports",
+                description: "Fast concurrent TCP connect scan of a host (pure Rust, no external deps).",
+                category: Exec,
+            },
+            ToolSpec {
                 name: "web_fetch",
                 description: "Fetch an http(s) URL and return its readable text content (HTML stripped).",
                 category: Web,
@@ -242,7 +247,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate tool names in catalog");
-        let expected = 34usize
+        let expected = 35usize
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(

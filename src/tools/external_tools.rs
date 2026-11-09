@@ -242,7 +242,7 @@ pub(crate) fn run_bounded(
                     let _ = child.wait();
                     break None;
                 }
-                std::thread::sleep(Duration::from_millis(25));
+                std::thread::sleep(crate::tools::exec_tools::poll_delay(started.elapsed()));
             }
             Err(e) => return Err(format!("{label} wait failed: {e}")),
         }

@@ -36,6 +36,10 @@ impl OpenAiProvider {
         };
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            // Never wait forever for the next body read: a provider that
+            // accepts the TCP connection then goes silent would otherwise
+            // leave the turn spinning with no completion event.
+            .read_timeout(Duration::from_secs(60))
             .pool_idle_timeout(Duration::from_secs(90))
             .user_agent(concat!("nanomite/", env!("CARGO_PKG_VERSION")))
             .build()?;
@@ -50,8 +54,13 @@ impl OpenAiProvider {
     }
 
     pub fn new(cfg: &Config) -> Result<Self, DynError> {
+        // A stalled stream must fail the turn visibly instead of hanging:
+        // bound every body read. Reuse the step timeout (min 30 s) so a
+        // deliberately patient config stays patient.
+        let read_timeout = Duration::from_millis(cfg.step_timeout_ms.max(30_000));
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
+            .read_timeout(read_timeout)
             .pool_idle_timeout(Duration::from_secs(90))
             .user_agent(concat!("nanomite/", env!("CARGO_PKG_VERSION")))
             .build()?;
@@ -257,32 +266,42 @@ where
     let state = SseState {
         stream: Box::pin(byte_stream),
         buffer: Vec::with_capacity(8 * 1024),
+        start: 0,
+        pending: std::collections::VecDeque::new(),
     };
     futures_util::stream::unfold(state, |mut st| async move {
         loop {
-            if st.buffer.len() > 8 * 1024 * 1024 {
-                st.buffer.clear();
+            // One block can carry several tool calls; emit them one at a
+            // time instead of dropping all but the last.
+            if let Some(event) = st.pending.pop_front() {
+                return Some((event, st));
             }
-            if let Some(end) = find_event_boundary(&st.buffer) {
+            // A single event larger than the cap is malformed; drop the
+            // consumed prefix and cap only the pending bytes.
+            if st.pending_bytes() > 8 * 1024 * 1024 {
+                st.buffer.clear();
+                st.start = 0;
+            }
+            if let Some(end) = find_event_boundary(&st.buffer[st.start..]) {
                 let block = st.take(end);
-                if let Some(event) = parse_event(&block) {
-                    return Some((event, st));
-                }
+                st.pending.extend(parse_events(&block));
                 continue;
             }
             match st.stream.next().await {
-                Some(Ok(bytes)) => st.buffer.extend_from_slice(&bytes),
+                Some(Ok(bytes)) => {
+                    st.compact();
+                    st.buffer.extend_from_slice(&bytes);
+                }
                 Some(Err(e)) => {
                     let err: DynError = format!("stream interrupted: {e}").into();
                     return Some((Err(err), st));
                 }
                 None => {
-                    let block = std::mem::take(&mut st.buffer);
-                    if block.is_empty() {
-                        return None;
-                    }
-                    let block = String::from_utf8_lossy(&block).into_owned();
-                    return parse_event(&block).map(|event| (event, st));
+                    let block = String::from_utf8_lossy(&st.buffer[st.start..]).into_owned();
+                    st.buffer.clear();
+                    st.start = 0;
+                    st.pending.extend(parse_events(&block));
+                    return st.pending.pop_front().map(|event| (event, st));
                 }
             }
         }
@@ -292,14 +311,41 @@ where
 struct SseState<S> {
     stream: std::pin::Pin<Box<S>>,
     buffer: Vec<u8>,
+    /// Bytes before this offset are already consumed. Keeping a cursor instead
+    /// of `Vec::drain(..n)` on every event avoids shifting the whole buffer
+    /// once per streamed token (quadratic on fast streams).
+    start: usize,
+    /// Events decoded from one SSE block waiting to be yielded.
+    pending: std::collections::VecDeque<Result<StreamEvent, DynError>>,
 }
 
 impl<S> SseState<S> {
-    /// Removes the first `block_len` bytes. The boundary already includes the
-    /// blank separator line, so nothing further is consumed.
+    /// Bytes still waiting to be parsed.
+    fn pending_bytes(&self) -> usize {
+        self.buffer.len() - self.start
+    }
+
+    /// Consumes the first `block_len` pending bytes. The boundary already
+    /// includes the blank separator line, so nothing further is consumed.
     fn take(&mut self, block_len: usize) -> String {
-        let block: Vec<u8> = self.buffer.drain(..block_len).collect();
-        String::from_utf8_lossy(&block).into_owned()
+        let start = self.start;
+        let end = start + block_len;
+        let block = String::from_utf8_lossy(&self.buffer[start..end]).into_owned();
+        self.start = end;
+        block
+    }
+
+    /// Reclaims the consumed prefix once it grows large enough to matter,
+    /// amortising the one memmove across many events.
+    fn compact(&mut self) {
+        const THRESHOLD: usize = 64 * 1024;
+        if self.start >= self.buffer.len() {
+            self.buffer.clear();
+            self.start = 0;
+        } else if self.start >= THRESHOLD {
+            self.buffer.drain(..self.start);
+            self.start = 0;
+        }
     }
 }
 
@@ -317,7 +363,10 @@ fn find_event_boundary(buf: &[u8]) -> Option<usize> {
     None
 }
 
-fn parse_event(block: &str) -> Option<Result<StreamEvent, DynError>> {
+/// Decodes one SSE block into zero or more events. A block may batch several
+/// tool calls (or content plus metadata); returning only one would silently
+/// drop the rest, leaving the model's turn incomplete.
+fn parse_events(block: &str) -> Vec<Result<StreamEvent, DynError>> {
     let mut data = String::new();
     for line in block.lines() {
         let line = line.trim_end_matches('\r');
@@ -329,15 +378,15 @@ fn parse_event(block: &str) -> Option<Result<StreamEvent, DynError>> {
         }
     }
     if data.is_empty() {
-        return None;
+        return Vec::new();
     }
     if data.trim() == "[DONE]" {
-        return Some(Ok(StreamEvent::Done));
+        return vec![Ok(StreamEvent::Done)];
     }
 
     let value: Value = match serde_json::from_str(&data) {
         Ok(v) => v,
-        Err(e) => return Some(Err(format!("malformed stream chunk: {e}").into())),
+        Err(e) => return vec![Err(format!("malformed stream chunk: {e}").into())],
     };
 
     if let Some(err) = value.get("error") {
@@ -345,26 +394,29 @@ fn parse_event(block: &str) -> Option<Result<StreamEvent, DynError>> {
             .get("message")
             .and_then(Value::as_str)
             .unwrap_or("stream error");
-        return Some(Err(message.to_string().into()));
+        return vec![Err(message.to_string().into())];
     }
 
     if let Some(usage) = value.get("usage").filter(|u| !u.is_null()) {
         if let Ok(usage) = serde_json::from_value::<UsageWire>(usage.clone()) {
-            return Some(Ok(StreamEvent::Usage(usage.into())));
+            return vec![Ok(StreamEvent::Usage(usage.into()))];
         }
     }
 
-    let choice = value
+    let Some(choice) = value
         .get("choices")
         .and_then(Value::as_array)
-        .and_then(|c| c.first())?;
+        .and_then(|c| c.first())
+    else {
+        return Vec::new();
+    };
     let delta = choice.get("delta").or_else(|| choice.get("message"));
 
     if let Some(calls) = delta
         .and_then(|d| d.get("tool_calls"))
         .and_then(Value::as_array)
     {
-        let mut out = None;
+        let mut out = Vec::with_capacity(calls.len());
         for call in calls {
             let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
             let id = call.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -377,14 +429,16 @@ fn parse_event(block: &str) -> Option<Result<StreamEvent, DynError>> {
                 .and_then(|f| f.get("arguments"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            out = Some(StreamEvent::ToolCall(ToolCall {
+            out.push(Ok(StreamEvent::ToolCall(ToolCall {
                 id: id.to_string(),
                 name: name.to_string(),
                 arguments: args.to_string(),
                 index,
-            }));
+            })));
         }
-        return out.map(Ok);
+        if !out.is_empty() {
+            return out;
+        }
     }
 
     // The answer text first; reasoning models (nemotron, deepseek-r1, …)
@@ -395,13 +449,20 @@ fn parse_event(block: &str) -> Option<Result<StreamEvent, DynError>> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
     {
-        return Some(Ok(StreamEvent::Delta(s.to_string())));
+        return vec![Ok(StreamEvent::Delta(s.to_string()))];
     }
     delta
         .and_then(|d| d.get("reasoning_content"))
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(|s| Ok(StreamEvent::ReasoningDelta(s.to_string())))
+        .map(|s| vec![Ok(StreamEvent::ReasoningDelta(s.to_string()))])
+        .unwrap_or_default()
+}
+
+/// First event of a block, kept for tests and single-event callers.
+#[cfg(test)]
+fn parse_event(block: &str) -> Option<Result<StreamEvent, DynError>> {
+    parse_events(block).into_iter().next()
 }
 
 #[derive(Deserialize)]
@@ -558,6 +619,21 @@ pub fn tool_schemas() -> Vec<Tool> {
                     "timeout_ms": { "type": "integer", "description": "Hard cap in milliseconds (max 120000, default 30000)" }
                 },
                 "required": ["host", "command"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "scan_ports",
+            "Fast concurrent TCP connect scan of a host (pure Rust, no external deps).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "host": { "type": "string", "description": "Target host (hostname or IP)" },
+                    "ports": { "type": "array", "items": { "type": "integer" }, "description": "Ports to scan (default: common service ports)" },
+                    "timeout_ms": { "type": "integer", "description": "Per-connection timeout in milliseconds (default 800)" },
+                    "concurrency": { "type": "integer", "description": "Maximum concurrent connections (default 100)" }
+                },
+                "required": ["host"],
                 "additionalProperties": false
             }),
         ),
@@ -836,6 +912,26 @@ mod tests {
             matches!(event, StreamEvent::Delta(ref d) if d == "ans"),
             "wrong event"
         );
+    }
+
+    #[test]
+    fn a_block_with_several_tool_calls_yields_them_all() {
+        let block = concat!(
+            r#"data: {"choices":[{"delta":{"tool_calls":["#,
+            r#"{"index":0,"id":"a","function":{"name":"read_file","arguments":"{}"}},"#,
+            r#"{"index":1,"id":"b","function":{"name":"list_files","arguments":"{}"}}"#,
+            r#"]}}]}"#
+        );
+        let events = parse_events(block);
+        assert_eq!(events.len(), 2, "both calls must survive: {events:?}");
+        let names: Vec<_> = events
+            .into_iter()
+            .map(|e| match e.expect("ok") {
+                StreamEvent::ToolCall(c) => c.name,
+                other => panic!("expected tool call, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, ["read_file", "list_files"]);
     }
 
     #[test]

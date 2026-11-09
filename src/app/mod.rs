@@ -1,6 +1,6 @@
 use crate::agent::openai::OpenAiProvider;
 use crate::agent::policy::ToolPolicy;
-use crate::agent::provider::{AgentProvider, ChatMessage, Usage};
+use crate::agent::provider::{AgentProvider, ChatMessage, Role, Usage};
 use crate::agent::runtime::{AgentEvent, AgentRuntime, Cancel};
 use crate::agent::suggest::{self, SuggestResult};
 use crate::agent::swarm::Swarm;
@@ -36,6 +36,11 @@ const MAX_HISTORY_MESSAGES: usize = 40;
 /// Two Esc presses within this window are a force stop: the turn is cancelled
 /// and any child process a tool is blocked on is killed immediately.
 const DOUBLE_ESC_WINDOW: Duration = Duration::from_millis(700);
+
+/// A cooperative interrupt gets this long to wind the turn down. If the
+/// runtime is wedged in a non-cancellable call (a stuck tool, a hung hook),
+/// `on_tick` escalates to a hard stop so Esc always works.
+const INTERRUPT_GRACE: Duration = Duration::from_millis(600);
 /// Follow-up suggestions one finished turn shows above the composer.
 const SUGGESTION_COUNT: usize = 3;
 const TOAST_TTL: Duration = Duration::from_secs(2);
@@ -87,6 +92,10 @@ pub struct ToolRow {
     /// Bounded code/command preview built from the call arguments (shown live
     /// under the row while the tool runs; collapsed by `/details` off).
     pub preview: Option<String>,
+    /// Bounded tail of the command's live output, fed by `ToolOutput` events
+    /// as the process runs and kept after it finishes so what a command
+    /// printed stays visible in the transcript.
+    pub output: Option<String>,
     /// When this tool call started; the source for its per-pill duration.
     pub started: Instant,
     /// Set once the tool finishes; pills show this, not the turn total.
@@ -94,6 +103,23 @@ pub struct ToolRow {
     /// One-line failure reason captured from `ToolEnd` when `ok` is false, so
     /// a failed call explains itself on the row without expanding details.
     pub error: Option<String>,
+}
+
+/// Activity timeline event for agent transparency.
+#[derive(Debug, Clone)]
+pub struct ActivityEvent {
+    pub timestamp: Instant,
+    pub action: String,
+    pub detail: Option<String>,
+    pub done: bool,
+}
+
+/// File operation for live code generation visibility.
+#[derive(Debug, Clone)]
+pub enum FileOp {
+    Created(String),
+    Modified(String, Option<String>), // path, optional diff
+    Deleted(String),
 }
 
 /// First line of a tool failure, flattened and bounded: a long stack trace
@@ -1621,6 +1647,8 @@ pub enum Control {
     OpenLink(String),
     /// `/export` (markdown or HTML) finished writing on the blocking pool.
     ExportDone(Result<std::path::PathBuf, String>),
+    /// The startup update probe finished its blocking git work.
+    UpdateChecked(Option<crate::update::UpdateStatus>),
 }
 
 enum ModelsResult {
@@ -1974,6 +2002,11 @@ pub struct App {
     /// When the last bare Esc landed: two in quick succession force-stop the
     /// running turn and kill any child process a tool is blocked on.
     last_esc: Option<Instant>,
+    /// The running turn's task. A hard stop aborts it so the UI is freed even
+    /// when the runtime is blocked in a call that cannot observe `Cancel`.
+    turn_task: Option<tokio::task::JoinHandle<()>>,
+    /// When the first Esc asked the turn to stop; `on_tick` escalates.
+    interrupt_at: Option<Instant>,
     rx: UnboundedReceiver<AgentEvent>,
     tx: UnboundedSender<AgentEvent>,
     models_rx: UnboundedReceiver<ModelsResult>,
@@ -2025,6 +2058,8 @@ pub struct App {
     /// Performance hud (`/hud`): draws the last frame time, peak and
     /// transcript stats into the footer.
     pub hud: bool,
+    /// Show activity timeline panel (toggled with Ctrl+A).
+    pub show_activity: bool,
     /// Tool activity display level (`/details`, `ctrl+o`).
     pub tool_display: ToolDisplay,
     /// Compact transcript density (`/density`, `ctrl+g`).
@@ -2057,6 +2092,16 @@ pub struct App {
     suggest_gen: u64,
     suggest_rx: UnboundedReceiver<SuggestResult>,
     suggest_tx: UnboundedSender<SuggestResult>,
+    /// In-flight suggestion side-call; aborted when the user starts a new
+    /// turn or dismisses the strip so it cannot compete for provider quota
+    /// with the real request.
+    suggest_task: Option<tokio::task::JoinHandle<()>>,
+    /// Agent activity timeline for live transparency.
+    pub activity_timeline: Vec<ActivityEvent>,
+    /// File operations during the current turn for live code generation view.
+    pub file_operations: Vec<FileOp>,
+    /// Live diffs for files being modified.
+    pub live_diffs: std::collections::HashMap<String, String>,
 }
 
 impl App {
@@ -2184,6 +2229,8 @@ impl App {
             improve_gen: 0,
             cancel: None,
             last_esc: None,
+            turn_task: None,
+            interrupt_at: None,
             rx,
             tx,
             models_rx,
@@ -2213,7 +2260,8 @@ impl App {
             selection: None,
             scrollbar_drag: false,
             hud: false,
-            tool_display: ToolDisplay::Rows,
+            show_activity: false,
+            tool_display: ToolDisplay::Full,
             compact: cfg.compact,
             turn_stats: VecDeque::new(),
             snapshots: Vec::new(),
@@ -2230,8 +2278,12 @@ impl App {
             suggest_gen: 0,
             suggest_rx,
             suggest_tx,
+            suggest_task: None,
             hacker,
             hacker_cap: None,
+            activity_timeline: Vec::new(),
+            file_operations: Vec::new(),
+            live_diffs: std::collections::HashMap::new(),
             cfg,
         };
 
@@ -2499,6 +2551,26 @@ impl App {
 
     /// Drains engine events, model-discovery results and board events; cheap
     /// to call every tick.
+    /// Hands the agent-event receiver to the main loop so `tokio::select!` can
+    /// await it directly. Without this, streamed deltas are only drained when
+    /// the 90 ms animation tick fires (or a key arrives), which caps visible
+    /// streaming at ~11 fps and makes long answers feel stalled.
+    ///
+    /// The app keeps an empty replacement receiver, so `pump_engine` continues
+    /// to work (it simply finds nothing) and tests that drive `self.tx` without
+    /// taking the receiver are unaffected.
+    pub fn take_engine_rx(&mut self) -> UnboundedReceiver<AgentEvent> {
+        let (_tx, empty) = unbounded_channel();
+        std::mem::replace(&mut self.rx, empty)
+    }
+
+    /// Applies one event received by the main loop's engine arm and schedules
+    /// a redraw. The loop drains any remaining queued events in the same pass.
+    pub fn apply_engine_event_now(&mut self, event: AgentEvent) {
+        self.apply_engine_event(event);
+        self.mark_dirty();
+    }
+
     pub fn pump_engine(&mut self) {
         let mut changed = false;
         while let Ok(event) = self.rx.try_recv() {
@@ -2641,6 +2713,8 @@ impl App {
         match event {
             AgentEvent::Started => {
                 self.turn_started = Some(Instant::now());
+                // Clear activity timeline at start of new turn
+                self.activity_timeline.clear();
             }
             AgentEvent::Delta(text) => {
                 if let Some(entry) = self.entries.get_mut(index) {
@@ -2662,6 +2736,9 @@ impl App {
                 detail,
                 preview,
             } => {
+                // Clone for activity emission after move
+                let name_for_activity = name.clone();
+                let detail_for_activity = detail.clone();
                 if let Some(entry) = self.entries.get_mut(index) {
                     // For edit_file, the ToolStart detail is the file path (from describe_args)
                     let edit_path = if name == "edit_file" {
@@ -2677,11 +2754,51 @@ impl App {
                         edit_path: edit_path.map(|s| s.to_string()),
                         edit_replacements: None,
                         preview,
+                        output: None,
                         started: Instant::now(),
                         elapsed: None,
                         error: None,
                     });
                     entry.touch();
+                }
+                // Emit activity for tool start
+                self.add_activity(
+                    format!("Calling tool: {}", name_for_activity),
+                    Some(detail_for_activity),
+                    false,
+                );
+            }
+            AgentEvent::ToolOutput {
+                name,
+                stdout,
+                stderr,
+            } => {
+                // Live tool output streaming - append to the running tool row
+                if let Some(entry) = self.entries.get_mut(index) {
+                    if let Some(row) = entry
+                        .tools
+                        .iter_mut()
+                        .rev()
+                        .find(|r| r.running && r.name == name)
+                    {
+                        // Live output goes to its own bounded tail so the row
+                        // label stays the command line and the transcript can
+                        // show what the command prints as it prints it.
+                        const MAX_LIVE_OUTPUT: usize = 1_600;
+                        let mut merged = row.output.take().unwrap_or_default();
+                        if !stdout.is_empty() {
+                            merged.push_str(&stdout);
+                        }
+                        if !stderr.is_empty() {
+                            merged.push_str(&format!("[err] {stderr}"));
+                        }
+                        let excess = merged.chars().count().saturating_sub(MAX_LIVE_OUTPUT);
+                        if excess > 0 {
+                            merged = merged.chars().skip(excess).collect();
+                        }
+                        row.output = Some(merged);
+                        entry.touch();
+                    }
                 }
             }
             AgentEvent::ReasoningDelta(d) => {
@@ -2694,6 +2811,28 @@ impl App {
             }
             AgentEvent::Snapshot { path, previous } => {
                 self.record_snapshot(path, previous);
+            }
+            AgentEvent::FileCreated { path } => {
+                self.add_activity(format!("Created file: {}", path), None, true);
+                self.file_operations.push(FileOp::Created(path));
+            }
+            AgentEvent::FileModified { path, diff } => {
+                self.add_activity(format!("Modified file: {}", path), None, true);
+                self.file_operations.push(FileOp::Modified(path, diff));
+            }
+            AgentEvent::FileDeleted { path } => {
+                self.add_activity(format!("Deleted file: {}", path), None, true);
+                self.file_operations.push(FileOp::Deleted(path));
+            }
+            AgentEvent::DiffUpdate { path, diff } => {
+                self.live_diffs.insert(path, diff);
+            }
+            AgentEvent::Activity {
+                action,
+                detail,
+                done,
+            } => {
+                self.add_activity(action, detail, done);
             }
             AgentEvent::ToolEnd { name, detail, ok } => {
                 // Capture the sudo-failure check before `name`/`detail` move into ToolRow.
@@ -2761,6 +2900,7 @@ impl App {
                             edit_path: None,
                             edit_replacements: None,
                             preview: None,
+                            output: None,
                             started: Instant::now(),
                             elapsed: None,
                             error: err,
@@ -2823,22 +2963,10 @@ impl App {
                 self.request_followups();
             }
             AgentEvent::Interrupted => {
-                // Record interrupted turn telemetry.
-                if let Some(entry) = self.entries.get(index) {
-                    let elapsed = entry.started.elapsed();
-                    self.telemetry.record_turn(entry.steps, false, elapsed);
-                }
-                if let Some(entry) = self.entries.get_mut(index) {
-                    entry.phase = Phase::Interrupted;
-                    entry.elapsed = Some(entry.started.elapsed());
-                    entry.touch();
-                }
-                self.history.push(ChatMessage::assistant(
-                    self.entries[index].text.trim().to_string(),
-                ));
-                self.note_history_appended();
-                self.trim_history();
-                self.finish_turn();
+                // The runtime stopped cooperatively; finalise here so the UI
+                // path and the hard-stop path stay identical.
+                let _ = index;
+                self.finalize_interrupted();
             }
             AgentEvent::Failed(err) => {
                 if let Some(entry) = self.entries.get_mut(index) {
@@ -2864,6 +2992,8 @@ impl App {
         self.fire_hook(crate::hooks::HookEvent::TurnEnd { summary });
         self.active = None;
         self.cancel = None;
+        self.turn_task = None;
+        self.interrupt_at = None;
         self.last_esc = None;
         self.turn_started = None;
         self.view.scroll_from_bottom = 0;
@@ -2920,18 +3050,26 @@ impl App {
             ChatMessage::system(suggest::SYSTEM_PROMPT.to_string()),
             ChatMessage::user(suggest::build_request(&user_text, &assistant_text)),
         ];
-        self.handle.spawn(async move {
+        // Never keep two side-calls alive: a slow one would overlap the next
+        // turn and steal its quota.
+        if let Some(task) = self.suggest_task.take() {
+            task.abort();
+        }
+        self.suggest_task = Some(self.handle.spawn(async move {
             let items = match provider.chat_completion(messages, None).await {
                 Ok((raw, _, _)) => suggest::parse_reply(&raw, SUGGESTION_COUNT),
                 Err(_) => Vec::new(),
             };
             let _ = tx.send(SuggestResult { gen, items });
-        });
+        }));
     }
 
     /// Mounts a side-call's reply, dropping stragglers from older turns and
     /// anything that lands while a new turn already runs.
     fn apply_suggest_result(&mut self, result: SuggestResult) {
+        if result.gen == self.suggest_gen {
+            self.suggest_task = None; // this call has landed
+        }
         if result.gen != self.suggest_gen || self.is_busy() || result.items.is_empty() {
             return;
         }
@@ -2974,6 +3112,12 @@ impl App {
 
     /// Drops the strip (typing anything, `Esc`, a new turn, a new session).
     pub fn dismiss_suggestions(&mut self) {
+        // Invalidate any in-flight reply and stop the side-call: the user has
+        // moved on, and a new turn must not race it for the provider.
+        self.suggest_gen += 1;
+        if let Some(task) = self.suggest_task.take() {
+            task.abort();
+        }
         if self.suggestions.take().is_some() {
             self.mark_dirty();
         }
@@ -2992,9 +3136,38 @@ impl App {
         });
     }
 
+    /// Bounds the conversation window, dropping the oldest whole turn at a
+    /// time. Cutting mid-turn can leave an orphan `tool` result (or an
+    /// assistant `tool_calls` without its results) at the head, which
+    /// OpenAI-compatible providers reject - the turn then fails before the
+    /// model sees it, which looks like "the task just stopped". The character
+    /// ceiling additionally guards against a few huge tool outputs.
     fn trim_history(&mut self) {
-        while self.history.len() > MAX_HISTORY_MESSAGES {
-            self.history.remove(0);
+        const MAX_HISTORY_CHARS: usize = 512_000;
+        let over_budget = |h: &[ChatMessage]| {
+            h.len() > MAX_HISTORY_MESSAGES
+                || h.iter().map(|m| m.content.len()).sum::<usize>() > MAX_HISTORY_CHARS
+        };
+        if !over_budget(&self.history) {
+            return;
+        }
+        while over_budget(&self.history) {
+            // Next user message starts the following turn; drop everything
+            // before it so the window always begins on a turn boundary.
+            let next_user = self
+                .history
+                .iter()
+                .skip(1)
+                .position(|m| m.role == Role::User)
+                .map(|pos| pos + 1);
+            match next_user {
+                Some(idx) => {
+                    self.history.drain(..idx);
+                }
+                // Only one turn left: trimming inside it would corrupt the
+                // tool-call pairing, so keep it.
+                None => break,
+            }
         }
     }
 
@@ -3055,54 +3228,32 @@ impl App {
             return Ok(());
         }
 
-        let current = env!("CARGO_PKG_VERSION");
-        let Some(repo) = crate::update::locate_checkout() else {
-            return Ok(()); // Silently skip if not a git checkout
-        };
+        self.apply_update_status(crate::update::check_status());
+        Ok(())
+    }
 
-        let branch = match crate::update::git_out(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]) {
-            Ok(b) => b,
-            Err(_) => return Ok(()),
+    /// Applies a background update probe. `None` (not a checkout, or the
+    /// fetch failed) is silent. The probe runs on the blocking pool at
+    /// startup; this is the main-thread half that touches entries/toast.
+    pub fn apply_update_status(&mut self, status: Option<crate::update::UpdateStatus>) {
+        if matches!(self.cfg.autoupdate.as_str(), "false") {
+            return;
+        }
+        let Some(status) = status else {
+            return;
         };
-
-        if crate::update::git_out_startup(&repo, &["fetch", "origin", "--tags", "--quiet"]).is_err()
-        {
-            return Ok(()); // Silently skip on fetch failure (5s startup cap)
+        if !status.is_actionable() {
+            return; // Up to date - no notification needed
         }
 
-        let behind: usize = crate::update::git_out(
-            &repo,
-            &["rev-list", "--count", &format!("HEAD..origin/{branch}")],
-        )
-        .unwrap_or("0".to_string())
-        .parse()
-        .unwrap_or(0);
-
-        let latest_tag = crate::update::git_opt(
-            &repo,
-            &[
-                "describe",
-                "--tags",
-                "--abbrev=0",
-                &format!("origin/{branch}"),
-            ],
-        );
-        let tag_newer = latest_tag
-            .as_deref()
-            .and_then(crate::update::parse_tag)
-            .is_some_and(|tag| tag > crate::update::parse_tag(current).unwrap_or((0, 0, 0)));
-
-        if behind == 0 && !tag_newer {
-            // Up to date - no notification needed
-            return Ok(());
-        }
-
-        // Update available - notify or prompt based on autoupdate setting
         let mut msg = String::new();
-        if behind > 0 {
-            msg.push_str(&format!("{behind} commit(s) behind origin/{branch}"));
+        if status.behind > 0 {
+            msg.push_str(&format!(
+                "{} commit(s) behind origin/{}",
+                status.behind, status.branch
+            ));
         }
-        if tag_newer {
+        if status.tag_newer {
             if !msg.is_empty() {
                 msg.push_str(" · ");
             }
@@ -3125,12 +3276,19 @@ impl App {
         }
 
         self.mark_dirty();
-        Ok(())
     }
 
     pub fn on_tick(&mut self) {
         if self.is_busy() {
             self.mark_dirty();
+            // A wedged runtime never observes the cooperative flag; escalate
+            // shortly after the first Esc so the UI cannot stay stuck.
+            if self
+                .interrupt_at
+                .is_some_and(|at| at.elapsed() >= INTERRUPT_GRACE)
+            {
+                self.force_interrupt();
+            }
         }
         // HACKER MODE: an assessment that expires mid-session must drop the
         // auto-approve bypass (and the Hacker tool policy) on the next tick.
@@ -3287,9 +3445,9 @@ impl App {
         let cancel = self.cancel.clone().expect("cancel set");
         let tx = self.tx.clone();
         let history = self.history[..self.history.len() - 1].to_vec();
-        self.handle.spawn(async move {
+        self.turn_task = Some(self.handle.spawn(async move {
             runtime.run(prompt, &history, cancel, tx).await;
-        });
+        }));
         self.mark_dirty();
     }
 
@@ -3795,10 +3953,10 @@ impl App {
         let tx = self.tx.clone();
         let history = Vec::new();
         self.turn_started = Some(Instant::now());
-        self.handle.spawn(async move {
+        self.turn_task = Some(self.handle.spawn(async move {
             let prompt = "Summarise the session above in at most 15 bullet points: decisions, files touched, and open questions.";
             runtime.run(prompt.to_string(), &history, cancel, tx).await;
-        });
+        }));
         self.mark_dirty();
     }
 
@@ -5755,27 +5913,64 @@ impl App {
     }
 
     pub fn interrupt(&mut self) {
+        if self.active.is_none() {
+            return;
+        }
         if let Some(cancel) = &self.cancel {
             cancel.cancel();
-            self.toast("interrupting… press esc again to force stop");
-            self.mark_dirty();
         }
+        self.interrupt_at = Some(Instant::now());
+        self.toast("interrupting… press esc again to force stop");
+        self.mark_dirty();
     }
 
-    /// Hard stop: cancels the turn and makes the running tool kill its child
-    /// process group. Reached from the second Esc press.
+    /// Hard stop: cancels the turn, kills a running tool's child process
+    /// group, and detaches the agent task. This is the guaranteed path - it
+    /// does not depend on the runtime task being scheduled or cooperative,
+    /// so Esc works even when a tool or hook is stuck.
     pub fn force_interrupt(&mut self) {
+        let had_turn = self.active.is_some();
         if let Some(cancel) = &self.cancel {
             cancel.force();
-            self.toast("force stopping…");
-            self.mark_dirty();
         }
-        // A board convene has no tool process to kill, but the second Esc
-        // should still stop it rather than being swallowed.
+        // A board convene has no tool process to kill, but Esc should still
+        // stop it rather than being swallowed.
         if let Some(board) = &self.board_cancel {
             board.cancel();
-            self.mark_dirty();
         }
+        if let Some(task) = self.turn_task.take() {
+            task.abort();
+        }
+        self.interrupt_at = None;
+        if had_turn {
+            self.finalize_interrupted();
+            self.toast("stopped");
+        }
+        self.mark_dirty();
+    }
+
+    /// Finalises the active entry as interrupted. Used by the engine's
+    /// `Interrupted` event and by the hard-stop path, which must not wait for
+    /// the runtime task to emit that event.
+    fn finalize_interrupted(&mut self) {
+        let Some(index) = self.active else {
+            return;
+        };
+        if let Some(entry) = self.entries.get(index) {
+            let elapsed = entry.started.elapsed();
+            self.telemetry.record_turn(entry.steps, false, elapsed);
+        }
+        if let Some(entry) = self.entries.get_mut(index) {
+            entry.phase = Phase::Interrupted;
+            entry.elapsed = Some(entry.started.elapsed());
+            entry.touch();
+        }
+        if let Some(text) = self.entries.get(index).map(|e| e.text.trim().to_string()) {
+            self.history.push(ChatMessage::assistant(text));
+            self.note_history_appended();
+        }
+        self.trim_history();
+        self.finish_turn();
     }
 
     pub fn new_session(&mut self) {
@@ -6314,6 +6509,21 @@ impl App {
         while self.snapshots.len() > 20 {
             self.snapshots.remove(0);
         }
+    }
+
+    /// Adds an activity event to the timeline.
+    fn add_activity(&mut self, action: String, detail: Option<String>, done: bool) {
+        self.activity_timeline.push(ActivityEvent {
+            timestamp: Instant::now(),
+            action,
+            detail,
+            done,
+        });
+        // Keep timeline bounded
+        if self.activity_timeline.len() > 200 {
+            self.activity_timeline.drain(0..50);
+        }
+        self.mark_dirty();
     }
 
     /// Restores every file a turn touched to its pre-turn state
@@ -7106,6 +7316,14 @@ impl App {
         self.invalidate_transcript();
     }
 
+    /// Toggles the activity timeline panel visibility (Ctrl+Shift+A).
+    pub fn toggle_activity(&mut self) {
+        self.show_activity = !self.show_activity;
+        let label = if self.show_activity { "on" } else { "off" };
+        self.toast(format!("activity panel: {label}"));
+        self.mark_dirty();
+    }
+
     /// Opens the footer search bar, seeded with the active selection when
     /// there is one (truncated to keep the bar readable).
     pub fn open_search(&mut self) {
@@ -7381,6 +7599,7 @@ impl App {
             KeyCode::Char('r') if ctrl => self.cycle_reasoning(),
             KeyCode::Char('f') if ctrl => self.open_search(),
             KeyCode::Char('o') if ctrl => self.toggle_tool_details(),
+            KeyCode::Char('a') if ctrl && shift => self.toggle_activity(),
 
             // Paste: Ctrl+V (Linux/Windows), Super+V (Mac)
             // Actual paste content comes via bracketed paste (Event::Paste -> on_paste)
@@ -8523,6 +8742,7 @@ fn theme_descriptor(id: ThemeId) -> &'static str {
         ThemeId::Hacker => "phosphor green · terminal noir",
         ThemeId::MrRobot => "fsociety red · cable static",
         ThemeId::Anonymous => "grey hat · silver on black",
+        ThemeId::Nord => "pale snow · arctic blue-grey",
     }
 }
 
@@ -9348,6 +9568,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trim_history_drops_whole_turns_never_orphaning_tool_results() {
+        let mut app = test_app().await;
+        app.history.clear();
+        for i in 0..15 {
+            app.history.push(ChatMessage::user(format!("u{i}")));
+            app.history.push(ChatMessage {
+                role: Role::Assistant,
+                content: String::new(),
+                images: None,
+                tool_calls: Some(vec![crate::agent::provider::ToolCall {
+                    id: format!("c{i}"),
+                    name: "read_file".into(),
+                    arguments: "{}".into(),
+                    index: 0,
+                }]),
+                tool_call_id: None,
+            });
+            app.history
+                .push(ChatMessage::tool_result(format!("c{i}"), "out"));
+            app.history.push(ChatMessage::assistant(format!("a{i}")));
+        }
+        app.trim_history();
+        assert!(app.history.len() <= MAX_HISTORY_MESSAGES, "count bounded");
+        assert_eq!(
+            app.history.first().map(|m| m.role),
+            Some(Role::User),
+            "window starts on a turn boundary"
+        );
+        for (i, msg) in app.history.iter().enumerate() {
+            if msg.role == Role::Tool {
+                assert!(
+                    i > 0 && app.history[i - 1].tool_calls.is_some(),
+                    "orphan tool result at {i} would be rejected by the provider"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn image_queue_clears_on_new_session() {
         let mut app = test_app().await;
         let dir = crate::improve::testing::temp_dir("image-new");
@@ -9820,6 +10079,27 @@ mod tests {
         app.on_key(key(KeyCode::Esc));
         assert!(app.suggestions.is_none(), "esc dismisses");
         assert_eq!(app.composer.value(), "x", "esc must not clear the composer");
+    }
+
+    #[tokio::test]
+    async fn hard_stop_finalises_a_wedged_turn_without_engine_events() {
+        // A tool that ignores cooperation can leave the runtime task stuck;
+        // the hard stop must free the UI on its own, not wait for an
+        // `Interrupted` event the wedged task may never send.
+        let mut app = test_app().await;
+        app.entries.push(Entry::streaming());
+        app.active = Some(0);
+        app.cancel = Some(Cancel::new());
+
+        app.interrupt();
+        assert!(app.is_busy(), "first esc stays cooperative");
+        assert_eq!(app.entries[0].phase, Phase::Streaming);
+
+        app.force_interrupt();
+        assert!(!app.is_busy(), "hard stop frees the turn immediately");
+        assert!(app.cancel.is_none());
+        assert_eq!(app.entries[0].phase, Phase::Interrupted);
+        assert!(app.toast.is_some(), "the stop is visible");
     }
 
     /// Picker headers are non-selectable; move_by skips over them.

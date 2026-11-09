@@ -226,7 +226,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let rects = app.view.layout(area, input_h);
 
     panels::header(frame, rects.header, app);
-    draw_thinking_panel(frame, rects.left_info, app, &theme);
+    // Show activity panel when toggled, otherwise show thinking panel
+    if app.show_activity {
+        panels::activity_timeline(frame, rects.left_info, app);
+    } else {
+        draw_thinking_panel(frame, rects.left_info, app, &theme);
+    }
     chat::render(frame, rects.main_chat, app);
     let cursor = composer::render(frame, rects.left_input, app, &prompt_layout, app.compact);
     panels::footer(frame, rects.footer, app);

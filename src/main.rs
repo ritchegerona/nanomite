@@ -184,13 +184,24 @@ async fn main() -> io::Result<()> {
         }
     };
 
-    // Auto-update check on startup (like opencode's autoupdate)
-    if !matches!(app.cfg.autoupdate.as_str(), "false") {
-        let _ = app.check_for_updates_on_startup();
-    }
-
+    // Auto-update check on startup (like opencode's autoupdate). The probe
+    // shells out to git and may hit the network, so it runs on the blocking
+    // pool: the first frame paints immediately and the result arrives through
+    // the control channel when the fetch finishes.
+    let want_update_check = !matches!(app.cfg.autoupdate.as_str(), "false");
     let (control_tx, mut control_rx) = tokio::sync::mpsc::unbounded_channel::<Control>();
+    let update_tx = control_tx.clone();
     app.set_control_channel(control_tx);
+    // Await agent events directly instead of only draining them on the 90 ms
+    // animation tick: streamed deltas, tool output and turn completion wake
+    // the loop immediately. Redraws stay throttled by STREAM_FRAME below.
+    let mut engine_rx = app.take_engine_rx();
+    if want_update_check {
+        tokio::task::spawn_blocking(move || {
+            let status = nanomite::update::check_status();
+            let _ = update_tx.send(Control::UpdateChecked(status));
+        });
+    }
     let mut ticker = tokio::time::interval(ANIMATION_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -233,12 +244,12 @@ async fn main() -> io::Result<()> {
 
     // Adaptive streaming throttle: while a turn streams, deltas arrive
     // faster than any terminal can paint, so engine-driven redraws coalesce
-    // to ~30 fps and the loop spends its time ingesting tokens rather than
+    // to ~60 fps and the loop spends its time ingesting tokens rather than
     // diffing frames. Input is exempt: a key or pointer event always paints
     // the very next frame, so selection and caret tracking never wait for
     // the tick — and a burst of drag events drains into ONE frame instead
     // of one frame per event.
-    const STREAM_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+    const STREAM_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
     let mut last_draw = std::time::Instant::now() - STREAM_FRAME;
     let mut user_input = false;
     let mut burst = TypedBurst::new();
@@ -263,6 +274,11 @@ async fn main() -> io::Result<()> {
         }
 
         tokio::select! {
+            // Input first: a queued keypress must never wait behind a burst
+            // of streamed tokens or channel events. Without this bias the
+            // select order is random, so a busy model could delay — and in
+            // the worst case starve — the Esc that stops it.
+            biased;
             // Cancellation-safe: the unbounded channel's `recv` keeps any
             // event already delivered when the poll is dropped by a tick, so
             // nothing from the tty is ever lost between loop passes.
@@ -320,6 +336,15 @@ async fn main() -> io::Result<()> {
                     eprintln!("nanomite: {e}");
                 }
                 continue;
+            }
+            Some(event) = engine_rx.recv() => {
+                // Apply the event that woke us, then coalesce everything
+                // already queued into the same pass: one drain per network
+                // chunk instead of one loop iteration per token.
+                app.apply_engine_event_now(event);
+                while let Ok(event) = engine_rx.try_recv() {
+                    app.apply_engine_event_now(event);
+                }
             }
             _ = ticker.tick() => {
                 // The tick is NOT a burst boundary: only close the burst when
@@ -396,6 +421,10 @@ fn run_control(
         app.on_export_done(result.clone());
         return Ok(());
     }
+    if let Control::UpdateChecked(status) = &control {
+        app.apply_update_status(status.clone());
+        return Ok(());
+    }
     if let Control::OpenLink(url) = &control {
         open_in_browser(url, app);
         return Ok(());
@@ -413,6 +442,7 @@ fn run_control(
         Control::ForkSaved { .. } => return Ok(()),
         Control::ImageAttached(_) => return Ok(()),
         Control::ExportDone(_) => return Ok(()),
+        Control::UpdateChecked(_) => return Ok(()),
         Control::OpenLink(_) => return Ok(()),
         Control::EditComposer(text) => {
             let path =
@@ -444,6 +474,7 @@ fn run_control(
         Control::ForkSaved { .. } => {}
         Control::ImageAttached(_) => {}
         Control::ExportDone(_) => {}
+        Control::UpdateChecked(_) => {}
         Control::OpenLink(_) => {}
         Control::EditComposer(_) => {
             let text = std::fs::read_to_string(&target).unwrap_or_default();

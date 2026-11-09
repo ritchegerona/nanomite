@@ -65,7 +65,26 @@ pub const CATALOGUE: &[KaliTool] = &[
         "service/version discovery over the top 100 ports",
         ModuleCategory::Network,
         RiskLevel::Medium,
-        &["-Pn", "-sV", "--top-ports", "100", "{target}"],
+        &[
+            "-Pn",
+            "-sV",
+            "--version-light",
+            "-T4",
+            "--max-retries",
+            "1",
+            // Cap per-probe RTT: with default timing, filtered ports stall
+            // the scan for the full TCP timeout (~40s/host measured); the
+            // caps cut that to ~10s with no loss on responsive hosts.
+            "--initial-rtt-timeout",
+            "200ms",
+            "--max-rtt-timeout",
+            "300ms",
+            "--host-timeout",
+            "60s",
+            "--top-ports",
+            "100",
+            "{target}",
+        ],
     ),
     tool(
         "masscan",

@@ -5,7 +5,7 @@ use crate::agent::provider::{
 use crate::hooks::{HookConfig, HookEvent};
 use crate::memory::{TurnObservation, TurnOutcome};
 use crate::tools::document_tools::ReadDocumentArgs;
-use crate::tools::exec_tools::{RunCommandArgs, SshRunArgs};
+use crate::tools::exec_tools::{RunCommandArgs, ScanPortsArgs, SshRunArgs};
 use crate::tools::file_tools::{
     EditFileArgs, ListFilesArgs, ReadFileArgs, SearchArgs, WriteFileArgs,
 };
@@ -109,6 +109,12 @@ pub enum AgentEvent {
         /// its arguments, so the transcript can show the code live.
         preview: Option<String>,
     },
+    /// Live tool output streaming (stdout/stderr chunks during execution).
+    ToolOutput {
+        name: String,
+        stdout: String,
+        stderr: String,
+    },
     ToolEnd {
         name: String,
         detail: String,
@@ -119,6 +125,31 @@ pub enum AgentEvent {
     Snapshot {
         path: String,
         previous: Option<Vec<u8>>,
+    },
+    /// File operation events for live code generation visibility.
+    FileCreated {
+        path: String,
+    },
+    FileModified {
+        path: String,
+        diff: Option<String>,
+    },
+    FileDeleted {
+        path: String,
+    },
+    /// Live diff update for a file being modified.
+    DiffUpdate {
+        path: String,
+        diff: String,
+    },
+    /// Agent activity timeline events for transparency.
+    Activity {
+        /// Short action description (e.g., "Analyzing request", "Creating files")
+        action: String,
+        /// Optional detail for context
+        detail: Option<String>,
+        /// Whether this activity is complete
+        done: bool,
     },
     Finished {
         text: String,
@@ -695,7 +726,8 @@ impl AgentRuntime {
                 let call_for_task = call.clone();
                 let tool_name = call.name.clone();
                 let cancel_flag = cancel.force_flag();
-                let outcome = tokio::task::spawn_blocking(move || {
+                let _tx_for_streaming = tx.clone(); // run_command's live-output sink
+                let mut tool_task = tokio::task::spawn_blocking(move || {
                     // Double-Esc must reach process-spawning tools: expose the
                     // turn's force flag to the blocking worker for the whole
                     // call, so `run_command`, tests, git and the browser kill
@@ -708,14 +740,97 @@ impl AgentRuntime {
                     } else {
                         None
                     };
-                    let result = run_tool(
-                        &tools,
-                        &disabled,
-                        policy,
-                        &hooks,
-                        &workspace,
-                        &call_for_task,
-                    );
+                    // run_command streams its output live: a throttled sink
+                    // batches chunks into `ToolOutput` events so the UI shows
+                    // what the command prints as it prints it.
+                    let result = if tool_name == "run_command" {
+                        // Apply the same policy checks as run_tool
+                        let requested = tool_name.trim().to_ascii_lowercase();
+                        if disabled.contains(&requested) {
+                            return (Err("{\"error\":\"tool disabled by configuration\",\"code\":\"tool_disabled\"}".to_string()), snapshot);
+                        }
+                        if let Err(e) = policy.authorize(&requested) {
+                            return (Err(e.to_string()), snapshot);
+                        }
+
+                        let args: crate::tools::exec_tools::RunCommandArgs =
+                            match serde_json::from_str(&call_for_task.arguments) {
+                                Ok(a) => a,
+                                Err(e) => {
+                                    return (
+                                        Err(format!("invalid run_command arguments: {e}")),
+                                        snapshot,
+                                    )
+                                }
+                            };
+                        let tools_clone = Arc::clone(&tools);
+                        let exec_tools = &tools_clone.exec;
+                        // Throttle: coalesce pipe chunks into one event per
+                        // ~40ms (or 4KB), so a chatty command cannot flood
+                        // the event channel or the transcript.
+                        let event_tx = _tx_for_streaming;
+                        let stream_name = call_for_task.name.clone();
+                        let mut buf_out = String::new();
+                        let mut buf_err = String::new();
+                        let mut last_send =
+                            std::time::Instant::now() - std::time::Duration::from_millis(1_000);
+                        let flush =
+                            |buf_out: &mut String,
+                             buf_err: &mut String,
+                             last_send: &mut std::time::Instant| {
+                                *last_send = std::time::Instant::now();
+                                if !buf_out.is_empty() {
+                                    let _ = event_tx.send(AgentEvent::ToolOutput {
+                                        name: stream_name.clone(),
+                                        stdout: std::mem::take(buf_out),
+                                        stderr: String::new(),
+                                    });
+                                }
+                                if !buf_err.is_empty() {
+                                    let _ = event_tx.send(AgentEvent::ToolOutput {
+                                        name: stream_name.clone(),
+                                        stdout: String::new(),
+                                        stderr: std::mem::take(buf_err),
+                                    });
+                                }
+                            };
+                        {
+                            let mut sink = |is_err: bool, bytes: &[u8]| {
+                                let text = String::from_utf8_lossy(bytes);
+                                if is_err {
+                                    buf_err.push_str(&text);
+                                } else {
+                                    buf_out.push_str(&text);
+                                }
+                                let now = std::time::Instant::now();
+                                if now.duration_since(last_send)
+                                    >= std::time::Duration::from_millis(40)
+                                    || buf_out.len() + buf_err.len() > 4_000
+                                {
+                                    flush(&mut buf_out, &mut buf_err, &mut last_send);
+                                }
+                            };
+                            let outcome = exec_tools.run_command_with_sink(args, Some(&mut sink));
+                            // Emit whatever the final drain produced.
+                            flush(&mut buf_out, &mut buf_err, &mut last_send);
+                            match outcome {
+                                Ok(r) => Ok((
+                                    serde_json::to_string(&r).unwrap_or_default(),
+                                    format!("exit {}", r.exit_code),
+                                )),
+                                Err(e) => Err(e.to_string()),
+                            }
+                        }
+                    } else {
+                        run_tool(
+                            &tools,
+                            &disabled,
+                            policy,
+                            &hooks,
+                            &workspace,
+                            &call_for_task,
+                        )
+                    };
                     // Post-tool-call hooks fire after the result is known,
                     // detached so they never delay the turn.
                     if !hooks.is_empty() {
@@ -734,9 +849,30 @@ impl AgentRuntime {
                         });
                     }
                     (result, snapshot)
-                })
-                .await
-                .unwrap_or_else(|e| (Err(format!("tool panicked: {e}")), None));
+                });
+
+                // Do not sit on a running tool: Esc must stop the turn even
+                // when the tool ignores the cooperative flag. On the first
+                // Esc we detach the worker (dropping the JoinHandle lets it
+                // finish in the background; its late events are ignored once
+                // the UI clears `active`), and the second Esc has already
+                // killed its process group through the force flag.
+                let outcome = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        // We are abandoning the worker, so kill it: a
+                        // detached process must not keep running after the
+                        // turn is over. Cooperative tools that finish on
+                        // their own hit the other branch instead.
+                        cancel.force();
+                        tool_task.abort();
+                        let _ = tx.send(AgentEvent::Interrupted);
+                        return None;
+                    }
+                    res = &mut tool_task => {
+                        res.unwrap_or_else(|e| (Err(format!("tool panicked: {e}")), None))
+                    }
+                };
 
                 let (outcome, snapshot) = outcome;
                 match outcome {
@@ -747,6 +883,34 @@ impl AgentRuntime {
                             detail: summary,
                             ok,
                         });
+                        // Emit file operation events for write_file and edit_file
+                        if ok {
+                            match call.name.as_str() {
+                                "write_file" => {
+                                    if let Ok(args) =
+                                        serde_json::from_str::<
+                                            crate::tools::file_tools::WriteFileArgs,
+                                        >(&call.arguments)
+                                    {
+                                        let _ =
+                                            tx.send(AgentEvent::FileCreated { path: args.path });
+                                    }
+                                }
+                                "edit_file" => {
+                                    if let Ok(args) = serde_json::from_str::<
+                                        crate::tools::file_tools::EditFileArgs,
+                                    >(
+                                        &call.arguments
+                                    ) {
+                                        let _ = tx.send(AgentEvent::FileModified {
+                                            path: args.path,
+                                            diff: None,
+                                        });
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                         messages.push(ChatMessage::tool_result(call.id.clone(), payload));
                     }
                     Err(e) => {
@@ -763,14 +927,10 @@ impl AgentRuntime {
                 }
             }
 
-            // Give the UI a beat to settle before the next step.
-            tokio::select! {
-                _ = cancel.cancelled() => {
-                    let _ = tx.send(AgentEvent::Interrupted);
-                    return None;
-                }
-                _ = tokio::time::sleep(Duration::from_millis(120)) => {}
-            }
+            // Yield so queued engine events can reach the UI between steps;
+            // the stream loop races `cancel` on every SSE item, so the next
+            // step starts immediately instead of after a fixed beat.
+            tokio::task::yield_now().await;
         }
     }
 }
@@ -1030,6 +1190,26 @@ pub(crate) fn run_tool(
                 payload,
                 format!("{} @ {} · {summary}", shorten(&cmd, 32), shorten(&host, 24)),
             ))
+        }
+        "scan_ports" => {
+            let parsed: ScanPortsArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad scan_ports arguments: {e}"))?;
+            let host = parsed.host.clone();
+            let result = tools
+                .exec
+                .scan_ports(parsed)
+                .map_err(|e| format!("scan_ports failed: {e}"))?;
+            let summary = if result.open_ports.is_empty() {
+                format!("no open ports found ({} scanned)", result.scanned)
+            } else {
+                format!(
+                    "{} open of {} scanned",
+                    result.open_ports.len(),
+                    result.scanned
+                )
+            };
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, format!("{} · {}", shorten(&host, 40), summary)))
         }
         "web_fetch" => {
             let parsed: WebFetchArgs = serde_json::from_value(args)
@@ -2222,7 +2402,7 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        let expected = 26
+        let expected = 27
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(filter_disabled_schemas(schemas, &[]).len(), expected);

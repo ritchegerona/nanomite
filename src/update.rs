@@ -15,9 +15,10 @@ use crate::update_signing::{verify_signature, UpdateSigning, VerifyResult};
 /// How long a single git or cargo step may run before the update gives up.
 const STEP_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Startup update checks run synchronously before the event loop starts: a
-/// slow or offline network must never hold the TUI hostage. The interactive
-/// `/update` flow keeps the generous `STEP_TIMEOUT`; startup uses this.
+/// Startup update checks run on the blocking pool while the TUI paints: a
+/// slow or offline network must never hold the first frame hostage. The
+/// interactive `/update` flow keeps the generous `STEP_TIMEOUT`; startup
+/// probes use this cap.
 pub const STARTUP_STEP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Entry point for `nanomite update`.
@@ -285,6 +286,65 @@ pub fn read_version(repo: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Result of a startup update probe.
+///
+/// `behind` counts commits on `origin/<branch>` that HEAD does not have;
+/// `tag_newer` says the latest release tag is newer than the running version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateStatus {
+    pub branch: String,
+    pub behind: usize,
+    pub tag_newer: bool,
+}
+
+impl UpdateStatus {
+    /// Whether there is something worth telling the user about.
+    pub fn is_actionable(&self) -> bool {
+        self.behind > 0 || self.tag_newer
+    }
+}
+
+/// Probes origin for updates without touching the UI.
+///
+/// Intended to run on the blocking pool: startup calls this off the event
+/// loop so a slow fetch never delays the first frame. Returns `None` when
+/// this is not a git checkout or the fetch fails (silent skip).
+pub fn check_status() -> Option<UpdateStatus> {
+    let repo = locate_checkout()?;
+    let branch = git_out(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+
+    git_out_startup(&repo, &["fetch", "origin", "--tags", "--quiet"]).ok()?;
+
+    let behind = git_out(
+        &repo,
+        &["rev-list", "--count", &format!("HEAD..origin/{branch}")],
+    )
+    .ok()
+    .and_then(|s| s.parse().ok())
+    .unwrap_or(0);
+
+    let latest_tag = git_opt_startup(
+        &repo,
+        &[
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            &format!("origin/{branch}"),
+        ],
+    );
+    let current = parse_tag(env!("CARGO_PKG_VERSION")).unwrap_or((0, 0, 0));
+    let tag_newer = latest_tag
+        .as_deref()
+        .and_then(parse_tag)
+        .is_some_and(|tag| tag > current);
+
+    Some(UpdateStatus {
+        branch,
+        behind,
+        tag_newer,
+    })
 }
 
 /// Parses `v0.7.0` / `0.7.0` into a comparable tuple.

@@ -121,6 +121,17 @@ tempfile = "3.15"
 chrono = { version = "0.4", features = ["serde"] }
 shellexpand = "3"
 
+# Dev builds that run like the release binary: the dependencies doing all
+# the per-frame and per-call work (ratatui, serde, regex, tokio) are fully
+# optimized once, while the app crate stays fast to recompile at O1. Slim
+# line-tables debuginfo keeps relinks quick but backtraces readable.
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 opt-level = 3
 lto = "thin"
