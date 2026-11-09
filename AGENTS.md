@@ -19,13 +19,13 @@ siblings are not part of the project:
 ## Build state — READ FIRST (verified 2026-11-06, v0.8.0 + HACKER MODE Phase 4: assessment lifecycle, reporting ops, evidence verify, finding triage, more producers)
 
 `cargo check` (lib + bins) **passes clean**. `cargo test --lib` is
-**774 passed / 0 failed** (~5 s, fully offline). With `--features vpn,tor` the
+**784 passed / 0 failed** (~5 s, fully offline). With `--features vpn,tor` the
 suite runs **913 tests**. `cargo clippy --all-targets -- -D warnings` is
 clean. `cargo fmt --check` is clean.
 
 `tests/production_attach.rs` is a separate **integration** target (1 test, green)
-that exercises the real startup attach path. It is *not* part of the 774; quote
-the two numbers separately. `tests/agent_integration.rs` is a third offline
+that exercises the real startup attach path. It is *not* part of the 774/784;
+quote the two numbers separately. `tests/agent_integration.rs` is a third offline
 target (8 tests, green): config load/env, session persist/restore (v1 + v2),
 in-memory memory, document extraction, and tool-set file/exec operations.
 
@@ -37,7 +37,7 @@ compiles on the stable toolchain: `cargo bench` works, and `cargo test`
 
 ```bash
 cargo check            # clean
-cargo test --lib       # 774 passed, 0 failed, ~5 s, fully offline
+cargo test --lib       # 784 passed, 0 failed, ~5 s, fully offline
 cargo test --test production_attach   # 1 passed (integration; not in the 774)
 cargo bench            # benches/perf.rs harness; bench profile inherits release
 cargo clippy --all-targets -- -D warnings   # clean (CI at .github/workflows/ci.yml)
@@ -45,12 +45,24 @@ cargo fmt
 ```
 
 Do not "fix" the suite by deleting tests or by claiming a count from
-README/docs without running it. Test counts in README may be stale; 774 is correct for `--lib`; the
+README/docs without running it. Test counts in README may be stale; 784 is correct for `--lib`; the
 integration targets (1 + 8) are counted separately; 913 with `vpn,tor`.
 
 Release profile sets `panic = "abort"`, so the panic hook in `src/main.rs:141`
 must stay: abort cannot unwind, and a raw-mode terminal would otherwise be left
 broken.
+
+## Recent Optimizations (v1.3.1-fixes, committed & pushed)
+
+- **Esc fix**: Single Esc cooperative interrupt; second within 700ms → force stop; auto-escalation via `on_tick` at 600ms. Verified: 1.1ms stop latency, zero second model request, `sleep 300` child killed.
+- **Nmap speedup**: Template `-Pn -sV --version-light -T4 --max-retries 1 --initial-rtt-timeout 200ms --max-rtt-timeout 300s --host-timeout 60s --top-ports 100`; 41.9s → 10s worst case (4.3× faster on blackhole host).
+- **UI rail removal**: Vertical `├`/`│` lines replaced with plain indentation; green `◆` diamond on first response line; no layout shift.
+- **Assistant footer removed**: `Hacker · time · model · duration · tok/s · interrupted` lines removed from response body.
+- **Dev profile**: `[profile.dev] opt-level = 1, debug = "line-tables-only"` + `[profile.dev.package."*"] opt-level = 3`; incremental rebuild 10.9s → 6.3s; debug binary 60.2MB → 24.9MB; dev response render ~11.8ms.
+- **VS Code-style code highlighting**: `code_function` (dilaw green), `code_type` (cyan), `code_constant` (orange) in `src/ui/text.rs` and `src/ui/theme.rs`.
+- **Live command output**: `ToolOutput` events sink into bounded `row.output` tail (last 1200 chars); renders live while running, persists after finish.
+
+784 tests pass, clippy clean (`-D warnings`), fmt clean. Release binary at `~/.local/bin/nanomite` (SHA: 03654b7399907f800a6439dea85e9d8433d75993).
 
 ## Architecture map
 
@@ -160,7 +172,7 @@ broken.
   `read_document` is the agent-facing door to it.
 - `tests/production_attach.rs` — integration target proving the real production
   attach path (memory + config) works from the outside. 1 test, separate from
-  the 774.
+  the lib test count.
 
 ## Operator tools (`tools/`)
 
