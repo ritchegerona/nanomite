@@ -10,6 +10,7 @@ pub mod theme;
 
 use crate::app::{App, Overlay, OverlayKind};
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::Frame;
 use theme::Theme;
@@ -215,7 +216,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let left_w = left_tile_width(area) as usize;
     let wrap_w = left_w.saturating_sub(4).max(8);
     app.composer_layout_width = wrap_w;
-    let prompt_layout = app.composer.layout(wrap_w, theme.base());
+    let prompt_layout = app
+        .composer
+        .layout(wrap_w, Style::default().fg(theme.user()));
     let composer_rows = if app.compact {
         composer::rows_compact(&prompt_layout)
     } else {

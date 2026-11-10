@@ -198,8 +198,8 @@ async fn renders_a_turn_with_tools_and_markdown() {
     // goes red with `✗`.
     assert!(text.contains("→"), "tool read marker missing:\n{text}");
     assert!(text.contains("✗"), "tool failure marker missing:\n{text}");
-    // The user turn uses a rail node `◆` in the new layout.
-    assert!(text.contains('◆'), "user rail node missing:\n{text}");
+    // The assistant response keeps the green rail node; user turn uses plain indent.
+    assert!(text.contains("◆"), "assistant green node missing:\n{text}");
 }
 
 #[tokio::test]
@@ -271,8 +271,11 @@ async fn user_message_renders_as_a_raised_block() {
 
     let text = frame_text(&mut app, 92, 24);
     assert!(text.contains("list the files"), "text missing:\n{text}");
-    // Rail node `◆` replaces the old `▌` bar.
-    assert!(text.contains('◆'), "rail node missing:\n{text}");
+    // User turn in cozy mode now uses plain 4-space indent (no rail node).
+    assert!(
+        text.contains("    list the files"),
+        "user indent missing:\n{text}"
+    );
     // opencode drops the YOU/AI badges and timestamps entirely.
     assert!(!text.contains("YOU"), "badge should be gone:\n{text}");
 }
@@ -290,18 +293,71 @@ async fn assistant_response_marks_a_green_node_without_a_footer() {
     app.entries.push(entry);
 
     let text = frame_text(&mut app, 92, 24);
-    // The response opens with a node like the user prompt's diamond, and the
-    // old mode/duration/tok/s footer is gone entirely.
+    // The response opens with a green node, the text, and a right-aligned elapsed.
     assert!(
         text.lines()
             .any(|l| l.contains("◆") && l.contains("done work")),
-        "green response node missing:\n{text}"
+        "green response node with text missing:\n{text}"
+    );
+    // The elapsed (5s) should appear on the same line.
+    assert!(
+        text.lines()
+            .any(|l| l.contains("5") && l.contains("s") && l.contains("done work")),
+        "elapsed missing on response line:\n{text}"
     );
     assert!(!text.contains("tok/s"), "footer leaked:\n{text}");
-    assert!(!text.contains("5.0s"), "footer duration leaked:\n{text}");
     assert!(
         !text.lines().any(|l| l.contains("Plan ·")),
         "footer mode label leaked:\n{text}"
+    );
+}
+
+#[tokio::test]
+async fn user_input_and_assistant_response_use_different_text_colors() {
+    // Cell-index-exact lookup: `String::find` returns a byte offset that drifts
+    // past the styled span once multibyte glyphs (◆) precede the needle, so walk
+    // cells and match on the concatenated row instead.
+    fn fg_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<Color> {
+        for y in 0..buffer.area.height {
+            let syms: Vec<&str> = (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            for start in 0..syms.len() {
+                let joined: String = syms[start..].concat();
+                if joined.starts_with(needle) {
+                    return Some(buffer[(start as u16, y)].fg);
+                }
+            }
+        }
+        None
+    }
+
+    let mut app = test_app().await;
+    let theme = app.theme;
+    app.entries
+        .push(Entry::new(EntryRole::User, "ask the model"));
+    app.entries.push(assistant("model answer"));
+
+    let mut terminal = Terminal::new(TestBackend::new(92, 24)).unwrap();
+    terminal.draw(|f| render(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    // The user's own words carry the dedicated `user` role; the assistant's
+    // reply keeps the neutral body colour. The two must never coincide.
+    assert_eq!(
+        fg_of(&buffer, "ask the model"),
+        Some(theme.user()),
+        "user input must render with the user colour"
+    );
+    assert_eq!(
+        fg_of(&buffer, "model answer"),
+        Some(theme.text()),
+        "assistant response must keep the body text colour"
+    );
+    assert_ne!(
+        theme.user(),
+        theme.text(),
+        "user and assistant colours must differ"
     );
 }
 

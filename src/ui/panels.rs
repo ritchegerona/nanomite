@@ -84,6 +84,13 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
             ctx_display = format!("{ctx_display}· ~{left} turns ");
         }
     }
+    let ctx_style = if pct >= 85 {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else if pct >= 60 {
+        Style::default().fg(Color::Yellow)
+    } else {
+        theme.faint_style()
+    };
     let ctx_chars = ctx_display.chars().count();
     let fixed = glyph::DOT.width() + 2 * glyph::CHEVRON.width() + 2;
     let model_budget = width
@@ -129,7 +136,7 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
             format!(" {} ", glyph::CHEVRON),
             Style::default().fg(theme.faint()),
         ),
-        Span::styled(ctx_display, theme.faint_style()),
+        Span::styled(ctx_display, ctx_style),
     ])
     .right_aligned();
 

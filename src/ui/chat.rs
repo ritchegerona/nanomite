@@ -894,7 +894,7 @@ impl Entry {
                     // Compact density: a single `❯ text` row, continuations
                     // indented - no raised block, no padding rows.
                     let wrap_w = inner.saturating_sub(2).max(8);
-                    let text_style = Style::default().fg(theme.strong());
+                    let text_style = Style::default().fg(theme.user());
                     let mut first = true;
                     for raw in self.text.split('\n') {
                         if raw.trim().is_empty() {
@@ -921,11 +921,10 @@ impl Entry {
                     }
                     return finish_build(lines, code_blocks);
                 }
-                // Rail-node prompt: a mode-coloured `◆` marks the user turn,
-                // echoing the assistant indent. No fill, no badge;
-                // wrapped lines hang under the text column.
-                let node = Style::default().fg(mode_color);
-                let text_style = Style::default().fg(theme.strong());
+                // Cozy user turn: indented text with the dedicated `user` colour
+                // for the body; no rail-node glyph. Wrapped lines hang under
+                // the text column, indented four cells.
+                let text_style = Style::default().fg(theme.user());
                 let stamp = text::clock(self.at);
                 let wrap_w = inner.saturating_sub(4).max(8);
                 let mut first = true;
@@ -937,18 +936,10 @@ impl Entry {
                     for seg in wrap_spans(vec![Span::raw(raw.to_string())], wrap_w) {
                         let content: String =
                             seg.spans.iter().map(|s| s.content.as_ref()).collect();
-                        let mut spans = if first {
-                            vec![
-                                Span::raw("  ".to_string()),
-                                Span::styled(format!("{} ", glyph::NODE), node),
-                                Span::styled(content, text_style),
-                            ]
-                        } else {
-                            vec![
-                                Span::raw("    ".to_string()),
-                                Span::styled(content, text_style),
-                            ]
-                        };
+                        let mut spans = vec![
+                            Span::raw("    ".to_string()),
+                            Span::styled(content, text_style),
+                        ];
                         if first {
                             // Right-align the wall-clock stamp when it fits.
                             let used: usize =
@@ -1004,18 +995,33 @@ impl Entry {
                     // A green node marks the start of the response, echoing
                     // the user turn's diamond; it occupies the same gutter
                     // cells as the plain indent, so wrapping never shifts.
+                    let elapsed = self.elapsed.unwrap_or_else(|| self.started.elapsed());
+                    let elapsed_str = text::format_duration(elapsed);
+                    let elapsed_display = format!(" {}", elapsed_str);
                     let mut first_text = true;
                     for (idx, mut line) in md_lines.into_iter().enumerate() {
                         // Code blocks stay inside the turn's indent rather
                         // than rendering as a separate box; the fence's own
                         // rules mark the block's extent.
-                        let mut spans = Vec::with_capacity(line.spans.len() + 2);
+                        let mut spans = Vec::with_capacity(line.spans.len() + 4);
                         if rail && first_text {
                             spans.push(Span::raw("  ".to_string()));
                             spans.push(Span::styled(
                                 format!("{} ", glyph::NODE),
                                 Style::default().fg(theme.success()),
                             ));
+                            // Add content first, then right-align elapsed if it fits.
+                            spans.append(&mut line.spans);
+                            let used: usize =
+                                spans.iter().map(|s| text::width(s.content.as_ref())).sum();
+                            let elapsed_w = text::width(&elapsed_display);
+                            if used + 2 + elapsed_w <= inner {
+                                spans.push(Span::raw(" ".repeat(inner - used - elapsed_w)));
+                                spans.push(Span::styled(
+                                    elapsed_display.clone(),
+                                    Style::default().fg(theme.faint()),
+                                ));
+                            }
                             first_text = false;
                         } else {
                             let prefix: &str = if !rail {
@@ -1028,8 +1034,8 @@ impl Entry {
                                 RAIL
                             };
                             spans.push(Span::raw(prefix.to_string()));
+                            spans.append(&mut line.spans);
                         }
-                        spans.append(&mut line.spans);
                         lines.push(Line::from(spans));
                     }
                     for (start, end, source) in blocks {

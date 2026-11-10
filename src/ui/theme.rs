@@ -72,6 +72,11 @@ pub struct Palette {
     pub code: Rgb,
     /// Block-quoted prose.
     pub quote: Rgb,
+    /// Text of a user's own turn in the transcript, and the composer buffer
+    /// while typing. Kept distinct from `text` (the assistant body) so the two
+    /// speakers are identifiable by colour alone, and from `accent` so user
+    /// prose never collides with the assistant's headings and links.
+    pub user: Rgb,
 
     /// Fenced code: called functions and method names.
     pub code_function: Rgb,
@@ -107,6 +112,7 @@ const MONO: Palette = Palette {
     tool: (168, 168, 168),
     code: (150, 190, 150),
     quote: (140, 140, 140),
+    user: (150, 190, 220),
     code_function: (228, 228, 228),
     code_type: (198, 198, 198),
     code_constant: (240, 240, 240),
@@ -138,6 +144,7 @@ const MIDNIGHT: Palette = Palette {
     tool: (150, 160, 184),
     code: (166, 194, 141),
     quote: (140, 148, 168),
+    user: (150, 205, 210),
     code_function: (220, 220, 170),
     code_type: (120, 190, 190),
     code_constant: (206, 161, 110),
@@ -169,6 +176,7 @@ const GRAPHITE: Palette = Palette {
     tool: (176, 184, 200),
     code: (176, 200, 160),
     quote: (130, 145, 165),
+    user: (135, 185, 245),
     code_function: (230, 200, 140),
     code_type: (105, 200, 200),
     code_constant: (235, 175, 120),
@@ -201,6 +209,7 @@ const UMBRELLA: Palette = Palette {
     tool: (192, 152, 160),
     code: (168, 196, 156),
     quote: (152, 142, 146),
+    user: (120, 195, 220),
     code_function: (214, 180, 110),
     code_type: (110, 190, 190),
     code_constant: (210, 150, 100),
@@ -233,6 +242,7 @@ const DRACULA: Palette = Palette {
     tool: (189, 147, 249),
     code: (139, 233, 253),
     quote: (241, 250, 140),
+    user: (150, 205, 255),
     code_function: (80, 250, 123),
     code_type: (139, 233, 253),
     code_constant: (255, 184, 108),
@@ -265,6 +275,7 @@ const CYBERPUNK: Palette = Palette {
     tool: (255, 0, 128),
     code: (0, 255, 200),
     quote: (255, 255, 0),
+    user: (205, 160, 255),
     code_function: (255, 220, 80),
     code_type: (80, 250, 255),
     code_constant: (255, 120, 200),
@@ -296,6 +307,7 @@ const HACKER: Palette = Palette {
     tool: (140, 230, 140),
     code: (150, 255, 150),
     quote: (90, 160, 90),
+    user: (140, 210, 255),
     code_function: (140, 255, 140),
     code_type: (100, 220, 100),
     code_constant: (200, 255, 120),
@@ -327,6 +339,7 @@ const MR_ROBOT: Palette = Palette {
     tool: (196, 152, 148),
     code: (170, 196, 150),
     quote: (146, 134, 130),
+    user: (130, 185, 220),
     code_function: (230, 200, 140),
     code_type: (105, 200, 200),
     code_constant: (235, 175, 120),
@@ -358,6 +371,7 @@ const ANONYMOUS: Palette = Palette {
     tool: (170, 170, 180),
     code: (170, 200, 170),
     quote: (136, 136, 144),
+    user: (150, 185, 225),
     code_function: (220, 220, 170),
     code_type: (120, 190, 190),
     code_constant: (206, 161, 110),
@@ -390,6 +404,7 @@ const NORD: Palette = Palette {
     tool: (180, 135, 174),
     code: (136, 192, 208),
     quote: (94, 129, 172),
+    user: (190, 165, 210),
     code_function: (233, 205, 140),
     code_type: (129, 197, 197),
     code_constant: (213, 166, 120),
@@ -600,6 +615,11 @@ impl Theme {
     pub fn quote(&self) -> Color {
         self.pick(self.palette().quote, Color::DarkGray)
     }
+    /// User-turn body text and the composer buffer. Distinct from `text` (the
+    /// assistant body) so the two speakers read apart by colour.
+    pub fn user(&self) -> Color {
+        self.pick(self.palette().user, Color::Cyan)
+    }
 
     pub fn code_function(&self) -> Color {
         self.pick(self.palette().code_function, Color::LightYellow)
@@ -724,6 +744,10 @@ mod tests {
             assert_ne!(p.muted, p.faint, "{id:?}: muted and faint collapsed");
             assert_ne!(p.success, p.danger, "{id:?}: success and danger collapsed");
             assert_ne!(p.accent, p.accent_soft, "{id:?}: accent pair collapsed");
+            // User input must never collapse onto the assistant body or the
+            // emphasis tone, or the two speakers stop being distinguishable.
+            assert_ne!(p.user, p.text, "{id:?}: user and text collapsed");
+            assert_ne!(p.user, p.strong, "{id:?}: user and strong collapsed");
             // The four mode colours must all differ: a mode is recognisable
             // by colour alone in every theme.
             let modes = [p.mode_plan, p.mode_coder, p.mode_build, p.mode_hacker];
