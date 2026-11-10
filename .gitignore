@@ -57,3 +57,5 @@ decrypted_output.xlsx
 
 # OS
 Thumbs.db
+# Forensic toolkit generated output (never commit)
+forensic_output/
