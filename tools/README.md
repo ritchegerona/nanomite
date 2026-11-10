@@ -16,7 +16,7 @@ the agent tool catalog (`src/tools/`) — the agent reaches them through
 | Category | Purpose |
 |----------|---------|
 | `inventory/` | Host discovery and baseline drift detection |
-| `recon/` | Port scanning and DNS enumeration |
+| `recon/` | Port scanning, DNS enumeration, WHOIS/RDAP, and OSINT harvesting |
 | `web/` | Web misconfiguration scanning, content discovery, TLS audit |
 | `cracking/` | Hash identification, offline cracking, wordlist generation |
 | `exploitation/` | Authorized-only exploitation (runner + planner) and default-cred hygiene |
@@ -36,6 +36,11 @@ the agent tool catalog (`src/tools/`) — the agent reaches them through
 |------|--------|---------|
 | `port_scanner.py` | built here | Concurrent TCP connect scan with optional banner grabbing; CIDR and target-file input, JSON output. |
 | `subdomain_enum.py` | built here | DNS brute-force subdomain enumeration with wildcard detection. |
+| `whois_rdap.py` | built here | WHOIS (port 43) and RDAP lookup with IANA referral following; JSON output. |
+| `theharvester.py` | third-party wrapper | Wrapper for theHarvester email, subdomain, and host harvesting. |
+| `spiderfoot.py` | third-party wrapper | Wrapper for SpiderFoot (200+ OSINT modules). |
+| `recon_ng.py` | third-party wrapper | Wrapper for Recon-ng modular OSINT framework. |
+| `maltego.py` | third-party wrapper | Wrapper for Maltego CE; GraphML export for visual link analysis. |
 
 ### web/
 | Tool | Origin | Purpose |

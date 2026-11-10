@@ -19,10 +19,15 @@
       ]
     },
     "recon": {
-      "purpose": "Port scanning and DNS enumeration",
+      "purpose": "Port scanning, DNS enumeration, WHOIS/RDAP, and OSINT harvesting",
       "tools": [
         {"name": "port_scanner.py", "origin": "built", "summary": "Concurrent TCP connect scan with optional banner grabbing; CIDR/target-file input, JSON output."},
-        {"name": "subdomain_enum.py", "origin": "built", "summary": "DNS brute-force subdomain enumeration with wildcard detection."}
+        {"name": "subdomain_enum.py", "origin": "built", "summary": "DNS brute-force subdomain enumeration with wildcard detection."},
+        {"name": "whois_rdap.py", "origin": "built", "summary": "WHOIS (port 43) and RDAP lookup with IANA referral following; JSON output."},
+        {"name": "theharvester.py", "origin": "third-party wrapper", "summary": "Wrapper for theHarvester email, subdomain, and host harvesting from public sources."},
+        {"name": "spiderfoot.py", "origin": "third-party wrapper", "summary": "Wrapper for SpiderFoot (200+ OSINT modules)."},
+        {"name": "recon_ng.py", "origin": "third-party wrapper", "summary": "Wrapper for Recon-ng modular OSINT framework."},
+        {"name": "maltego.py", "origin": "third-party wrapper", "summary": "Wrapper for Maltego CE; GraphML export for visual link analysis."}
       ]
     },
     "web": {

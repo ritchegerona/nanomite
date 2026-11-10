@@ -1,6 +1,6 @@
 # ⬡ nanomite
 
-**Intelligence Without Boundaries.** Runs in your terminal, talks to any
+**Nanomite is a general purpose tool.** Intelligence Without Boundaries. Runs in your terminal, talks to any
 OpenAI-compatible model, and works your workspace with real tools: files,
 shell, SSH and the web.
 
