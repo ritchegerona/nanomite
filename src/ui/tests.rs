@@ -245,8 +245,10 @@ async fn edit_preview_shows_old_and_new_lines() {
     app.entries.push(reply);
 
     let text = frame_text(&mut app, 92, 24);
-    assert!(text.contains("- return a - b"), "old line missing:\n{text}");
-    assert!(text.contains("+ return a + b"), "new line missing:\n{text}");
+    // Word-diff shows side-by-side: left has "return a - b" (with - highlighted),
+    // right has "return a + b" (with + highlighted). The +/- prefixes are gone.
+    assert!(text.contains("return a - b"), "old line missing:\n{text}");
+    assert!(text.contains("return a + b"), "new line missing:\n{text}");
 }
 
 #[tokio::test]
@@ -2333,19 +2335,27 @@ async fn edit_file_preview_uses_the_diff_renderer() {
     terminal.draw(|f| render(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
 
-    // The -/+ rows carry the diff roles, proving the shared DiffView renderer
-    // drove the styling instead of the old ad-hoc success/danger spans.
-    assert_eq!(
-        fg_of(&buffer, "- return a - b"),
-        Some(app.theme.diff_delete()),
-        "removal must render with the diff-delete role"
+    // Word-diff: changed words carry diff_delete/diff_add BACKGROUND colours.
+    // Find the first cell with diff_delete background and verify it's the "-" operator.
+    let mut found_del = false;
+    let mut found_add = false;
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            if cell.bg == app.theme.diff_delete() && cell.symbol() == "-" {
+                found_del = true;
+            }
+            if cell.bg == app.theme.diff_add() && cell.symbol() == "+" {
+                found_add = true;
+            }
+        }
+    }
+    assert!(
+        found_del,
+        "deleted operator must have diff-delete background"
     );
-    assert_eq!(
-        fg_of(&buffer, "+ return a + b"),
-        Some(app.theme.diff_add()),
-        "addition must render with the diff-add role"
-    );
-    // The elision marker is preview chatter, not diff data: faint.
+    assert!(found_add, "added operator must have diff-add background");
+    // The elision marker is preview chatter, not diff data: faint fg.
     assert_eq!(
         fg_of(&buffer, "… +9 more lines"),
         Some(app.theme.faint()),
@@ -3109,14 +3119,11 @@ async fn improve_review_view_renders_the_staged_diff() {
     assert!(review.lines.iter().any(|l| l.starts_with("@@")));
 
     let text = frame_text(&mut app, 100, 30);
-    assert!(
-        text.contains("-pub fn a() {}"),
-        "removal line missing:\n{text}"
-    );
-    assert!(
-        text.contains("+pub fn b() {}"),
-        "addition line missing:\n{text}"
-    );
+    // Word-diff: the paired change renders side-by-side without the +/- prefixes,
+    // with the changed words highlighted by background colour.
+    assert!(text.contains("pub fn a() {}"), "old line missing:\n{text}");
+    assert!(text.contains("pub fn b() {}"), "new line missing:\n{text}");
+    assert!(text.contains("│"), "gap separator missing:\n{text}");
     assert!(text.contains("a approve"), "approve hint missing:\n{text}");
     assert!(text.contains("r reject"), "reject hint missing:\n{text}");
 }

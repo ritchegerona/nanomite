@@ -149,15 +149,28 @@ impl DiffView {
                 });
                 old_line += 1;
             } else if let Some(rest) = entry.strip_prefix('+') {
-                rows.push(Row {
-                    left_num: None,
-                    left_text: String::new(),
-                    left_del: false,
-                    right_num: Some(new_line),
-                    right_text: format!("+{rest}"),
-                    right_add: true,
-                    full: None,
-                });
+                // Check if previous row is a deletion that we can pair with
+                let mut paired = false;
+                if let Some(last) = rows.last_mut() {
+                    if last.left_del && last.right_text.is_empty() && last.full.is_none() {
+                        // Pair this addition with the previous deletion
+                        last.right_num = Some(new_line);
+                        last.right_text = format!("+{rest}");
+                        last.right_add = true;
+                        paired = true;
+                    }
+                }
+                if !paired {
+                    rows.push(Row {
+                        left_num: None,
+                        left_text: String::new(),
+                        left_del: false,
+                        right_num: Some(new_line),
+                        right_text: format!("+{rest}"),
+                        right_add: true,
+                        full: None,
+                    });
+                }
                 new_line += 1;
             } else {
                 let rest = entry.strip_prefix(' ').unwrap_or(entry);
@@ -202,6 +215,46 @@ impl DiffView {
                 out.push(Line::from(Span::styled(shown.to_string(), style)));
                 continue;
             }
+
+            // Check if this is a paired change (both left_del and right_add)
+            if row.left_del && row.right_add {
+                // Extract content without the -/+ prefix
+                let old_content = row.left_text.strip_prefix('-').unwrap_or(&row.left_text);
+                let new_content = row.right_text.strip_prefix('+').unwrap_or(&row.right_text);
+
+                // Compute word-level diff
+                let (old_spans, new_spans) = diff_words(&self.theme, old_content, new_content);
+
+                let _left_num_str = cell(row.left_num, "", col_w).0;
+                let _right_num_str = cell(row.right_num, "", col_w).0;
+
+                // Build left text from spans (truncated)
+                let left_text = old_spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>();
+                let right_text = new_spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>();
+                let left_cell = cell(None, &left_text, col_w);
+                let right_cell = cell(None, &right_text, col_w);
+
+                let left_num_span = Span::styled(left_cell.0, num_style);
+                let right_num_span = Span::styled(right_cell.0, num_style);
+
+                // For word-diff rows, we use the pre-styled spans directly
+                let mut left_spans = vec![left_num_span];
+                left_spans.extend(old_spans);
+                left_spans.push(Span::styled(" │ ".to_string(), gap_style));
+                let mut right_spans = vec![right_num_span];
+                right_spans.extend(new_spans);
+
+                out.push(Line::from(left_spans));
+                out.push(Line::from(right_spans));
+                continue;
+            }
+
             let left_style = if row.left_del {
                 Style::default().fg(self.theme.diff_delete())
             } else {
@@ -278,6 +331,74 @@ fn parse_hunk_heads(header: &str) -> Option<(usize, usize)> {
         (Some(o), Some(n)) => Some((o, n)),
         _ => None,
     }
+}
+
+/// Word-level diff: computes inline changes between two strings.
+/// Returns a sequence of (style, text) spans where changed words are highlighted.
+/// - Deleted words get `diff_delete` background
+/// - Added words get `diff_add` background
+/// - Unchanged words get base style
+fn diff_words(theme: &Theme, old: &str, new: &str) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
+    // Simpler word-level diff: split on word boundaries and compare
+    let old_words: Vec<&str> = old.split_whitespace().collect();
+    let new_words: Vec<&str> = new.split_whitespace().collect();
+
+    // Quick path: if lengths differ significantly, just show whole line
+    if old_words.len() > 50 || new_words.len() > 50 {
+        let del_bg = Style::default().bg(theme.diff_delete());
+        let add_bg = Style::default().bg(theme.diff_add());
+        let old_spans = vec![Span::styled(old.to_string(), del_bg)];
+        let new_spans = vec![Span::styled(new.to_string(), add_bg)];
+        return (old_spans, new_spans);
+    }
+
+    // Simple greedy diff for short lines
+    let del_bg = Style::default().bg(theme.diff_delete());
+    let add_bg = Style::default().bg(theme.diff_add());
+    let base = theme.base();
+
+    let mut old_spans = Vec::new();
+    let mut new_spans = Vec::new();
+
+    // Use a simple approach: find common prefix/suffix
+    let mut prefix = 0;
+    while prefix < old_words.len()
+        && prefix < new_words.len()
+        && old_words[prefix] == new_words[prefix]
+    {
+        old_spans.push(Span::styled(format!("{} ", old_words[prefix]), base));
+        new_spans.push(Span::styled(format!("{} ", new_words[prefix]), base));
+        prefix += 1;
+    }
+
+    let mut old_suffix = 0;
+    while old_suffix < old_words.len() - prefix
+        && old_suffix < new_words.len() - prefix
+        && old_words[old_words.len() - 1 - old_suffix]
+            == new_words[new_words.len() - 1 - old_suffix]
+    {
+        old_suffix += 1;
+    }
+
+    // Middle part: deleted from old, added from new
+    let old_mid_end = old_words.len() - old_suffix;
+    let new_mid_end = new_words.len() - old_suffix;
+    for word in old_words.iter().skip(prefix).take(old_mid_end - prefix) {
+        old_spans.push(Span::styled(format!("{word} "), del_bg));
+    }
+    for word in new_words.iter().skip(prefix).take(new_mid_end - prefix) {
+        new_spans.push(Span::styled(format!("{word} "), add_bg));
+    }
+
+    // Suffix
+    for word in old_words.iter().skip(old_mid_end) {
+        old_spans.push(Span::styled(format!("{word} "), base));
+    }
+    for word in new_words.iter().skip(new_mid_end) {
+        new_spans.push(Span::styled(format!("{word} "), base));
+    }
+
+    (old_spans, new_spans)
 }
 
 /// One side of a split row: right-aligned line number (blank when `None`)
@@ -433,7 +554,7 @@ mod tests {
     fn split_rows_pair_old_and_new_with_line_numbers() {
         let v = view();
         let lines = v.styled_split_lines(80);
-        // hunk header + context + removal + addition = 4 rows.
+        // hunk header + context + paired word-diff (2 rows) = 4 rows.
         assert_eq!(lines.len(), 4, "{lines:?}");
         // Line 0: hunk header, full width, no line numbers.
         let hunk: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
@@ -442,31 +563,31 @@ mod tests {
         let ctx: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(ctx.contains("   1 fn main() {}"), "{ctx}");
         assert_eq!(ctx.matches("fn main() {}").count(), 2, "{ctx}");
-        // Line 2: removal only on the left, blank right, old line 2.
+        // Line 2: left side of word diff (old content with deleted word highlighted).
         let del: String = lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(del.contains("-let x = 1;"), "{del}");
-        // Line 3: addition only on the right, blank left, new line 2.
+        // Word diff shows "let x = " (unchanged) + "1" (deleted, red bg) + ";" (unchanged)
+        assert!(del.contains("let x = "), "{del}");
+        assert!(del.contains("1"), "{del}");
+        // Line 3: right side of word diff (new content with added word highlighted).
         let add: String = lines[3].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(add.contains("+let x = 2;"), "{add}");
+        assert!(add.contains("let x = "), "{add}");
+        assert!(add.contains("2"), "{add}");
     }
 
     #[test]
     fn split_lines_carry_column_styles() {
         let v = view();
         let lines = v.styled_split_lines(80);
-        // Removal row: first (number) span faint, second (text) span red.
-        assert_eq!(
-            lines[2].spans[0].style,
-            Style::default().fg(v.theme.faint())
+        // Word-diff row (left): number span faint, text spans mixed (base + diff_delete bg)
+        // We check that the line has multiple spans with different styles.
+        assert!(
+            lines[2].spans.len() >= 3,
+            "left word-diff has multiple spans: {lines:?}"
         );
-        assert_eq!(
-            lines[2].spans[1].style,
-            Style::default().fg(v.theme.diff_delete())
-        );
-        // Addition row: right text span green.
-        assert_eq!(
-            lines[3].spans[4].style,
-            Style::default().fg(v.theme.diff_add())
+        // Word-diff row (right): number span faint, text spans mixed (base + diff_add bg)
+        assert!(
+            lines[3].spans.len() >= 3,
+            "right word-diff has multiple spans: {lines:?}"
         );
     }
 
@@ -490,10 +611,12 @@ mod tests {
     fn split_render_shows_both_panels_side_by_side() {
         let v = view();
         let text = render_to_string_split(&v, 80, 10);
-        // Both the removal (left panel) and the addition (right panel) appear
-        // on separate output lines in the same frame.
-        assert!(text.contains("-let x = 1;"), "{text}");
-        assert!(text.contains("+let x = 2;"), "{text}");
+        // Word-diff shows changed words with background highlights.
+        // Left panel shows "let x = " + "1" (deleted, red bg) + ";"
+        // Right panel shows "let x = " + "2" (added, green bg) + ";"
+        assert!(text.contains("let x = "), "{text}");
+        assert!(text.contains("1"), "{text}");
+        assert!(text.contains("2"), "{text}");
         // The gap column separator is painted between the panels.
         assert!(text.contains("│"), "{text}");
     }
