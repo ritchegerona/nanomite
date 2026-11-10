@@ -34,7 +34,11 @@ pub fn run() -> io::Result<()> {
 
     let branch = git_out(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     step("fetching origin");
-    git_out(&repo, &["fetch", "origin", "--tags", "--quiet"])?;
+    // --force: origin may retag a release (e.g. v1.3.1 re-pushed). Without it
+    // git fetch rejects the tag ("would clobber existing tag") and exits 1;
+    // with --quiet that failure carries no stderr, surfacing as an empty
+    // "git fetch failed: " error.
+    git_out(&repo, &["fetch", "origin", "--tags", "--force", "--quiet"])?;
 
     let behind: usize = git_out(
         &repo,
@@ -69,7 +73,15 @@ pub fn run() -> io::Result<()> {
     if let Some(tag) = latest_tag.as_deref() {
         let commit = git_opt(&repo, &["rev-list", "-n", "1", tag]);
         let payload = commit.as_deref().unwrap_or(tag);
-        let signature = git_opt(&repo, &["show", &format!("{tag}:{tag}.sig")]);
+        // The signature file is read from the release channel tip
+        // (origin/{branch}), not from the tagged commit's own tree: the
+        // signed payload IS the tagged commit's SHA, so a signature over it
+        // can never be contained in that same commit. Maintainer flow: tag
+        // the release, then commit `<tag>.sig` on the branch and push (see
+        // scripts/sign-release.sh). Falls back to the tag's own tree for
+        // compatibility with the original scheme.
+        let signature = git_opt(&repo, &["show", &format!("origin/{branch}:{tag}.sig")])
+            .or_else(|| git_opt(&repo, &["show", &format!("{tag}:{tag}.sig")]));
         let result = match signature.as_deref() {
             None => VerifyResult::Unsigned,
             Some(sig) if sig.trim().is_empty() => VerifyResult::Unsigned,
@@ -315,7 +327,11 @@ pub fn check_status() -> Option<UpdateStatus> {
     let repo = locate_checkout()?;
     let branch = git_out(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
 
-    git_out_startup(&repo, &["fetch", "origin", "--tags", "--quiet"]).ok()?;
+    git_out_startup(
+        &repo,
+        &["fetch", "origin", "--tags", "--force", "--quiet"],
+    )
+    .ok()?;
 
     let behind = git_out(
         &repo,

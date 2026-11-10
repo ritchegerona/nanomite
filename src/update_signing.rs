@@ -104,6 +104,23 @@ mod tests {
     }
 
     #[test]
+    fn matches_reference_python_hmac() {
+        // Pins the wire format against an independent implementation so the
+        // maintainer signing script (scripts/sign-release.sh) and this client
+        // can never drift: base64(HMAC-SHA256(key, payload)).
+        let sig = sign_payload(
+            b"cross-impl-vector-key",
+            "0123456789abcdef0123456789abcdef01234567",
+        );
+        assert_eq!(sig, "IpYRYgRFExLL4ZRfxfqyeK6qAcOtQHxjXzL7Mt7Iqdg=");
+        assert!(verify_signature(
+            b"cross-impl-vector-key",
+            "0123456789abcdef0123456789abcdef01234567",
+            &sig
+        ));
+    }
+
+    #[test]
     fn wrong_key_rejects() {
         let payload = "deadbeef";
         let good = sign_payload(b"key-a", payload);
