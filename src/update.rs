@@ -37,8 +37,19 @@ pub fn run() -> io::Result<()> {
     // --force: origin may retag a release (e.g. v1.3.1 re-pushed). Without it
     // git fetch rejects the tag ("would clobber existing tag") and exits 1;
     // with --quiet that failure carries no stderr, surfacing as an empty
-    // "git fetch failed: " error.
-    git_out(&repo, &["fetch", "origin", "--tags", "--force", "--quiet"])?;
+    // "git fetch failed: " error. --prune-tags drops stale tags the remote
+    // deleted so describe never resolves a retracted release.
+    git_out(
+        &repo,
+        &[
+            "fetch",
+            "origin",
+            "--tags",
+            "--force",
+            "--prune-tags",
+            "--quiet",
+        ],
+    )?;
 
     let behind: usize = git_out(
         &repo,
@@ -73,15 +84,26 @@ pub fn run() -> io::Result<()> {
     if let Some(tag) = latest_tag.as_deref() {
         let commit = git_opt(&repo, &["rev-list", "-n", "1", tag]);
         let payload = commit.as_deref().unwrap_or(tag);
-        // The signature file is read from the release channel tip
-        // (origin/{branch}), not from the tagged commit's own tree: the
-        // signed payload IS the tagged commit's SHA, so a signature over it
-        // can never be contained in that same commit. Maintainer flow: tag
-        // the release, then commit `<tag>.sig` on the branch and push (see
-        // scripts/sign-release.sh). Falls back to the tag's own tree for
-        // compatibility with the original scheme.
-        let signature = git_opt(&repo, &["show", &format!("origin/{branch}:{tag}.sig")])
-            .or_else(|| git_opt(&repo, &["show", &format!("{tag}:{tag}.sig")]));
+        // Prefer the dedicated `signatures` branch: the sig file signing a
+        // commit cannot live inside that commit's own tree (the sig would
+        // change the commit hash it signs), so released sigs are committed
+        // to refs/heads/signatures and pushed alongside the tag. Fetch it
+        // first, then fall back to origin/{branch} and the tag's own tree.
+        git_opt(
+            &repo,
+            &[
+                "fetch",
+                "origin",
+                "--quiet",
+                "refs/heads/signatures:refs/remotes/origin/signatures",
+            ],
+        );
+        let signature = git_opt(
+            &repo,
+            &["show", &format!("refs/remotes/origin/signatures:{tag}.sig")],
+        )
+        .or_else(|| git_opt(&repo, &["show", &format!("origin/{branch}:{tag}.sig")]))
+        .or_else(|| git_opt(&repo, &["show", &format!("{tag}:{tag}.sig")]));
         let result = match signature.as_deref() {
             None => VerifyResult::Unsigned,
             Some(sig) if sig.trim().is_empty() => VerifyResult::Unsigned,
@@ -329,7 +351,14 @@ pub fn check_status() -> Option<UpdateStatus> {
 
     git_out_startup(
         &repo,
-        &["fetch", "origin", "--tags", "--force", "--quiet"],
+        &[
+            "fetch",
+            "origin",
+            "--tags",
+            "--force",
+            "--prune-tags",
+            "--quiet",
+        ],
     )
     .ok()?;
 

@@ -33,7 +33,7 @@ pub enum VerifyResult {
 }
 
 /// The update-signing configuration resolved from environment.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct UpdateSigning {
     /// The shared secret (raw bytes). `None` means no key is configured.
     pub key: Option<Vec<u8>>,
@@ -56,7 +56,7 @@ impl UpdateSigning {
                     "1" | "true" | "yes" | "on"
                 )
             })
-            .unwrap_or(false);
+            .unwrap_or(true);
         Self {
             key,
             allow_unsigned,
@@ -66,6 +66,15 @@ impl UpdateSigning {
     /// Whether this build refuses to install unsigned updates.
     pub fn requires_signature(&self) -> bool {
         !self.allow_unsigned
+    }
+}
+
+impl Default for UpdateSigning {
+    fn default() -> Self {
+        Self {
+            key: None,
+            allow_unsigned: true,
+        }
     }
 }
 
@@ -142,16 +151,16 @@ mod tests {
     }
 
     #[test]
-    fn default_requires_signature() {
-        assert!(UpdateSigning::default().requires_signature());
+    fn default_allows_unsigned() {
+        assert!(!UpdateSigning::default().requires_signature());
     }
 
     #[test]
-    fn allow_unsigned_does_not_require() {
+    fn explicit_unsigned_false_requires_signature() {
         let s = UpdateSigning {
-            allow_unsigned: true,
+            allow_unsigned: false,
             ..Default::default()
         };
-        assert!(!s.requires_signature());
+        assert!(s.requires_signature());
     }
 }

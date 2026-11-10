@@ -1199,7 +1199,7 @@ impl Config {
             .and_then(|label| {
                 crate::ui::theme::ThemeId::from_label(&label).map(|id| id.label().to_string())
             })
-            .unwrap_or_else(|| crate::ui::theme::ThemeId::Umbrella.label().to_string());
+            .unwrap_or_else(|| crate::ui::theme::ThemeId::Cyberpunk.label().to_string());
 
         // Disabled tools: environment wins over the file, same as every other
         // persisted setting.
@@ -1786,7 +1786,7 @@ mod tests {
         let loaded = Config::load_from(&path);
         assert_eq!(
             loaded.theme,
-            crate::ui::theme::ThemeId::Umbrella.label(),
+            crate::ui::theme::ThemeId::Cyberpunk.label(),
             "unknown label must fall back to the default skin"
         );
         let _ = fs::remove_file(&path);

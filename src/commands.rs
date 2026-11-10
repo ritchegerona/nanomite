@@ -21,6 +21,7 @@ pub enum Command {
     Models,
     New,
     Reasoning,
+    Refresh,
     Redo,
     Sessions,
     Share,
@@ -149,6 +150,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &["/summarize"],
         hint: "summarise the session to free up context (alt+g)",
         kind: Command::Compact,
+    },
+    Entry {
+        command: "/refresh",
+        aliases: &[],
+        hint: "stop the current turn and continue the task (alt+shift+r)",
+        kind: Command::Refresh,
     },
     Entry {
         command: "/undo",

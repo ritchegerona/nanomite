@@ -52,7 +52,7 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
 
     let ctx_limit = model_context_limit(&app.cfg.model).max(1);
     let usage = app.usage.total_tokens as usize;
-    let ctx = usage.min(ctx_limit);
+    let ctx = usage;
     let pct = (usage * 100 / ctx_limit).min(999);
     let ctx_str = text::format_tokens(ctx as u64);
     let limit_str = text::format_tokens(ctx_limit as u64);

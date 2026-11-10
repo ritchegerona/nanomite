@@ -1,15 +1,15 @@
 ---
 title: Commands (slash-command table)
 tags: [entity, commands, ui]
-sourceRefs: [src/commands.rs, src/app.rs]
-lastReviewed: 2026-10-30
+sourceRefs: [src/commands.rs, src/app/mod.rs]
+lastReviewed: 2026-11-10
 ---
 
 # Commands (slash-command table)
 
-`src/commands.rs` defines the `Command` enum (40 variants) and the `COMMANDS`
+`src/commands.rs` defines the `Command` enum (43 variants) and the `COMMANDS`
 registry (`Entry { command, aliases, hint, kind }`), parsed locally by `parse()`
-(leading slash-words only). Dispatch lives in `app.rs::run_command`.
+(leading slash-words only). Dispatch lives in `app/mod.rs::run_command`.
 
 ## Registry invariants (enforced by tests)
 
@@ -27,5 +27,27 @@ registry (`Entry { command, aliases, hint, kind }`), parsed locally by `parse()`
 | `/export [html]` | `/share` | alt+j | markdown or standalone HTML page |
 | `/history <q>` | — | (backtick) | FTS search over saved sessions |
 | `/fork <n>` | — | alt+f | save full session, truncate to turn N |
+| `/refresh` | — | alt+shift+r | stop the hung turn and continue the task ([[concepts/session-features]]) |
 
 Shift+Tab cycles [[concepts/tool-policy]] modes.
+
+## /refresh resume semantics (2026-11-10)
+
+`App::refresh` (`src/app/mod.rs`) finds the last `EntryRole::User` entry,
+strips `[image: ` badge lines (same strip as `/edit`), then picks the
+continuation prompt:
+
+- **Turn made progress** (any Assistant entry after it with non-empty text or
+  tool rows) **and is unfinished** (busy, or the tail entry is
+  `Phase::Interrupted`/`Failed`) → sends a resume instruction:
+  `[refresh] Continue the interrupted task from where it stopped. Do not
+  repeat steps already completed; finish the remaining work.`
+- **No progress** (hung before the first token) or the last turn **completed
+  normally** → re-sends the original prompt verbatim (re-run semantics).
+
+Busy path queues the prompt before `force_interrupt` — the interrupt path
+(`finalize_interrupted` → `finish_turn`) drains `prompt_queue` and starts the
+fresh turn itself; idle path calls `start_turn` directly. Tests pin all three
+paths in `src/ui/tests.rs` (`refresh_*`).
+
+The help sheet renders at 92x32 because 43 command rows no longer fit 30.

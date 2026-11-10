@@ -3482,6 +3482,7 @@ impl App {
             Command::Panel => self.open_board(args),
             Command::Perf => self.show_perf(),
             Command::Reasoning => self.cycle_reasoning(),
+            Command::Refresh => self.refresh(),
             Command::Copy => self.copy_selection(),
             Command::Image => {
                 self.attach_image(args);
@@ -5930,6 +5931,63 @@ impl App {
     /// group, and detaches the agent task. This is the guaranteed path - it
     /// does not depend on the runtime task being scheduled or cooperative,
     /// so Esc works even when a tool or hook is stuck.
+    /// `/refresh`: stop the current turn (if any) and continue the pending
+    /// task. When the interrupted turn made progress (partial reply text or
+    /// tool activity after the last user prompt), the continuation is an
+    /// explicit resume instruction so finished steps are not repeated; when
+    /// nothing was produced (hung before the first token) — or the last turn
+    /// already completed normally — the original prompt is re-sent. When a
+    /// turn is running, the continuation is queued first so the interrupt
+    /// path (`force_interrupt` -> `finalize_interrupted` -> `finish_turn`)
+    /// drains it and starts the fresh turn itself.
+    pub fn refresh(&mut self) {
+        // The pending task is the most recent user prompt; image badge lines
+        // are display scaffolding, not text the user typed (same strip as
+        // `/edit`).
+        let Some(index) = self.entries.iter().rposition(|e| e.role == EntryRole::User) else {
+            self.toast("nothing to refresh - no task to continue");
+            return;
+        };
+        let original = self.entries[index]
+            .text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("[image: "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if original.trim().is_empty() {
+            self.toast("nothing to refresh - no task to continue");
+            return;
+        }
+        // Progress the turn made after that prompt: partial reply text or
+        // any tool call. With progress on an unfinished turn the
+        // continuation resumes from where it stopped; with no progress, or
+        // a turn that already finished normally, re-run the original task.
+        let busy = self.is_busy();
+        let progress = self.entries[index + 1..].iter().any(|e| {
+            e.role == EntryRole::Assistant && (!e.text.trim().is_empty() || !e.tools.is_empty())
+        });
+        let unfinished = busy
+            || self
+                .entries
+                .get(index + 1..)
+                .and_then(|tail| tail.last())
+                .is_some_and(|e| matches!(e.phase, Phase::Interrupted | Phase::Failed));
+        let prompt = if progress && unfinished {
+            "[refresh] Continue the interrupted task from where it stopped. Do not repeat steps already completed; finish the remaining work."
+                .to_string()
+        } else {
+            original
+        };
+        if busy {
+            self.prompt_queue.push_back(prompt);
+            self.force_interrupt();
+            self.toast("stopped - continuing task");
+        } else {
+            self.start_turn(prompt, Vec::new(), Vec::new());
+            self.toast("continuing task");
+        }
+    }
+
     pub fn force_interrupt(&mut self) {
         let had_turn = self.active.is_some();
         if let Some(cancel) = &self.cancel {
@@ -7648,6 +7706,7 @@ impl App {
             KeyCode::Char('X') if alt => self.run_command(Command::Unshare, ""),
             KeyCode::Char('N') if alt => self.run_command(Command::Init, ""),
             KeyCode::Char('H') if alt => self.run_command(Command::Hacker, ""),
+            KeyCode::Char('R') if alt => self.run_command(Command::Refresh, ""),
             KeyCode::Char('q') if alt => self.run_command(Command::Exit, ""),
 
             // ` (backtick) opens fuzzy history search picker
@@ -8933,6 +8992,9 @@ mod tests {
     fn test_config() -> Config {
         let mut cfg = Config::from_env();
         cfg.apply_preset("scripted");
+        // Pin the skin: frame assertions must not churn when the product
+        // default theme changes.
+        cfg.theme = "umbrella".into();
         cfg.notice = None;
         // Confirmations are interactive: the offline test app must never
         // wait on the user, so the gate stays off unless a test opts in.
