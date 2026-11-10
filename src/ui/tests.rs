@@ -2619,6 +2619,124 @@ async fn queued_prompt_dispatches_when_the_turn_finishes() {
 }
 
 #[tokio::test]
+async fn refresh_continues_an_interrupted_task_instead_of_restarting() {
+    use crate::app::{Entry, EntryRole, Phase};
+    let mut app = test_app().await;
+
+    // A user prompt whose turn made real progress before being cut off.
+    app.entries.push(Entry::new(
+        EntryRole::User,
+        "audit the logs and write the report",
+    ));
+    let mut partial = Entry::new(
+        EntryRole::Assistant,
+        "Scanned the first three logs; the anomaly is in auth.log line 42.",
+    );
+    partial.phase = Phase::Interrupted;
+    app.entries.push(partial);
+
+    app.refresh();
+
+    // The continuation must be a resume instruction, not the original
+    // prompt re-sent (which would redo the finished steps).
+    let last_user = app
+        .entries
+        .iter()
+        .rev()
+        .find(|e| e.role == EntryRole::User)
+        .map(|e| e.text.clone())
+        .expect("the continuation must start a turn with a new user entry");
+    assert!(
+        last_user.contains("[refresh] Continue the interrupted task"),
+        "refresh must send a resume instruction, got: {last_user}"
+    );
+    assert!(app.is_busy(), "the continuation must start a turn");
+}
+
+#[tokio::test]
+async fn refresh_resends_the_original_prompt_when_the_turn_produced_nothing() {
+    use crate::app::{Entry, EntryRole, Phase};
+    let mut app = test_app().await;
+
+    // The turn hung before emitting anything: no text, no tool calls.
+    app.entries
+        .push(Entry::new(EntryRole::User, "run the smoke test"));
+    let mut empty = Entry::new(EntryRole::Assistant, "");
+    empty.phase = Phase::Interrupted;
+    app.entries.push(empty);
+
+    app.refresh();
+
+    // Nothing to resume: the original task is re-sent verbatim.
+    let last_user = app
+        .entries
+        .iter()
+        .rev()
+        .find(|e| e.role == EntryRole::User)
+        .map(|e| e.text.clone())
+        .expect("the re-sent prompt must start a turn with a new user entry");
+    assert_eq!(
+        last_user, "run the smoke test",
+        "with no progress the original prompt must be re-sent"
+    );
+}
+
+#[tokio::test]
+async fn refresh_while_busy_queues_a_resume_instruction() {
+    use crate::app::EntryRole;
+    let mut app = test_app().await;
+
+    app.composer
+        .insert_str("audit the logs and write the report");
+    app.submit();
+    assert!(app.is_busy());
+
+    // Wait for the scripted provider to produce visible progress on the
+    // running turn.
+    for _ in 0..300 {
+        app.pump_engine();
+        let progressed = app.entries.iter().any(|e| {
+            e.role == EntryRole::Assistant && (!e.text.trim().is_empty() || !e.tools.is_empty())
+        });
+        if progressed {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    app.refresh();
+
+    // Busy path: queue the continuation, force-interrupt, and let the
+    // interrupt path drain the queue into a fresh turn.
+    for _ in 0..300 {
+        app.pump_engine();
+        let last_user = app
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.role == EntryRole::User)
+            .map(|e| e.text.clone())
+            .unwrap_or_default();
+        if app.prompt_queue_len() == 0 && last_user.starts_with("[refresh] Continue") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let last_user = app
+        .entries
+        .iter()
+        .rev()
+        .find(|e| e.role == EntryRole::User)
+        .map(|e| e.text.clone())
+        .expect("the continuation must become a user entry");
+    assert!(
+        last_user.contains("[refresh] Continue the interrupted task"),
+        "the queued continuation must start after the interrupt, got: {last_user}"
+    );
+    assert!(app.prompt_queue_len() == 0, "the queue must have drained");
+}
+
+#[tokio::test]
 async fn tools_overlay_lists_all_tools_and_toggles() {
     let mut app = test_app().await;
     let path = std::env::temp_dir().join(format!("nanomite-ui-tools-{}.toml", std::process::id()));
@@ -3395,7 +3513,9 @@ async fn safety_layer_targets_stage_after_denylist_removal() {
 async fn the_help_sheet_lists_the_improve_command() {
     let mut app = test_app().await;
     app.open_help();
-    let text = frame_text(&mut app, 92, 30);
+    // 43 command rows + header no longer fit in 30 rows; 32 keeps /improve
+    // (the 28th command) on screen without scrolling.
+    let text = frame_text(&mut app, 92, 32);
     assert!(text.contains("/improve"), "command row missing:\n{text}");
     let help = frame_text(&mut app, 92, 44);
     assert!(
