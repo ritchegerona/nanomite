@@ -74,7 +74,25 @@ pub fn run() -> io::Result<()> {
     if let Some(tag) = latest_tag.as_deref() {
         let commit = git_opt(&repo, &["rev-list", "-n", "1", tag]);
         let payload = commit.as_deref().unwrap_or(tag);
-        let signature = git_opt(&repo, &["show", &format!("{tag}:{tag}.sig")]);
+        // Prefer the dedicated `signatures` branch: the sig file signing a
+        // commit cannot live inside that commit's own tree (the sig would
+        // change the commit hash it signs), so released sigs are committed
+        // to refs/heads/signatures and pushed alongside the tag. The tag's
+        // own tree stays as a legacy fallback.
+        git_opt(
+            &repo,
+            &[
+                "fetch",
+                "origin",
+                "--quiet",
+                "refs/heads/signatures:refs/remotes/origin/signatures",
+            ],
+        );
+        let signature = git_opt(
+            &repo,
+            &["show", &format!("refs/remotes/origin/signatures:{tag}.sig")],
+        )
+        .or_else(|| git_opt(&repo, &["show", &format!("{tag}:{tag}.sig")]));
         let result = match signature.as_deref() {
             None => VerifyResult::Unsigned,
             Some(sig) if sig.trim().is_empty() => VerifyResult::Unsigned,
