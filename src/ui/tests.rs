@@ -33,6 +33,9 @@ fn frame_text(app: &mut App, width: u16, height: u16) -> String {
 fn test_config() -> Config {
     let mut cfg = Config::from_env();
     cfg.apply_preset("scripted");
+    // Pin the skin: golden frames must not churn when the product default
+    // theme changes.
+    cfg.theme = "umbrella".into();
     cfg.notice = None;
     cfg
 }

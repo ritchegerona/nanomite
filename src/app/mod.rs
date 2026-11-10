@@ -8931,6 +8931,9 @@ mod tests {
     fn test_config() -> Config {
         let mut cfg = Config::from_env();
         cfg.apply_preset("scripted");
+        // Pin the skin: frame assertions must not churn when the product
+        // default theme changes.
+        cfg.theme = "umbrella".into();
         cfg.notice = None;
         // Confirmations are interactive: the offline test app must never
         // wait on the user, so the gate stays off unless a test opts in.

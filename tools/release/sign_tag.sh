@@ -26,7 +26,10 @@ PAYLOAD=$(git rev-list -n 1 "$TAG")
 SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$KEY" -binary | base64 | tr -d '[:space:]')
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/nanomite-sign.XXXXXX")
-git worktree add --detach "$WORK" >/dev/null 2>&1
+# Stack the new sig commit on the signatures branch head when it exists so
+# pushes stay fast-forward; otherwise base it on the current checkout.
+BASE=$(git rev-parse --verify refs/heads/signatures 2>/dev/null || git rev-parse HEAD)
+git worktree add --detach "$WORK" "$BASE" >/dev/null 2>&1
 trap 'git worktree remove --force "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
 cd "$WORK"
