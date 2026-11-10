@@ -4,6 +4,27 @@ Every entry describes a verified change. Labels: implemented+tested,
 implemented unverified, planned, experimental, unsupported. Planned work is
 never listed as released.
 
+## [1.3.4] — 2026-11-09
+
+### Added
+
+- **OSINT tooling**: `tools/custom/recon/whois_rdap.py` (native WHOIS port 43
+  + RDAP lookup, stdlib-only), `theharvester.py`, `spiderfoot.py`, `recon_ng.py`
+  and `maltego.py` wrappers under `tools/custom/recon/`. All register in
+  `tools/manifest.json` and `tools/README.md`. implemented+tested.
+- **Run anywhere**: `tools/install.sh` (Linux/macOS) and `tools/install.ps1`
+  (Windows 11) symlink shims into `~/.local/bin` / `%LOCALAPPDATA%\nanomite-tools\bin`
+  so every tool executes from any directory on any computer. Env loaders
+  (`nanomite-tools-env.sh`, `nanomite-tools-env.ps1`) and `PORTABLE.md`
+  document copy-anywhere usage. Windows shims escape PowerShell variables,
+  auto-detect `python`/`python3`/`py`, and persist PATH. implemented+tested.
+- **General purpose branding**: nanomite described as a general purpose tool
+  across READMEs and manifest. implemented+tested.
+
+### Changed
+
+- **Version**: `nanomite/Cargo.toml` bumped `1.3.3` → `1.3.4`.
+
 ## [1.3.0] — 2026-11-08
 
 ### Added
