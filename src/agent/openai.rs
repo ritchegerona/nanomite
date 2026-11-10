@@ -451,9 +451,16 @@ fn parse_events(block: &str) -> Vec<Result<StreamEvent, DynError>> {
     {
         return vec![Ok(StreamEvent::Delta(s.to_string()))];
     }
+    // Thought tokens arrive under one of two names: OpenAI-compatible servers
+    // (Ollama, vLLM, DeepSeek, NVIDIA) send `reasoning_content`, while
+    // OpenRouter sends `reasoning`. Accept both so a reasoning model's live
+    // tail is visible regardless of which gateway hosts it.
     delta
-        .and_then(|d| d.get("reasoning_content"))
-        .and_then(Value::as_str)
+        .and_then(|d| {
+            d.get("reasoning_content")
+                .or_else(|| d.get("reasoning"))
+                .and_then(Value::as_str)
+        })
         .filter(|s| !s.is_empty())
         .map(|s| vec![Ok(StreamEvent::ReasoningDelta(s.to_string()))])
         .unwrap_or_default()
@@ -932,6 +939,35 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["read_file", "list_files"]);
+    }
+
+    #[test]
+    fn openrouter_reasoning_field_surfaces_as_a_reasoning_delta() {
+        // OpenRouter names the thought field `reasoning`; OpenAI-compatible
+        // servers name it `reasoning_content`. Both must surface, or a
+        // reasoning model's live tail goes invisible on one of them.
+        let block =
+            r#"data: {"choices":[{"delta":{"content":"","reasoning":"Hmm, let me think"}}]}"#;
+        let event = parse_event(block).expect("event").expect("ok");
+        assert!(
+            matches!(event, StreamEvent::ReasoningDelta(ref d) if d == "Hmm, let me think"),
+            "OpenRouter's `reasoning` field must map to ReasoningDelta"
+        );
+
+        // An empty reasoning delta is noise and must not emit a ReasoningDelta.
+        let empty = r#"data: {"choices":[{"delta":{"content":"","reasoning":""}}]}"#;
+        assert!(
+            !matches!(parse_event(empty), Some(Ok(StreamEvent::ReasoningDelta(_)))),
+            "empty reasoning must not emit a ReasoningDelta"
+        );
+
+        // `reasoning_content` still wins when both are present.
+        let both = r#"data: {"choices":[{"delta":{"reasoning_content":"a","reasoning":"b"}}]}"#;
+        let event = parse_event(both).expect("event").expect("ok");
+        assert!(
+            matches!(event, StreamEvent::ReasoningDelta(ref d) if d == "a"),
+            "reasoning_content keeps precedence"
+        );
     }
 
     #[test]

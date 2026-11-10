@@ -31,6 +31,25 @@ pub struct ProviderPreset {
 /// provider via `#[cfg(test)]`; it never ships.)
 pub const PRESETS: &[ProviderPreset] = &[
     ProviderPreset {
+        // OpenCode Console over its OpenAI-compatible endpoint. Auth is
+        // `Bearer $OPENCODE_API_KEY` (https://opencode.ai/console).
+        //
+        // The zero-cost ids on this endpoint (pulse-alpha-free, crouton-alpha-free,
+        // big-pickle, glm-5.3-flash-free, the nemotron/deepseek free ids, …) are
+        // NOT usable here: the gateway admits free-tier traffic only from the
+        // OpenCode client and answers every other caller with HTTP 429
+        // `FreeUsageLimitError` before it even looks at a key. Verified 2026-11-06
+        // against all 10 zero-cost ids. So this preset deliberately points at a
+        // normal paid id — the free tier is unreachable from Nanomite by design.
+        // Point `/model` at any other id the account allows.
+        id: "opencode",
+        label: "OpenCode",
+        base_url: "https://opencode.ai/inference/openai/v1",
+        default_model: "gpt-5.4-nano",
+        key_env: Some("OPENCODE_API_KEY"),
+        offline: false,
+    },
+    ProviderPreset {
         id: "openai",
         label: "OpenAI",
         base_url: "https://api.openai.com/v1",
@@ -91,6 +110,21 @@ pub const PRESETS: &[ProviderPreset] = &[
         label: "OpenRouter",
         base_url: "https://openrouter.ai/api/v1",
         default_model: "openrouter/auto",
+        key_env: Some("OPENROUTER_API_KEY"),
+        offline: false,
+    },
+    ProviderPreset {
+        // OpenRouter's zero-cost tier: any id ending in `:free`. Verified
+        // 2026-11-06 — 11 `:free` ids on the live catalog, and
+        // `recursive/flint-v1.0:free` + `nvidia/nemotron-3.5-lightning:free`
+        // both answer HTTP 200 with `cost: 0`. Unlike OpenCode's free tier this
+        // one genuinely works from a non-OpenCode client; it is rate-limited
+        // upstream, so a 429 means retry, not a wall. `/model` enumerates the
+        // rest once a key is set.
+        id: "openrouter-free",
+        label: "OpenRouter Free",
+        base_url: "https://openrouter.ai/api/v1",
+        default_model: "recursive/flint-v1.0:free",
         key_env: Some("OPENROUTER_API_KEY"),
         offline: false,
     },
@@ -410,6 +444,15 @@ pub fn model_context_limit(model: &str) -> usize {
     // GLM / Zhipu
     if m.contains("glm-4") {
         return 128_000;
+    }
+    // OpenCode Console (opencode.ai/inference) ids that no other rule covers.
+    if m.contains("big-pickle") || m.contains("beam-free") || m.contains("flint-40b") {
+        return 200_000;
+    }
+    // OpenRouter zero-cost ids that no other rule covers. `flint-v1.0` is the
+    // recursive/flint open-weight model, distinct from OpenCode's `flint-40b`.
+    if m.contains("flint-v1.0") || m.contains("xing4.0") || m.contains("lfm-2.5") {
+        return 262_144;
     }
     // Test/scripted models
     if m.contains("scripted-model") {
@@ -1645,9 +1688,16 @@ mod tests {
         }
         let mut keys: Vec<_> = PRESETS.iter().filter_map(|p| p.key_env).collect();
         keys.sort();
-        let count = keys.len();
         keys.dedup();
-        assert_eq!(keys.len(), count, "duplicate key env vars");
+        // Two presets may deliberately share one credential: the free and paid
+        // tiers of the same gateway (openrouter / openrouter-free) are one
+        // account and one key. What must not happen is the same *label* twice,
+        // or a preset whose key_env silently points at another provider.
+        let mut labels: Vec<_> = PRESETS.iter().map(|p| p.label).collect();
+        labels.sort();
+        let label_count = labels.len();
+        labels.dedup();
+        assert_eq!(labels.len(), label_count, "duplicate preset labels");
     }
 
     #[test]
@@ -1860,6 +1910,59 @@ mod tests {
             Some(std::path::PathBuf::from("/tmp/saved-prompt.md"))
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn opencode_preset_shape_is_stable() {
+        let p = find_preset("opencode").expect("opencode preset must exist");
+        assert_eq!(p.label, "OpenCode");
+        assert_eq!(p.base_url, "https://opencode.ai/inference/openai/v1");
+        assert_eq!(p.key_env, Some("OPENCODE_API_KEY"));
+        assert!(!p.offline, "the OpenCode endpoint needs a key");
+        // The base URL must stay a plain OpenAI-compatible `/v1` root: the
+        // client appends `/chat/completions` and appends nothing for `/models`.
+        assert!(
+            !p.base_url.ends_with('/'),
+            "trailing slash breaks endpoint()"
+        );
+        assert!(
+            !p.base_url.ends_with("/chat/completions"),
+            "the preset must be the root, not a full endpoint"
+        );
+        // The free tier is unreachable for non-OpenCode clients (HTTP 429
+        // FreeUsageLimitError), so the default must not be a `-free` id.
+        assert!(
+            !p.default_model.ends_with("-free"),
+            "default model must not be a free-tier id: {}",
+            p.default_model
+        );
+        assert_ne!(p.default_model, "big-pickle");
+        assert_ne!(p.default_model, "pulse-alpha-free");
+        assert_ne!(p.default_model, "crouton-alpha-free");
+    }
+
+    #[test]
+    fn openrouter_free_preset_shape_is_stable() {
+        let p = find_preset("openrouter-free").expect("openrouter-free preset must exist");
+        assert_eq!(p.label, "OpenRouter Free");
+        assert_eq!(p.base_url, "https://openrouter.ai/api/v1");
+        assert_eq!(p.key_env, Some("OPENROUTER_API_KEY"));
+        assert!(!p.offline);
+        // The whole point of this preset is a zero-cost model, so the default
+        // must stay on OpenRouter's `:free` namespace. If it ever drifts to a
+        // paid id this preset is a lie.
+        assert!(
+            p.default_model.ends_with(":free"),
+            "default model must stay on the :free tier: {}",
+            p.default_model
+        );
+        assert!(
+            !p.base_url.ends_with('/'),
+            "trailing slash breaks endpoint()"
+        );
+        // It shares a URL with the plain `openrouter` preset; both must resolve
+        // to the same wire endpoint, so no per-provider branch is needed.
+        assert_eq!(p.base_url, find_preset("openrouter").unwrap().base_url);
     }
 
     #[test]

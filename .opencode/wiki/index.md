@@ -10,6 +10,7 @@ Maintained incrementally; every page cross-references its sources.
 - [Agent layer](entities/agent.md) — provider, runtime, wire format, ToolPolicy and the Confirmer gate
 - [Commands](entities/commands.md) — slash-command table, aliases, keybinding registry rules
 - [Clickable links](entities/clickable-links.md) — plain-click URLs in the chat transcript open in the system browser (region scan → cache → hit test → `Control::OpenLink` → `xdg-open`)
+- [Self-update](entities/self-update.md) — `nanomite update` / `/update`: pull + rebuild, HMAC signature gate (sig travels on the release branch, not the tag tree), key + `scripts/sign-release.sh` maintainer flow
 
 ### Concepts
 - [Tool confirmation gate](concepts/confirm-gate.md) — interactive y/n/a/d approval for Risk::External tools (`confirm_external`)

@@ -47,3 +47,6 @@ a working note warning parallel sessions to re-read before rewriting.
   for core tools is covered for External calls, Write calls still rely on mode
   posture. Update when AGENTS.md is next touched by the owner.
 - docs/SECURITY.md / docs/TOOLS.md predate all of this; trust code over docs.
+## [2026-11-10] ingest | entities/self-update.md
+
+Fixed the recurring `nanomite update` "refusing unsigned update to tag v1.3.1-word-diff" error. Root cause: the v1.3.1 HMAC signing scheme was circular (sig over the tagged commit's SHA had to live inside that same commit's tree — unreachable `Verified`), and no release ever carried a .sig. Fix in src/update.rs: read the sig from origin/<branch>:<tag>.sig (release-channel tip) with tag-tree fallback; added scripts/sign-release.sh maintainer flow, key at ~/.config/nanomite/update-key (0600) exported via ~/.bashrc, and a cross-implementation HMAC vector test in update_signing.rs. Also documented the TUI /update path skipping the signature gate entirely.

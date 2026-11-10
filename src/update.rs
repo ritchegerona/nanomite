@@ -34,11 +34,21 @@ pub fn run() -> io::Result<()> {
 
     let branch = git_out(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     step("fetching origin");
-    // --prune-tags drops stale release tags the remote deleted, so the
-    // describe below can never resolve a retracted release on this client.
+    // --force: origin may retag a release (e.g. v1.3.1 re-pushed). Without it
+    // git fetch rejects the tag ("would clobber existing tag") and exits 1;
+    // with --quiet that failure carries no stderr, surfacing as an empty
+    // "git fetch failed: " error. --prune-tags drops stale tags the remote
+    // deleted so describe never resolves a retracted release.
     git_out(
         &repo,
-        &["fetch", "origin", "--tags", "--prune-tags", "--quiet"],
+        &[
+            "fetch",
+            "origin",
+            "--tags",
+            "--force",
+            "--prune-tags",
+            "--quiet",
+        ],
     )?;
 
     let behind: usize = git_out(
@@ -77,8 +87,8 @@ pub fn run() -> io::Result<()> {
         // Prefer the dedicated `signatures` branch: the sig file signing a
         // commit cannot live inside that commit's own tree (the sig would
         // change the commit hash it signs), so released sigs are committed
-        // to refs/heads/signatures and pushed alongside the tag. The tag's
-        // own tree stays as a legacy fallback.
+        // to refs/heads/signatures and pushed alongside the tag. Fetch it
+        // first, then fall back to origin/{branch} and the tag's own tree.
         git_opt(
             &repo,
             &[
@@ -92,6 +102,7 @@ pub fn run() -> io::Result<()> {
             &repo,
             &["show", &format!("refs/remotes/origin/signatures:{tag}.sig")],
         )
+        .or_else(|| git_opt(&repo, &["show", &format!("origin/{branch}:{tag}.sig")]))
         .or_else(|| git_opt(&repo, &["show", &format!("{tag}:{tag}.sig")]));
         let result = match signature.as_deref() {
             None => VerifyResult::Unsigned,
@@ -340,7 +351,14 @@ pub fn check_status() -> Option<UpdateStatus> {
 
     git_out_startup(
         &repo,
-        &["fetch", "origin", "--tags", "--prune-tags", "--quiet"],
+        &[
+            "fetch",
+            "origin",
+            "--tags",
+            "--force",
+            "--prune-tags",
+            "--quiet",
+        ],
     )
     .ok()?;
 
