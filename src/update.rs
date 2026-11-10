@@ -34,7 +34,12 @@ pub fn run() -> io::Result<()> {
 
     let branch = git_out(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     step("fetching origin");
-    git_out(&repo, &["fetch", "origin", "--tags", "--quiet"])?;
+    // --prune-tags drops stale release tags the remote deleted, so the
+    // describe below can never resolve a retracted release on this client.
+    git_out(
+        &repo,
+        &["fetch", "origin", "--tags", "--prune-tags", "--quiet"],
+    )?;
 
     let behind: usize = git_out(
         &repo,
@@ -315,7 +320,11 @@ pub fn check_status() -> Option<UpdateStatus> {
     let repo = locate_checkout()?;
     let branch = git_out(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
 
-    git_out_startup(&repo, &["fetch", "origin", "--tags", "--quiet"]).ok()?;
+    git_out_startup(
+        &repo,
+        &["fetch", "origin", "--tags", "--prune-tags", "--quiet"],
+    )
+    .ok()?;
 
     let behind = git_out(
         &repo,
