@@ -43,7 +43,32 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
-    // Right: spinner/dot · model · reasoning · ctx meter
+    // Mode badge rides next to the workspace path in the mode's own colour
+    // (moved here from the footer row, which the owner removed 2026-11-11).
+    left.push(Span::styled(
+        format!(" {} ", glyph::CHEVRON),
+        Style::default().fg(theme.faint()),
+    ));
+    left.push(Span::styled(mode_label(app), mode_style(app)));
+
+    // Visual selection indicator (was footer-hosted).
+    if let Some(sel) = &app.selection {
+        if let Some(mode) = sel.mode {
+            let label = match mode {
+                crate::app::SelectionMode::Char => "VISUAL",
+                crate::app::SelectionMode::Line => "VISUAL LINE",
+                crate::app::SelectionMode::Block => "VISUAL BLOCK",
+            };
+            left.push(Span::styled(
+                format!(" -- {label} --"),
+                Style::default()
+                    .fg(theme.accent())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+
+    // Right: spinner/dot · working info · model · reasoning · ctx meter
     let mark = if app.is_busy() {
         glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()]
     } else {
@@ -98,7 +123,7 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
         .max(8);
     let model = text::truncate_head(&app.model_label(), model_budget);
 
-    let mut right = Line::from(vec![
+    let mut right_spans = vec![
         Span::styled(
             format!("{mark} "),
             if app.is_busy() {
@@ -117,6 +142,44 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
                 .fg(theme.warn())
                 .add_modifier(Modifier::BOLD),
         ),
+    ];
+
+    // The single working indicator (moved from the removed footer row): the
+    // spinning mark plus elapsed time and this turn's step/tool progress.
+    if app.is_busy() {
+        let elapsed = app
+            .turn_started
+            .map(|t| text::format_duration(t.elapsed()))
+            .unwrap_or_default();
+        right_spans.push(Span::styled("working", Style::default().fg(theme.muted())));
+        right_spans.push(Span::styled(format!(" {elapsed}"), theme.faint_style()));
+        let (steps, tools) = app
+            .active
+            .and_then(|i| app.entries.get(i))
+            .map(|e| (e.steps, e.tools.iter().filter(|t| !t.running).count()))
+            .unwrap_or((0, 0));
+        if steps > 0 || tools > 0 {
+            right_spans.push(Span::styled(
+                format!(" · {steps} step{}", if steps == 1 { "" } else { "s" }),
+                theme.faint_style(),
+            ));
+            if tools > 0 {
+                right_spans.push(Span::styled(
+                    format!(" · {tools} tool{}", if tools == 1 { "" } else { "s" }),
+                    theme.faint_style(),
+                ));
+            }
+        }
+        if app.pending_editor {
+            right_spans.push(Span::styled(" · editor open", theme.faint_style()));
+        }
+        right_spans.push(Span::styled(
+            format!(" {} ", glyph::CHEVRON),
+            Style::default().fg(theme.faint()),
+        ));
+    }
+
+    right_spans.extend([
         Span::styled(
             model,
             theme.dim().add_modifier(Modifier::DIM).fg(theme.accent()),
@@ -137,8 +200,25 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(theme.faint()),
         ),
         Span::styled(ctx_display, ctx_style),
-    ])
-    .right_aligned();
+    ]);
+
+    // Debug frame stats (`/hud`): ride at the tail of the header now that the
+    // footer row is gone.
+    if app.hud {
+        right_spans.push(Span::styled(
+            format!(
+                "  {:.1}ms · {:.1}ms peak · {} draws · {} entries · {} rows",
+                app.frame_us as f64 / 1000.0,
+                app.frame_peak_us as f64 / 1000.0,
+                app.frame_draws,
+                app.entries.len(),
+                app.view.content_height
+            ),
+            theme.faint_style(),
+        ));
+    }
+
+    let mut right = Line::from(right_spans).right_aligned();
 
     // Combine left and right into one line. The right side must be budgeted
     // against what the left side already consumes - otherwise the context
@@ -195,10 +275,31 @@ pub fn rule(frame: &mut Frame, area: Rect, theme: &Theme) {
     let _ = (frame, area, theme);
 }
 
-/// Status strip on the bottom edge, under the composer. Rebuilt only when
-/// its inputs change. (The mode badge was removed by owner request 2026-11-04: footer stays clean.)
+/// The active tool-policy mode name (plan/coder/build/hacker) in lowercase,
+/// as it rides in the header next to the workspace path.
+pub fn mode_label(app: &App) -> &'static str {
+    match app.cfg.tool_policy {
+        crate::agent::policy::ToolPolicy::Plan => "plan",
+        crate::agent::policy::ToolPolicy::Coder => "coder",
+        crate::agent::policy::ToolPolicy::Build => "build",
+        crate::agent::policy::ToolPolicy::Hacker => "hacker",
+    }
+}
+
+/// The mode badge's style: the mode's dedicated theme colour, bold.
+pub fn mode_style(app: &App) -> Style {
+    let theme = &app.theme;
+    let color = match app.cfg.tool_policy {
+        crate::agent::policy::ToolPolicy::Plan => theme.mode_plan(),
+        crate::agent::policy::ToolPolicy::Coder => theme.mode_coder(),
+        crate::agent::policy::ToolPolicy::Build => theme.mode_build(),
+        crate::agent::policy::ToolPolicy::Hacker => theme.mode_hacker(),
+    };
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
 /// Follow-up suggestions strip (opencode-style): mounts between the prompt
-/// queue and the footer when the model answered a finished turn's suggestion
+/// queue and the composer when the model answered a finished turn's suggestion
 /// side-call. Same quiet background-strip language as the prompt queue: no
 /// borders, one faint header row, one row per suggestion, the highlighted
 /// one in the accent colour. `Tab` cycles, `Enter` sends, `Esc` dismisses.
@@ -243,210 +344,6 @@ pub fn suggestions(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
-pub fn footer(frame: &mut Frame, area: Rect, app: &mut App) {
-    let theme = app.theme;
-    let key = footer_key(app);
-    if let Some((k, line)) = &app.view.footer {
-        if *k == key {
-            frame.render_widget(Paragraph::new(line.clone()), area);
-            return;
-        }
-    }
-
-    let mut left: Vec<Span<'static>> = Vec::new();
-    if let Some(search) = &app.search {
-        // The search bar replaces the status strip while it is open.
-        left.push(Span::styled(
-            format!("/{}", search.query),
-            Style::default()
-                .fg(theme.accent())
-                .add_modifier(Modifier::BOLD),
-        ));
-        let status = if search.query.trim().is_empty() {
-            " type to search".to_string()
-        } else if search.matches.is_empty() {
-            " no matches".to_string()
-        } else {
-            format!(" {}/{} matches", search.current + 1, search.matches.len())
-        };
-        left.push(Span::styled(status, Style::default().fg(theme.muted())));
-        left.push(Span::styled(
-            format!(
-                "  {} enter/↓ next {} ↑ prev {} esc close",
-                glyph::DOT,
-                glyph::DOT,
-                glyph::DOT
-            ),
-            theme.faint_style(),
-        ));
-    } else if app.is_busy() {
-        let elapsed = app
-            .turn_started
-            .map(|t| text::format_duration(t.elapsed()))
-            .unwrap_or_default();
-        left.push(Span::styled(
-            format!(
-                "{} ",
-                glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()]
-            ),
-            Style::default().fg(theme.accent()),
-        ));
-        left.push(Span::styled("working", Style::default().fg(theme.muted())));
-        left.push(Span::styled(format!(" {elapsed}"), theme.faint_style()));
-        // Steps and tool calls so far this turn, when there are any.
-        let (steps, tools) = app
-            .active
-            .and_then(|i| app.entries.get(i))
-            .map(|e| (e.steps, e.tools.iter().filter(|t| !t.running).count()))
-            .unwrap_or((0, 0));
-        if steps > 0 || tools > 0 {
-            left.push(Span::styled(
-                format!(" · {steps} step{}", if steps == 1 { "" } else { "s" }),
-                theme.faint_style(),
-            ));
-            if tools > 0 {
-                left.push(Span::styled(
-                    format!(" · {tools} tool{}", if tools == 1 { "" } else { "s" }),
-                    theme.faint_style(),
-                ));
-            }
-        }
-        if app.pending_editor {
-            left.push(Span::styled(" · editor open", theme.faint_style()));
-        }
-    } else {
-        left.push(Span::styled(
-            format!("{} ready", glyph::DOT),
-            Style::default().fg(theme.faint()),
-        ));
-        // Queued images waiting to be sent (drag-and-dropped or /image).
-        if !app.pending_images.is_empty() {
-            let n = app.pending_images.len();
-            let names: Vec<String> = app.pending_images.iter().map(|i| i.name.clone()).collect();
-            left.push(Span::styled(
-                format!("  {n} image(s) queued: {}", names.join(", ")),
-                Style::default()
-                    .fg(theme.warn())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
-        // Quiet one-time note when persistent memory is not attached. It
-        // sits next to "ready" rather than in the toast slot: an absent or
-        // unwritable memory directory is a normal state, not a failure.
-        if let Some(hint) = app.memory_hint().or_else(|| app.prompt_hint()) {
-            left.push(Span::styled(format!("  {hint}"), theme.faint_style()));
-        }
-    }
-
-    // Pending tool confirmation: modal, so it takes the footer until answered.
-    if let Some(request) = &app.pending_confirm {
-        left.push(Span::styled("  ", theme.faint_style()));
-        left.push(Span::styled(
-            format!(
-                "{} {} needs approval - y/a allow, n/d deny",
-                glyph::HOURGLASS,
-                request.tool
-            ),
-            Style::default().fg(theme.warn()),
-        ));
-        if let Some(preview) = request
-            .preview
-            .as_deref()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-        {
-            let flat = preview.replace(['\n', '\r'], " ");
-            let mut shown: String = flat.chars().take(48).collect();
-            if flat.chars().count() > 48 {
-                shown.push('…');
-            }
-            left.push(Span::styled("  ", theme.faint_style()));
-            left.push(Span::styled(shown, Style::default().fg(theme.warn())));
-        }
-    }
-
-    // Show toast if present
-    if let Some((toast_msg, _)) = &app.toast {
-        left.push(Span::styled("  ", theme.faint_style()));
-        left.push(Span::styled(
-            toast_msg.clone(),
-            Style::default().fg(theme.warn()),
-        ));
-    }
-
-    // Mode badge removed by owner request (2026-11-04): keep the footer clean.
-
-    // Visual selection indicator
-    if let Some(sel) = &app.selection {
-        if let Some(mode) = sel.mode {
-            let mode_label = match mode {
-                crate::app::SelectionMode::Char => "VISUAL",
-                crate::app::SelectionMode::Line => "VISUAL LINE",
-                crate::app::SelectionMode::Block => "VISUAL BLOCK",
-            };
-            left.push(Span::styled("  ", theme.faint_style()));
-            left.push(Span::styled(
-                format!("-- {mode_label} --"),
-                Style::default()
-                    .fg(theme.accent())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
-    }
-
-    // Right side: mode name (plan/coder/build/hacker) + prompt / completion token counts
-    let mode_label = match app.cfg.tool_policy {
-        crate::agent::policy::ToolPolicy::Plan => "plan",
-        crate::agent::policy::ToolPolicy::Coder => "coder",
-        crate::agent::policy::ToolPolicy::Build => "build",
-        crate::agent::policy::ToolPolicy::Hacker => "hacker",
-    };
-    let mode_color = match app.cfg.tool_policy {
-        crate::agent::policy::ToolPolicy::Plan => theme.mode_plan(),
-        crate::agent::policy::ToolPolicy::Coder => theme.mode_coder(),
-        crate::agent::policy::ToolPolicy::Build => theme.mode_build(),
-        crate::agent::policy::ToolPolicy::Hacker => theme.mode_hacker(),
-    };
-
-    let mut right_spans = vec![
-        Span::styled(
-            mode_label,
-            Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(format!("{} ", glyph::ARROW_UP), theme.faint_style()),
-        Span::styled(
-            text::format_tokens(app.usage.prompt_tokens as u64),
-            theme.dim(),
-        ),
-        Span::raw("  "),
-        Span::styled(format!("{} ", glyph::ARROW_DOWN), theme.faint_style()),
-        Span::styled(
-            text::format_tokens(app.usage.completion_tokens as u64),
-            theme.dim(),
-        ),
-    ];
-    if app.hud {
-        right_spans.push(Span::raw("  "));
-        right_spans.push(Span::styled(
-            format!(
-                "{:.1}ms · {:.1}ms peak · {} draws · {} entries · {} rows",
-                app.frame_us as f64 / 1000.0,
-                app.frame_peak_us as f64 / 1000.0,
-                app.frame_draws,
-                app.entries.len(),
-                app.view.content_height
-            ),
-            theme.faint_style(),
-        ));
-    }
-    let right = Line::from(right_spans).right_aligned();
-
-    frame.render_widget(Paragraph::new(Line::from(left.clone())), area);
-    frame.render_widget(Paragraph::new(right), area);
-
-    app.view.footer = Some((key, Line::from(left)));
-}
 
 /// Keys table shown at the bottom of the sheet. Cross-checked against
 /// `App::on_key` (src/app.rs): every row here describes a binding that key
@@ -985,30 +882,6 @@ pub fn connect(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines), inner);
-}
-
-/// Cache key for the status strip.
-fn footer_key(app: &App) -> String {
-    // The search bar rewrites the left side on every keystroke and match
-    // jump, so its query and cursor must be part of the key.
-    let search = match &app.search {
-        Some(s) => format!("search|{}|{}|{}", s.query, s.matches.len(), s.current),
-        None => String::from("none"),
-    };
-    format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}",
-        app.usage.prompt_tokens,
-        app.usage.completion_tokens,
-        app.usage.total_tokens,
-        app.is_busy(),
-        app.turn_started
-            .map(|t| t.elapsed().as_millis() / 100)
-            .unwrap_or(0),
-        // Mode affects the footer (mode name on right), so include it in the key.
-        app.cfg.tool_policy.as_str(),
-        app.pending_images.len(),
-        search,
-    )
 }
 
 /// Rows shown by `ctrl+x`: every slash command plus a few local actions.

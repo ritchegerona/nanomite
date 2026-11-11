@@ -548,6 +548,173 @@ pub const MIN_INNER_ROWS: usize = 1;
 /// Longest composer expansion before the viewport starts scrolling internally.
 pub const MAX_INNER_ROWS: usize = 8;
 
+/// Priority status content that needs its own guaranteed row in compact
+/// density (the compact composer has no border line to ride on): the tool
+/// approval prompt, a toast, or the transcript search bar. Idle/busy hints do
+/// NOT count - they are informative, not actionable.
+pub fn has_priority_status(app: &App) -> bool {
+    app.pending_confirm.is_some() || app.toast.is_some() || app.search.is_some()
+}
+
+/// Drops `drop` display columns from the tail of a span list, keeping the
+/// head - the status line's query, match count and approval prompt lead, so
+/// clipping must eat the hint tail, not the front.
+fn truncate_spans_tail(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+    if max == 0 {
+        return Vec::new();
+    }
+    let mut used = 0usize;
+    let mut out = Vec::with_capacity(spans.len());
+    for span in spans {
+        let w = text::width(&span.content);
+        if w == 0 {
+            continue;
+        }
+        if used + w <= max {
+            used += w;
+            out.push(span);
+            continue;
+        }
+        // Partial fit: clip characters until the width budget is spent.
+        let mut keep = String::new();
+        for ch in span.content.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + cw > max {
+                break;
+            }
+            keep.push(ch);
+            used += cw;
+        }
+        if !keep.is_empty() {
+            out.push(Span::styled(keep, span.style));
+        }
+        break;
+    }
+    out
+}
+
+/// The composer's bottom border line: the single transient status slot.
+/// Priority: tool approval > toast > search > busy hint > idle hint (+ queued
+/// images, memory/prompt notes). The old full-width footer row was removed by
+/// owner decision 2026-11-11; everything actionable moved here, and the
+/// working indicator plus mode badge moved to the header.
+pub fn status_line(app: &App, width: usize) -> Line<'static> {
+    let theme = &app.theme;
+
+    // 1. Pending tool confirmation: modal, so it owns the line until answered.
+    if let Some(request) = &app.pending_confirm {
+        let mut spans = vec![Span::styled(
+            format!(
+                "{} {} needs approval - y/a allow, n/d deny",
+                glyph::HOURGLASS,
+                request.tool
+            ),
+            Style::default().fg(theme.warn()),
+        )];
+        if let Some(preview) = request
+            .preview
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            let flat = preview.replace(['\n', '\r'], " ");
+            let mut shown: String = flat.chars().take(48).collect();
+            if flat.chars().count() > 48 {
+                shown.push('…');
+            }
+            spans.push(Span::styled("  ", theme.faint_style()));
+            spans.push(Span::styled(shown, Style::default().fg(theme.warn())));
+        }
+        return Line::from(truncate_spans_tail(spans, width));
+    }
+
+    // 2. Toast message.
+    if let Some((toast_msg, _)) = &app.toast {
+        return Line::from(truncate_spans_tail(
+            vec![Span::styled(
+                toast_msg.clone(),
+                Style::default().fg(theme.warn()),
+            )],
+            width,
+        ));
+    }
+
+    // 3. Transcript search bar (was footer-hosted).
+    if let Some(search) = &app.search {
+        let status = if search.query.trim().is_empty() {
+            " type to search".to_string()
+        } else if search.matches.is_empty() {
+            " no matches".to_string()
+        } else {
+            format!(" {}/{} matches", search.current + 1, search.matches.len())
+        };
+        return Line::from(truncate_spans_tail(
+            vec![
+                Span::styled(
+                    format!("/{}", search.query),
+                    Style::default()
+                        .fg(theme.accent())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(status, Style::default().fg(theme.muted())),
+                Span::styled(
+                    format!(
+                        "  {} enter/↓ next {} ↑ prev {} esc close",
+                        glyph::DOT,
+                        glyph::DOT,
+                        glyph::DOT
+                    ),
+                    theme.faint_style(),
+                ),
+            ],
+            width,
+        ));
+    }
+
+    // 4. Busy hint (also the only remaining interrupt affordance text).
+    if app.is_busy() {
+        return Line::from(truncate_spans_tail(
+            vec![Span::styled(
+                format!(
+                    "esc interrupts {} esc esc force stop {} type to queue the next turn",
+                    glyph::DOT,
+                    glyph::DOT
+                ),
+                theme.faint_style(),
+            )],
+            width,
+        ));
+    }
+
+    // 5. Idle: key hints plus queued images and quiet memory/prompt notes
+    //    (all formerly footer-hosted).
+    let mut text = format!(
+        "enter send {} ctrl+j newline {} ctrl+o details",
+        glyph::DOT,
+        glyph::DOT
+    );
+    if !app.pending_images.is_empty() {
+        let names: Vec<String> = app
+            .pending_images
+            .iter()
+            .map(|i| i.name.clone())
+            .collect();
+        text.push_str(&format!(
+            "  {} {} image(s) queued: {}",
+            glyph::DOT,
+            app.pending_images.len(),
+            names.join(", ")
+        ));
+    }
+    if let Some(hint) = app.memory_hint().or_else(|| app.prompt_hint()) {
+        text.push_str(&format!("  {hint}"));
+    }
+    Line::from(Span::styled(
+        text::truncate(&text, width.saturating_sub(4)),
+        theme.faint_style(),
+    ))
+}
+
 /// Total composer height for a measured layout: the text rows plus the
 /// rounded border. Hints live on the bottom border, so the inner rows belong
 /// entirely to the text.
@@ -583,7 +750,6 @@ fn render_compact(
     let theme = &app.theme;
     let busy = app.is_busy();
     let text_top = area.y;
-    let text_h = area.height as usize;
 
     let prompt = Span::styled(
         format!("{} ", glyph::PROMPT),
@@ -604,6 +770,24 @@ fn render_compact(
     );
     let text_x = area.x + 2;
     let text_w = area.width.saturating_sub(2);
+
+    // Compact has no border to carry the status line, so actionable status
+    // (approval / toast / search) gets its own guaranteed row at the bottom;
+    // `ui::render` grows `input_h` by one whenever this fires.
+    let mut text_h = area.height as usize;
+    if has_priority_status(app) && area.height >= 2 {
+        text_h -= 1;
+        let row = area.y + area.height - 1;
+        frame.render_widget(
+            Paragraph::new(status_line(app, area.width as usize)),
+            Rect {
+                x: area.x,
+                y: row,
+                width: area.width,
+                height: 1,
+            },
+        );
+    }
 
     let y = render_image_chips(frame, area, app, text_top, text_w.into());
     let text_top = y;
@@ -677,23 +861,11 @@ pub fn render(
         return render_compact(frame, area, app, layout);
     }
 
-    // Rounded block: the workspace path sits on the top border and the key
-    // hints on the bottom one. The border itself separates transcript from
+    // Rounded block: the workspace path sits on the top border and the status
+    // line on the bottom one. The border itself separates transcript from
     // input, so every inner row belongs to the prompt text.
-    let hint_text = if busy {
-        format!(
-            "esc interrupts {} esc esc force stop {} type to queue the next turn",
-            glyph::DOT,
-            glyph::DOT
-        )
-    } else {
-        format!(
-            "enter send {} ctrl+j newline {} ctrl+o details",
-            glyph::DOT,
-            glyph::DOT
-        )
-    };
     let hint_w = (area.width as usize).saturating_sub(4);
+    let status = status_line(app, hint_w);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(if focused {
@@ -712,13 +884,7 @@ pub fn render(
         // itself stays theme-standard: the colour code applies to the mode's
         // text and nothing else.
         .title(Line::from(mode_title_spans(app)))
-        .title_bottom(
-            Line::from(Span::styled(
-                text::truncate(&hint_text, hint_w),
-                theme.faint_style(),
-            ))
-            .right_aligned(),
-        );
+        .title_bottom(status);
 
     // The content area inside the block border.
     let inner = block.inner(area);

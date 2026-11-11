@@ -11,7 +11,6 @@ pub mod theme;
 use crate::app::{App, Overlay, OverlayKind};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Line;
 use ratatui::Frame;
 use theme::Theme;
 
@@ -27,7 +26,6 @@ pub struct Rects {
     pub left_info: Rect,
     pub left_input: Rect,
     pub main_chat: Rect,
-    pub footer: Rect,
 }
 
 /// Viewport + animation state. Everything here is redraw-cheap to read.
@@ -47,7 +45,6 @@ pub struct View {
     offset_width: u16,
     offset_view: u16,
     pub layout: Option<(Rect, u16, Rects)>,
-    footer: Option<(String, Line<'static>)>,
 }
 
 impl View {
@@ -65,7 +62,6 @@ impl View {
             offset_width: 0,
             offset_view: 0,
             layout: None,
-            footer: None,
         }
     }
 
@@ -225,7 +221,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         composer::rows(&prompt_layout)
     };
     let min_input = if app.compact { 1 } else { 5 };
-    let input_h = composer_rows.max(min_input);
+    let mut input_h = composer_rows.max(min_input);
+    // Compact density has no composer border to host the status line, so an
+    // actionable status (tool approval, toast, search) gets a dedicated row.
+    if app.compact && composer::has_priority_status(app) {
+        input_h += 1;
+    }
     let rects = app.view.layout(area, input_h);
 
     panels::header(frame, rects.header, app);
@@ -237,7 +238,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     chat::render(frame, rects.main_chat, app);
     let cursor = composer::render(frame, rects.left_input, app, &prompt_layout, app.compact);
-    panels::footer(frame, rects.footer, app);
 
     // Overlays render full-width on top of everything; they don't need to
     // respect the left info column since they are modal and painted last.
@@ -319,10 +319,10 @@ pub(crate) fn left_tile_width(area: Rect) -> u16 {
 
 impl View {
     fn layout(&mut self, area: Rect, input_h: u16) -> Rects {
-        // Three-tile flipped T1: header | (left: info+input) | (right: main) | footer.
-        // The input tile hugs the composer: `input_h` rows (3 = one text row
-        // plus borders; grows with multiline input), and the info panel takes
-        // everything that is left of the column.
+        // Two-tile layout: header | (left: info+input) | (right: main).
+        // The old full-width footer row is gone (owner decision 2026-11-11):
+        // mode and working state live in the header, transient status (tool
+        // approval, toasts, search) rides the composer's bottom border.
         if let Some((cached_area, cached_input, rects)) = self.layout {
             if cached_area == area && cached_input == input_h {
                 return rects;
@@ -330,8 +330,7 @@ impl View {
         }
 
         let header_h = 1;
-        let footer_h = 1;
-        let main_h = area.height.saturating_sub(header_h + footer_h);
+        let main_h = area.height.saturating_sub(header_h);
 
         // Header
         let header = Rect {
@@ -341,15 +340,7 @@ impl View {
             height: header_h,
         };
 
-        // Footer
-        let footer = Rect {
-            x: area.x,
-            y: area.y + area.height - footer_h,
-            width: area.width,
-            height: footer_h,
-        };
-
-        // Main area between header and footer
+        // Main area under the header
         let main_area = Rect {
             x: area.x,
             y: area.y + header_h,
@@ -398,7 +389,6 @@ impl View {
             left_info,
             left_input,
             main_chat: right,
-            footer,
         };
         self.layout = Some((area, input_h, rects));
         rects

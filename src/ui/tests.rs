@@ -1674,7 +1674,7 @@ async fn header_shows_workspace_and_status() {
 }
 
 #[tokio::test]
-async fn footer_reports_the_token_budget() {
+async fn header_reports_the_token_budget() {
     let mut app = test_app().await;
     app.usage.prompt_tokens = 12_000;
     app.usage.completion_tokens = 3_000;
@@ -1686,6 +1686,46 @@ async fn footer_reports_the_token_budget() {
         "budget readout missing:\n{text}"
     );
     assert!(text.contains("7%"), "percentage missing:\n{text}");
+}
+
+#[tokio::test]
+async fn footer_row_is_gone_and_status_rides_the_composer() {
+    let mut app = test_app().await;
+    let text = frame_text(&mut app, 100, 24);
+    // The full-width footer strip is gone: no "· ready" row on the bottom
+    // edge. Idle key hints ride the composer's bottom border instead.
+    assert!(text.contains("enter send"), "idle hints missing:\n{text}");
+    assert!(!text.contains("ready"), "footer 'ready' leaked:\n{text}");
+}
+
+#[tokio::test]
+async fn busy_header_shows_the_working_indicator() {
+    let mut app = test_app().await;
+    app.composer.insert_str("hello");
+    app.submit();
+    assert!(app.is_busy(), "turn should be running");
+    let text = frame_text(&mut app, 100, 24);
+    assert!(
+        text.contains("working"),
+        "header working indicator missing:\n{text}"
+    );
+}
+
+#[tokio::test]
+async fn pending_confirm_renders_on_the_composer_status_line() {
+    let mut app = test_app().await;
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    app.pending_confirm = Some(crate::app::ConfirmRequest {
+        tool: "run_command".into(),
+        preview: Some("cargo test".into()),
+        respond: tx,
+    });
+    let text = frame_text(&mut app, 100, 24);
+    assert!(
+        text.contains("needs approval - y/a allow, n/d deny"),
+        "confirm prompt missing:\n{text}"
+    );
+    assert!(text.contains("cargo test"), "confirm preview missing:\n{text}");
 }
 
 #[tokio::test]
@@ -1721,7 +1761,7 @@ async fn theme_picker_lists_skins_with_descriptors() {
 }
 
 #[tokio::test]
-async fn busy_footer_shows_step_and_tool_progress() {
+async fn busy_turn_shows_step_and_tool_progress() {
     let mut app = test_app().await;
     app.composer.insert_str("hello");
     app.submit();
@@ -2528,15 +2568,12 @@ async fn shift_tab_cycles_all_four_modes() {
 }
 
 #[tokio::test]
-async fn footer_shows_mode_name_on_right() {
+async fn header_shows_the_mode_name() {
     use crate::agent::policy::ToolPolicy;
     let mut app = test_app().await;
 
-    // Add an entry so the footer renders (welcome state has no footer)
-    app.entries.push(Entry::new(EntryRole::User, "test"));
-
-    // The footer shows just the mode name (plan/coder/build/hacker) on the
-    // right side, not "plan mode"/"coder mode"/etc.
+    // The header shows just the mode name (plan/coder/build/hacker) next to
+    // the workspace path, not "plan mode"/"coder mode"/etc.
     for (mode, expected) in [
         (ToolPolicy::Plan, "plan"),
         (ToolPolicy::Coder, "coder"),
@@ -2559,13 +2596,13 @@ async fn footer_shows_mode_name_on_right() {
         // Should contain the mode name
         assert!(
             text.contains(expected),
-            "{expected} should render in the footer for {mode:?}:\n{text}"
+            "{expected} should render in the header for {mode:?}:\n{text}"
         );
         // Should NOT contain "mode" suffix
         let badge = format!("{} mode", expected);
         assert!(
             !text.contains(&badge),
-            "{badge} should NOT render in the footer for {mode:?}:\n{text}"
+            "{badge} should NOT render for {mode:?}:\n{text}"
         );
     }
     app.cfg.tool_policy = ToolPolicy::Build;
