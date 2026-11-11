@@ -724,7 +724,7 @@ pub fn extract_path(path: &Path, limits: &ExtractionLimits) -> Result<Document, 
 }
 
 /// Content fingerprint of a file: exact for files at or below 8 MiB
-/// (size + mtime + full-content FNV-1a), sampled above that (size + mtime +
+/// (size + mtime + full-content BLAKE3), sampled above that (size + mtime +
 /// first 8 MiB) where reading the remainder would defeat the purpose of a cap.
 pub fn fingerprint_file(path: &Path) -> std::io::Result<String> {
     use std::io::Read;
@@ -739,27 +739,46 @@ pub fn fingerprint_file(path: &Path) -> std::io::Result<String> {
     let file = std::fs::File::open(path)?;
     let mut reader = std::io::BufReader::with_capacity(64 * 1024, file);
     let cap = size.min(8 * 1024 * 1024) as usize;
-    let mut buf = Vec::with_capacity(cap.min(1024 * 1024));
-    reader.by_ref().take(cap as u64).read_to_end(&mut buf)?;
-    Ok(fingerprint_parts(size, mtime, &buf))
+
+    // Stream directly into blake3 hasher - avoids Vec allocation
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut remaining = cap;
+    while remaining > 0 {
+        let to_read = remaining.min(buf.len());
+        let n = reader.read(&mut buf[..to_read])?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        remaining -= n;
+    }
+    let hash = hasher.finalize();
+
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&size.to_le_bytes());
+    out[8..16].copy_from_slice(&(mtime as u64).to_le_bytes());
+    out[16..].copy_from_slice(&hash.as_bytes()[..16]);
+    Ok(hex::encode(out))
 }
 
 /// Fingerprint of in-memory bytes (size derived from the slice).
 pub fn fingerprint_bytes(bytes: &[u8]) -> String {
-    fingerprint_parts(bytes.len() as u64, 0, bytes)
+    let hash = blake3::hash(bytes);
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&(bytes.len() as u64).to_le_bytes());
+    out[8..16].copy_from_slice(&0u64.to_le_bytes()); // mtime = 0 for in-memory
+    out[16..].copy_from_slice(&hash.as_bytes()[..16]);
+    hex::encode(out)
 }
 
 fn fingerprint_parts(size: u64, mtime: i64, content: &[u8]) -> String {
-    let mut acc: u64 = 0xcbf2_9ce4_8422_2325;
-    for word in size.to_le_bytes().iter().chain(mtime.to_le_bytes().iter()) {
-        acc ^= u64::from(*word);
-        acc = acc.wrapping_mul(0x1000_0000_01b3);
-    }
-    for byte in content {
-        acc ^= u64::from(*byte);
-        acc = acc.wrapping_mul(0x1000_0000_01b3);
-    }
-    format!("{acc:016x}")
+    let hash = blake3::hash(content);
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&size.to_le_bytes());
+    out[8..16].copy_from_slice(&(mtime as u64).to_le_bytes());
+    out[16..].copy_from_slice(&hash.as_bytes()[..16]);
+    hex::encode(out)
 }
 
 /// Heuristic binary check over the first 8 KiB: NUL bytes or a high density of

@@ -329,7 +329,7 @@ fn main() {
         let path = fp_p;
         bench("fingerprint_file/1MB", 20, move || {
             let fp = extract::fingerprint_file(&path).expect("fingerprint");
-            assert!(fp.len() == 16);
+            assert!(fp.len() == 64); // 32 bytes hex encoded
         });
     }
 

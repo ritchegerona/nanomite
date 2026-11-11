@@ -27,6 +27,7 @@ dirs = "7.0.0"
 libc = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 memchr = "2.7"
+memmem = "0.1"
 memmap2 = "0.9"
 unicode-width = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
@@ -74,6 +75,8 @@ default = [
     "format-tabular",
     "format-documents",
     "format-pdf",
+    "dep:blake3",
+    "dep:hex",
 ]
 # NanomiteVPN module
 vpn = [

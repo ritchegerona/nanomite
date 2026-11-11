@@ -507,8 +507,8 @@ impl Theme {
     }
 
     pub fn detect() -> Self {
-        // Umbrella is the NANOMITE default: blood-red accent on near-black.
-        Self::with_id(ThemeId::Umbrella)
+        // Cyberpunk is the NANOMITE default: neon pink + cyan on near-black.
+        Self::with_id(ThemeId::Cyberpunk)
     }
 
     /// True when this terminal advertises 24-bit colour. The palettes are
@@ -776,8 +776,8 @@ mod tests {
     }
 
     #[test]
-    fn umbrella_is_the_default_skin() {
-        assert_eq!(Theme::detect().id, ThemeId::Umbrella);
+    fn cyberpunk_is_the_default_skin() {
+        assert_eq!(Theme::detect().id, ThemeId::Cyberpunk);
         assert_eq!(ThemeId::ALL[0], ThemeId::Mono);
         assert_eq!(ThemeId::Mono.label(), "mono");
     }

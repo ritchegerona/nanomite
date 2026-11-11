@@ -1,6 +1,7 @@
 use super::theme::{glyph, Theme};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::borrow::Cow;
 use std::path::Path;
 use std::time::Duration;
 
@@ -12,7 +13,12 @@ use std::time::Duration;
 /// - ❌ ✖️ ❎ → `✗`
 /// - ⚠️ ❗ → `!`
 /// - ZWJ families, flags, skin tones and every other pictograph are dropped
-pub fn professionalize(s: &str) -> String {
+pub fn professionalize(s: &str) -> Cow<'_, str> {
+    // Fast path: plain text with no mappable emoji/pictograph passes through
+    // with zero allocation (the common case while streaming).
+    if !s.chars().any(needs_professionalize) {
+        return Cow::Borrowed(s);
+    }
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         let mapped: Option<&str> = match ch {
@@ -44,7 +50,26 @@ pub fn professionalize(s: &str) -> String {
             out.push(ch);
         }
     }
-    out
+    Cow::Owned(out)
+}
+
+/// True when `ch` would be remapped or dropped by [`professionalize`]. The
+/// preserved glyphs (`✓` `✗` `✘`) return false so plain text allocates nothing.
+fn needs_professionalize(ch: char) -> bool {
+    match ch {
+        '\u{2705}' | '\u{2714}' | '\u{2611}'
+        | '\u{274C}' | '\u{2716}' | '\u{274E}'
+        | '\u{26A0}' | '\u{2757}'
+        | '\u{FE0F}' | '\u{200D}' | '\u{20E3}'
+        | '\u{2B50}' => true,
+        c if ('\u{1F3FB}'..='\u{1F3FF}').contains(&c) => true,
+        c if ('\u{1F1E6}'..='\u{1F1FF}').contains(&c) => true,
+        c if ('\u{1F000}'..='\u{1FAFF}').contains(&c) => true,
+        c if ('\u{2600}'..='\u{26FF}').contains(&c) => true,
+        c if ('\u{2700}'..='\u{27BF}').contains(&c)
+            && !matches!(c, '\u{2713}' | '\u{2717}' | '\u{2718}') => true,
+        _ => false,
+    }
 }
 
 /// Stateful display-width calculator that approximates how terminals render
@@ -451,7 +476,7 @@ pub fn markdown_with_blocks(
         }
     };
 
-    for raw in src.replace('\r', "").split('\n') {
+    for raw in src.split('\n') {
         let trimmed = raw.trim_end();
         let is_table_row = trimmed.trim_start().starts_with('|');
 

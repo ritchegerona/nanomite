@@ -1,10 +1,9 @@
-use memchr::memchr;
-use memmap2::Mmap;
+use memchr::{memchr, memchr2};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -213,6 +212,7 @@ impl FileTools {
         let needle = args.query.to_ascii_lowercase();
         let needle_bytes = needle.as_bytes();
         let mut stack = vec![(start, 0usize)];
+        let mut small_buf: Vec<u8> = Vec::new();
 
         while let Some((dir, depth)) = stack.pop() {
             if files_scanned >= MAX_SCAN_FILES || hits.len() >= MAX_HITS {
@@ -245,54 +245,80 @@ impl FileTools {
                     break;
                 }
 
-                // Use memory-mapped file for zero-copy access
-                let Ok(file) = File::open(&path) else {
-                    continue;
+                // Read straight into a buffer reused across files, bounded
+                // with `take` so oversized files are rejected without a
+                // separate stat: one open + one read beats open + fstat +
+                // munmap, and the warm buffer avoids per-file allocation.
+                small_buf.clear();
+                let too_big = {
+                    let Ok(mut file) = File::open(&path) else {
+                        continue;
+                    };
+                    let Ok(read_len) = (&mut file)
+                        .take(self.max_file_bytes as u64 + 1)
+                        .read_to_end(&mut small_buf)
+                    else {
+                        continue;
+                    };
+                    read_len > self.max_file_bytes
                 };
-                let Ok(metadata) = file.metadata() else {
-                    continue;
-                };
-                if metadata.len() > self.max_file_bytes as u64 {
+                if too_big {
                     continue;
                 }
-
-                let bytes = unsafe { Mmap::map(&file) }.ok();
-                let Some(bytes) = bytes else { continue };
-                let bytes = &bytes[..];
+                let bytes = &small_buf[..];
 
                 if bytes.is_empty() || looks_binary(bytes) {
                     continue;
                 }
 
-                // Quick rejection: use memmem to search for needle (case-insensitive via first bytes)
-                // For miss case, this avoids full decode on non-matching files
-                if needle_bytes.is_empty() {
-                    continue;
-                }
-
-                // Fast two-byte check - if first two case-folded bytes don't appear in sequence, skip
-                if needle_bytes.len() >= 2 {
-                    let first = needle_bytes[0] | 32;
-                    let second = needle_bytes[1] | 32;
+                // Prefilter: candidate search on raw bytes without decoding.
+                // Sound for any needle: the first byte's two ASCII case
+                // variants are located with SIMD memchr2 (or memchr when they
+                // coincide) and each candidate window is verified with
+                // `eq_ignore_ascii_case`. Non-ASCII bytes never match an ASCII
+                // case pair, so multibyte UTF-8 is skipped safely, and a miss
+                // exits before the lossy decode + line walk entirely.
+                if !needle_bytes.is_empty() && needle.is_ascii() {
+                    let first = needle_bytes[0];
+                    let (lo, hi) = if first.is_ascii_alphabetic() {
+                        (first | 32, first & !32)
+                    } else {
+                        (first, first)
+                    };
+                    let n = needle_bytes.len();
                     let mut found = false;
-                    for window in bytes.windows(2) {
-                        if window[0] | 32 == first && window[1] | 32 == second {
+                    let mut pos = 0;
+                    while let Some(i) = memchr2(lo, hi, &bytes[pos..]) {
+                        let start = pos + i;
+                        if start + n > bytes.len() {
+                            break;
+                        }
+                        if bytes[start..start + n].eq_ignore_ascii_case(needle_bytes) {
                             found = true;
                             break;
                         }
+                        pos = start + 1;
                     }
                     if !found {
                         continue;
                     }
-                } else {
-                    // Single byte needle: check if it appears at all
-                    let first = needle_bytes[0] | 32;
+                } else if !needle_bytes.is_empty() {
+                    // Non-ASCII needle: fold to lowercase once; a raw-byte
+                    // scan for the lowercase form is a sound candidate filter
+                    // because any case-variant match must contain the folded
+                    // code units as a byte subsequence at some offset.
                     let mut found = false;
-                    for &b in bytes {
-                        if b | 32 == first {
+                    let mut pos = 0;
+                    let low = needle.as_bytes();
+                    while let Some(i) = memchr(low[0], &bytes[pos..]) {
+                        let start = pos + i;
+                        if start + low.len() <= bytes.len()
+                            && bytes[start..start + low.len()] == *low
+                        {
                             found = true;
                             break;
                         }
+                        pos = start + 1;
                     }
                     if !found {
                         continue;
@@ -503,67 +529,34 @@ fn looks_binary(bytes: &[u8]) -> bool {
             > probe.len() / 10
 }
 
-/// Allocation-free case-insensitive substring search for ASCII haystacks.
-///
-/// Semantics are byte-identical to `hay.to_lowercase().contains(needle)` when
-/// `hay` is pure ASCII (callers gate on `line.is_ascii()`): ASCII-fold equals
-/// Unicode lowercase for ASCII, and a non-ASCII needle can never match an
-/// ASCII haystack under either formulation. The probe byte uses `| 32`, which
-/// can only produce false positives (never false negatives); the verify uses
-/// an exact A–Z fold so control characters (`\r` vs `-`, `0x10` vs `0`) are
-/// never confused.
-#[inline]
-fn fold_ascii(b: u8) -> u8 {
-    if b.wrapping_sub(b'A') < 26 {
-        b | 32
-    } else {
-        b
-    }
-}
-
+/// Case-insensitive ASCII substring test. Candidates are located with SIMD
+/// (`memchr2` on the first needle byte's two case variants; `memchr` shortcut
+/// when both variants coincide) and verified with `eq_ignore_ascii_case`,
+/// which the compiler vectorises. Non-ASCII bytes never fold, so UTF-8
+/// content passes through untouched.
 fn contains_ci_ascii(hay: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() {
         return true;
     }
-    let n = needle.len();
-    if n > hay.len() {
+    if needle.len() > hay.len() {
         return false;
     }
-
-    // Pre-fold the needle for comparison
-    let folded_needle: Vec<u8> = needle.iter().map(|&b| fold_ascii(b)).collect();
-
+    let first = needle[0];
+    let (lo, hi) = if first.is_ascii_alphabetic() {
+        (first | 32, first & !32)
+    } else {
+        (first, first)
+    };
     let mut pos = 0;
-    let last = hay.len() - n;
-
-    while pos <= last {
-        // Find next candidate by manually scanning (memchr can't do case-insensitive)
-        // We use a quick check: look for any byte whose folded value matches folded_needle[0]
-        let target = folded_needle[0];
-        let mut found = false;
-        let mut i = pos;
-        while i <= last {
-            if fold_ascii(hay[i]) == target {
-                pos = i;
-                found = true;
-                break;
-            }
-            i += 1;
+    while let Some(i) = memchr2(lo, hi, &hay[pos..]) {
+        let start = pos + i;
+        if start + needle.len() > hay.len() {
+            return false;
         }
-        if !found {
-            break;
-        }
-
-        // Verify the rest of the needle
-        let window = &hay[pos..pos + n];
-        if window
-            .iter()
-            .zip(&folded_needle)
-            .all(|(h, w)| fold_ascii(*h) == *w)
-        {
+        if hay[start..start + needle.len()].eq_ignore_ascii_case(needle) {
             return true;
         }
-        pos += 1;
+        pos = start + 1;
     }
     false
 }

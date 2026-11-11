@@ -2109,7 +2109,7 @@ impl App {
         cfg: Config,
         handle: tokio::runtime::Handle,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let theme = Theme::with_id(ThemeId::from_label(&cfg.theme).unwrap_or(ThemeId::Umbrella));
+        let theme = Theme::with_id(ThemeId::from_label(&cfg.theme).unwrap_or(ThemeId::Cyberpunk));
         let cwd = cfg.workspace.clone();
 
         let provider: Arc<dyn crate::agent::provider::AgentProvider> = match cfg.provider {
