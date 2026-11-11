@@ -445,6 +445,10 @@ pub fn model_context_limit(model: &str) -> usize {
     if m.contains("glm-4") {
         return 128_000;
     }
+    // glm-5.x and anything else Zhipu ships; 128k is the conservative floor.
+    if m.contains("glm") {
+        return 128_000;
+    }
     // OpenCode Console (opencode.ai/inference) ids that no other rule covers.
     if m.contains("big-pickle") || m.contains("beam-free") || m.contains("flint-40b") {
         return 200_000;
@@ -480,8 +484,10 @@ pub fn model_context_limit(model: &str) -> usize {
     if m.contains("10m") || m.contains("10000000") || m.contains("10485760") {
         return 10_000_000;
     }
-    // Default conservative estimate
-    8_192
+    // Default conservative estimate: 128k is the modern floor. The old 8k
+    // default made unknown models (z-ai/glm-5.3-flash, …) read as 999% full
+    // after a single long turn.
+    131_072
 }
 
 /// Reasoning effort forwarded to models that expose the `reasoning_effort` knob.
@@ -2030,6 +2036,8 @@ mod tests {
         assert_eq!(model_context_limit("llama-3.2-3b"), 128_000);
         assert_eq!(model_context_limit("llama-3.1-8b"), 128_000);
         assert_eq!(model_context_limit("llama-3-8b"), 8_192);
+        // glm-5.x: the Zhipu catch-all (the old fallback made this read 999%).
+        assert_eq!(model_context_limit("z-ai/glm-5.3-flash"), 128_000);
 
         // Mistral
         assert_eq!(model_context_limit("mistral-large-4"), 1_000_000);
@@ -2059,8 +2067,9 @@ mod tests {
         assert_eq!(model_context_limit("my-model-2m"), 2_000_000);
         assert_eq!(model_context_limit("my-model-10m"), 10_000_000);
 
-        // Unknown model gets default
-        assert_eq!(model_context_limit("unknown-model-xyz"), 8_192);
+        // Unknown model gets the 128k modern floor (was 8k, which made the
+        // header gauge read 999% on any unknown model after one long turn).
+        assert_eq!(model_context_limit("unknown-model-xyz"), 131_072);
     }
 
     #[test]
