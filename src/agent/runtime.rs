@@ -1136,6 +1136,22 @@ pub(crate) fn run_tool(
             let parsed: ReadDocumentArgs = serde_json::from_value(args)
                 .map_err(|e| format!("bad read_document arguments: {e}"))?;
             let path = parsed.path.clone();
+            // Image paths route to tesseract: one document door, two backends.
+            if crate::tools::image_tools::is_image_path(&path) {
+                let result = tools
+                    .images
+                    .ocr_image(crate::tools::image_tools::OcrImageArgs { path, lang: None })
+                    .map_err(|e| format!("read_document failed: {e}"))?;
+                let summary = format!(
+                    "ocr · {} · {} · {} chars{}",
+                    shorten(&result.path, 48),
+                    result.language,
+                    result.chars,
+                    if result.truncated { " (truncated)" } else { "" }
+                );
+                let payload = serde_json::to_string(&result).unwrap_or_default();
+                return Ok((payload, summary));
+            }
             let result = tools
                 .documents
                 .read_document(parsed)
@@ -1150,6 +1166,24 @@ pub(crate) fn run_tool(
                 } else {
                     "sections"
                 },
+                if result.truncated { " (truncated)" } else { "" }
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "ocr_image" => {
+            let parsed: crate::tools::image_tools::OcrImageArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad ocr_image arguments: {e}"))?;
+            let path = parsed.path.clone();
+            let result = tools
+                .images
+                .ocr_image(parsed)
+                .map_err(|e| format!("ocr_image failed: {e}"))?;
+            let summary = format!(
+                "ocr · {} · {} · {} chars{}",
+                shorten(&path, 48),
+                result.language,
+                result.chars,
                 if result.truncated { " (truncated)" } else { "" }
             );
             let payload = serde_json::to_string(&result).unwrap_or_default();
@@ -1802,6 +1836,13 @@ fn preview_args(call: &ToolCall) -> Option<String> {
                 .unwrap_or("document");
             Some(shorten(&format!("[{format}] {path}"), 120))
         }
+        "ocr_image" => {
+            let path = args.get("path").and_then(|v| v.as_str())?;
+            if path.trim().is_empty() {
+                return None;
+            }
+            Some(shorten(&format!("ocr [image] {path}"), 120))
+        }
         "propose_self_edit" => {
             // The rationale is the "why" a reviewer wants to see first; the
             // preview is built from arguments alone, like every other preview.
@@ -2402,7 +2443,7 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        let expected = 27
+        let expected = 28
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(filter_disabled_schemas(schemas, &[]).len(), expected);

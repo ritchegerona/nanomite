@@ -417,6 +417,10 @@ fn run_control(
         app.on_image_attached(result.clone());
         return Ok(());
     }
+    if let Control::OcrResult(result) = &control {
+        app.on_ocr_report(result.clone());
+        return Ok(());
+    }
     if let Control::ExportDone(result) = &control {
         app.on_export_done(result.clone());
         return Ok(());
@@ -441,6 +445,7 @@ fn run_control(
         Control::ResumeHint(_) => return Ok(()),
         Control::ForkSaved { .. } => return Ok(()),
         Control::ImageAttached(_) => return Ok(()),
+        Control::OcrResult(_) => return Ok(()),
         Control::ExportDone(_) => return Ok(()),
         Control::UpdateChecked(_) => return Ok(()),
         Control::OpenLink(_) => return Ok(()),
@@ -473,6 +478,7 @@ fn run_control(
         Control::ResumeHint(_) => {}
         Control::ForkSaved { .. } => {}
         Control::ImageAttached(_) => {}
+        Control::OcrResult(_) => {}
         Control::ExportDone(_) => {}
         Control::UpdateChecked(_) => {}
         Control::OpenLink(_) => {}

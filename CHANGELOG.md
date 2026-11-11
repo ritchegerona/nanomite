@@ -27,6 +27,16 @@ never listed as released.
   ships the manifest for future herdr versions that load third-party manifests
   (0.8.2 only loads built-in kinds; the hook is the authority today). Docs:
   `docs/HERDR.md`. implemented+tested.
+- **OCR via tesseract**: new `ocr_image` tool (catalog 35 → 36) recognizes
+  text in workspace images (png, jpg, jpeg, tif, bmp, pnm, webp) with
+  tesseract — binary discovered from `NANOMITE_TESSERACT` then the PATH,
+  language from the per-call `lang` arg or `NANOMITE_OCR_LANG` (default
+  `eng`), 120s hard timeout, output bounded to 16 KiB, workspace confinement
+  identical to `read_document`. `read_document` on an image path routes to
+  OCR automatically (one document door, two backends). New `/ocr <path>
+  [lang]` slash command (alt+d) runs the same code path locally and appends
+  the text to the transcript. implemented+tested (fake-binary unit tests +
+  live end-to-end: real tesseract recognized a rendered text image).
 
 ## [1.3.4] — 2026-11-09
 

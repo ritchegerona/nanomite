@@ -6,8 +6,8 @@ call the matching `ToolSet` group → return `(payload, summary)`. Every call
 runs on the blocking pool with a hard timeout; failures are returned to the
 model as errors, never panics.
 
-Status: the full **34-tool** inventory is **L3** (integrated + regression-tested,
-774-test suite) as of 2026-11-06. `src/tools/catalog.rs` is the single
+Status: the full **36-tool** inventory is **L3** (integrated + regression-tested,
+808-test suite) as of 2026-11-11. `src/tools/catalog.rs` is the single
 inventory: `ToolSpec { name, description, category }`, with tests asserting the
 catalog matches the exposed schema list exactly — add a tool to one and the
 test fails instead of the two drifting apart.
@@ -21,7 +21,8 @@ test fails instead of the two drifting apart.
 | `write_file` | Files | write/append | same cap |
 | `edit_file` | Files | string replace (first/all) | same cap |
 | `search` | Files | recursive case-insensitive grep | hit caps |
-| `read_document` | Document | pdf/docx/odt/xlsx/ods/rtf/csv/md/json → bounded text | read-only, workspace-confined, size/section caps |
+| `read_document` | Document | pdf/docx/odt/xlsx/ods/rtf/csv/md/json → bounded text; image paths (png/jpg/tif/bmp/webp) route to OCR | read-only, workspace-confined, size/section caps |
+| `ocr_image` | Document | workspace image → bounded text via tesseract | `NANOMITE_TESSERACT`/PATH discovery, `lang` arg or `NANOMITE_OCR_LANG`, 120s timeout, 16 KiB text cap |
 | `run_command` | Exec | `sh -c` in workspace | timeout, output cap, user permissions |
 | `ssh_run` | Exec | remote command | key-only, `BatchMode`, timeout |
 | `web_fetch` | Web | URL → readable text | http(s) only, size cap, HTML stripped |

@@ -20,6 +20,7 @@ pub enum Command {
     Init,
     Models,
     New,
+    Ocr,
     Reasoning,
     Refresh,
     Redo,
@@ -211,6 +212,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &["/img"],
         hint: "attach an image to the next message - /image <path> (alt+v)",
         kind: Command::Image,
+    },
+    Entry {
+        command: "/ocr",
+        aliases: &[],
+        hint: "read text from an image with tesseract - /ocr <path> [lang] (alt+d)",
+        kind: Command::Ocr,
     },
     // -- agent features --------------------------------------------------------
     Entry {

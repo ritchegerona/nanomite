@@ -90,10 +90,13 @@ broken.
   reply parsing for the side-call the app fires on a finished turn; pure logic,
   no channel), `testdouble.rs` (`#[cfg(test)]` only). `trivial.rs` is **deleted**; do
   not restore it.
-- `src/tools/` — `catalog.rs` (the single 34-tool inventory as
+- `src/tools/` — `catalog.rs` (the single 36-tool inventory as
   `ToolSpec{name, description, category}`; drives schemas, the `/tools`
   overlay and the dispatch refusal — tests pin catalog and schemas together),
-  `file_tools`, `document_tools` (`read_document` over `extract/`), `exec_tools`
+  `file_tools`, `document_tools` (`read_document` over `extract/`; image
+  paths route to OCR), `image_tools` (`ocr_image` — tesseract via
+  `NANOMITE_TESSERACT`/PATH, `lang` arg or `NANOMITE_OCR_LANG`),
+  `exec_tools`
   (`run_command` = `sh -c`, `ssh_run` = key-only + `BatchMode=yes`), `web_tools`,
   `browser_tools` (`browse`, `browse_screenshot` — headless Chromium via
   CLI, discovered from `NANOMITE_BROWSER` or PATH),
@@ -137,6 +140,12 @@ broken.
   Scientist, Critic + Chair), `engine.rs` (`BoardEngine::convene` = 2 parallel
   discussion rounds then chair synthesis, cancel-aware), `store.rs` (SQLite
   `board_messages`, verbatim). UI: `/panel <topic>` overlay.
+- `src/herdr.rs` — Herdr multiplexer integration: when `HERDR_ENV=1`, a
+  fire-and-forget thread reports lifecycle state (working/blocked/idle) over
+  Herdr's integration socket (`pane.report_agent`) and the OSC window title
+  tracks the same states. Env captured at spawn (never re-probed); `[herdr]`
+  config section + `NANOMITE_HERDR=0` kill-switch; in lib tests the link is
+  inert so App tests never touch a live socket. Docs: `docs/HERDR.md`.
 - `src/improve/` — self-improvement: `proposal.rs` (validation; the hard
   `SOURCE_DENYLIST` was removed by owner decision 2026-10-30), `diff.rs`
   (unified diff artifacts), `runner.rs`

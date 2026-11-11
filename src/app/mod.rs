@@ -1251,6 +1251,30 @@ fn is_image_path(path: &str) -> bool {
         })
 }
 
+/// Runs `/ocr` on the blocking pool: same tool code the agent dispatches
+/// (`ImageTools::ocr_image`), so workspace confinement and the binary
+/// discovery are identical.
+fn run_ocr_blocking(
+    cwd: &std::path::Path,
+    path: &str,
+    lang: Option<String>,
+) -> Result<String, String> {
+    let tools = crate::tools::image_tools::ImageTools::new(cwd);
+    let result = tools
+        .ocr_image(crate::tools::image_tools::OcrImageArgs {
+            path: path.to_string(),
+            lang,
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(format!(
+        "✓ ocr {} · {} · {} chars{}",
+        result.path,
+        result.language,
+        result.chars,
+        if result.truncated { " (truncated)" } else { "" }
+    ))
+}
+
 fn build_image_attachment(arg: &str, cwd: &std::path::Path) -> Result<PendingImage, String> {
     let path = arg.trim();
     if path.is_empty() {
@@ -1643,6 +1667,9 @@ pub enum Control {
     /// `/image` finished reading + encoding an attachment on the blocking
     /// pool; `Err` carries the refusal reason for the toast.
     ImageAttached(Result<PendingImage, String>),
+    /// `/ocr` finished recognizing an image on the blocking pool; `Err`
+    /// carries the failure reason.
+    OcrResult(Result<String, String>),
     /// A clicked chat link; the main loop hands it to the system browser.
     OpenLink(String),
     /// `/export` (markdown or HTML) finished writing on the blocking pool.
@@ -3525,6 +3552,7 @@ impl App {
             Command::Image => {
                 self.attach_image(args);
             }
+            Command::Ocr => self.run_ocr(args),
             Command::Redo => self.redo(),
             Command::Sessions => self.open_sessions(),
             Command::Share => self.share_session(),
@@ -4246,6 +4274,40 @@ impl App {
         }
     }
 
+    /// `/ocr <path> [lang]` - recognize text in a workspace image with
+    /// tesseract and append it to the transcript. The blocking work runs on
+    /// the blocking pool (invariant 1); the UI thread only toasts and applies
+    /// the result. Same code path as the `ocr_image` tool.
+    fn run_ocr(&mut self, arg: &str) {
+        let trimmed = arg.trim();
+        let (path, lang) = match trimmed.split_once(char::is_whitespace) {
+            Some((p, l)) => (p.trim(), Some(l.trim().to_string())),
+            None => (trimmed, None),
+        };
+        if path.is_empty() {
+            self.toast("usage: /ocr <path> [lang]");
+            self.mark_dirty();
+            return;
+        }
+        if self.control_tx.is_some() {
+            let path = path.to_string();
+            let cwd = self.cwd.clone();
+            let control = self.control_tx.clone();
+            self.handle.spawn_blocking(move || {
+                let result = run_ocr_blocking(&cwd, &path, lang);
+                if let Some(control) = control {
+                    let _ = control.send(Control::OcrResult(result));
+                }
+            });
+            self.toast("running ocr…");
+        } else {
+            // Headless/test path: no control channel to deliver the result,
+            // so compute and apply it right here.
+            let result = run_ocr_blocking(&self.cwd, path, lang);
+            self.on_ocr_report(result);
+        }
+    }
+
     /// Delivers pasted text to the focused overlay's text field, if it has
     /// one. Returns true when the paste was consumed there (the chat composer
     /// stays untouched). The overlay is taken out and put back so the borrow
@@ -4421,6 +4483,23 @@ impl App {
                 ));
             }
             Err(reason) => self.toast(reason),
+        }
+        self.mark_dirty();
+    }
+
+    /// Delivers the `/ocr` result to the transcript: the recognized text as a
+    /// system entry, the failure reason as toast + entry.
+    pub fn on_ocr_report(&mut self, result: Result<String, String>) {
+        match result {
+            Ok(text) => {
+                self.entries.push(Entry::new(EntryRole::System, text));
+                self.toast("ocr done");
+            }
+            Err(err) => {
+                self.entries
+                    .push(Entry::new(EntryRole::System, format!("✗ {err}")));
+                self.toast(err);
+            }
         }
         self.mark_dirty();
     }
@@ -7742,6 +7821,7 @@ impl App {
             KeyCode::Char('k') if alt => self.run_command(Command::Thinking, ""),
             KeyCode::Char('z') if alt => self.run_command(Command::Hud, ""),
             KeyCode::Char('o') if alt => self.run_command(Command::Doctor, ""),
+            KeyCode::Char('d') if alt => self.run_command(Command::Ocr, ""),
             KeyCode::Char('j') if alt => self.run_command(Command::Export, ""),
             KeyCode::Char('S') if alt => self.run_command(Command::Share, ""),
             KeyCode::Char('X') if alt => self.run_command(Command::Unshare, ""),

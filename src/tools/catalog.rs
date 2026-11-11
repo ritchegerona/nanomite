@@ -68,7 +68,12 @@ impl ToolSet {
             },
             ToolSpec {
                 name: "read_document",
-                description: "Extract bounded text and structure from a workspace document (pdf, docx, xlsx, ods, odt, rtf, csv and the text family).",
+                description: "Extract bounded text and structure from a workspace document (pdf, docx, xlsx, ods, odt, rtf, csv and the text family). Image paths (png, jpg, tif, bmp, webp) are recognized with OCR via tesseract.",
+                category: Document,
+            },
+            ToolSpec {
+                name: "ocr_image",
+                description: "Recognize text in a workspace image (png, jpg, tif, bmp, webp) with tesseract OCR and return the bounded text.",
                 category: Document,
             },
             ToolSpec {
@@ -247,7 +252,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate tool names in catalog");
-        let expected = 35usize
+        let expected = 36usize
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(

@@ -5,6 +5,7 @@ pub mod exec_tools;
 pub mod external_tools;
 pub mod file_tools;
 pub mod git_tools;
+pub mod image_tools;
 pub mod improve_tools;
 pub mod index_tools;
 pub mod memory_tools;
@@ -30,6 +31,9 @@ pub struct ToolSet {
     /// Document extraction (pdf, docx, xlsx, odt, rtf, csv, …). Always
     /// present: the registry is built in-process and needs no engine.
     pub documents: crate::tools::document_tools::DocumentTools,
+    /// OCR over tesseract (image → text). Always present; the tool fails
+    /// with a clean message when no tesseract binary is installed.
+    pub images: crate::tools::image_tools::ImageTools,
     /// Persistent memory. `None` when the engine could not be opened (e.g. a
     /// read-only config directory): the agent keeps working, without memory.
     pub memory: Option<Arc<MemoryEngine>>,
@@ -66,6 +70,7 @@ impl ToolSet {
                 workspace.clone(),
                 max_file_bytes,
             ),
+            images: crate::tools::image_tools::ImageTools::new(workspace.clone()),
             memory: None,
             improve: None,
             git: crate::tools::git_tools::GitTools::new(workspace.clone()),

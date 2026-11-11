@@ -590,11 +590,24 @@ pub fn tool_schemas() -> Vec<Tool> {
         ),
         Tool::new(
             "read_document",
-            "Extract text from a document in the workspace (pdf, docx, xlsx, odt, ods, rtf, csv, plus text/markdown/json/yaml/xml/html). Returns the detected format, section count and bounded text.",
+            "Extract text from a document in the workspace (pdf, docx, xlsx, odt, ods, rtf, csv, plus text/markdown/json/yaml/xml/html). Image files (png, jpg, tif, bmp, webp) are recognized with OCR via tesseract. Returns the detected format, section count and bounded text.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Workspace-relative document path" }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "ocr_image",
+            "Recognize text in a workspace image (png, jpg, jpeg, tif, bmp, pnm, webp) with tesseract OCR and return the bounded text.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Workspace-relative image path" },
+                    "lang": { "type": "string", "description": "Tesseract language pack(s), e.g. eng, deu+eng (default: NANOMITE_OCR_LANG or eng)" }
                 },
                 "required": ["path"],
                 "additionalProperties": false
