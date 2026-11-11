@@ -2128,8 +2128,11 @@ pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
     };
     let width = (area.width * w_pct / 100).clamp(40.min(area.width), 100.min(area.width));
     let height = (content_rows + 2).clamp(7.min(area.height), max_h.min(area.height));
+    // Centered in the terminal on both axes: horizontally centered so the box
+    // floats mid-window on wide terminals instead of hugging the left edge,
+    // vertically centered so it never sits over the composer.
     Rect {
-        x: area.x,
+        x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 2,
         width,
         height,
