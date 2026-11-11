@@ -151,6 +151,12 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
     if right_width > right_budget {
         right.spans = truncate_spans_head(right.spans, right_width - right_budget);
     }
+    // Push the status segment flush to the right edge: pad the gap between
+    // the workspace path and the model/ctx block so the row ends at `width`.
+    let gap = width
+        .saturating_sub(left_width + right_width.min(right_budget) + 1)
+        .max(1);
+    spans.push(Span::raw(" ".repeat(gap)));
     spans.extend(right.spans);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
