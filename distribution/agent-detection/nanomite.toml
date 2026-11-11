@@ -1,0 +1,66 @@
+# Herdr screen-detection manifest for nanomite.
+#
+# Herdr 0.8.2 only loads its built-in agent kinds and skips unknown ones, so
+# this file is currently documentation-as-data: the authoritative lifecycle
+# reporting is the hook in src/herdr.rs (`pane.report_agent` over the
+# integration socket), which Herdr accepts for any agent id. Keep this manifest
+# updated anyway — future herdr versions that load third-party manifests from
+# this file's install location (`~/.local/state/herdr/agent-detection/`) pick
+# up screen detection with no code change.
+#
+# Install (when a herdr version supports third-party manifests):
+#   cp distribution/agent-detection/nanomite.toml \
+#      ~/.local/state/herdr/agent-detection/nanomite.toml
+
+id = "nanomite"
+version = "2026.11.11.1"
+min_engine_version = 1
+updated_at = "2026-11-11T00:00:00Z"
+aliases = ["nanomite-tui"]
+
+# OSC title: the app keeps the window title in sync with lifecycle state
+# (src/herdr.rs::set_osc_title). Priority above the line rules so a title
+# transition always wins over stale screen text.
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+visible_working = true
+contains = ["nanomite — working"]
+
+[[rules]]
+id = "osc_title_blocked"
+state = "blocked"
+priority = 1200
+region = "osc_title"
+visible_blocker = true
+contains = ["nanomite — approval needed"]
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 1000
+region = "osc_title"
+visible_idle = true
+contains = ["nanomite"]
+
+# Composer status line: while working, the bottom status line reads
+# "esc interrupts · esc esc force stop · type to queue the next turn".
+[[rules]]
+id = "composer_working"
+state = "working"
+priority = 300
+region = "whole_recent"
+visible_working = true
+line_regex = ['\bworking\b.*\besc esc force stop\b', 'the agent is working - type to queue']
+
+# Blocked: the Confirmer renders
+# "◐ run_command needs approval - y/a allow, n/d deny" on the status line.
+[[rules]]
+id = "composer_blocked"
+state = "blocked"
+priority = 400
+region = "bottom_non_empty_lines(3)"
+visible_blocker = true
+contains = ["needs approval - y/a allow, n/d deny"]

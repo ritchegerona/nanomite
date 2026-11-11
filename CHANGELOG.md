@@ -4,6 +4,30 @@ Every entry describes a verified change. Labels: implemented+tested,
 implemented unverified, planned, experimental, unsupported. Planned work is
 never listed as released.
 
+## [1.3.5] — 2026-11-11
+
+### Added
+
+- **Herdr integration**: when nanomite runs inside a Herdr pane
+  (`HERDR_ENV=1`), `src/herdr.rs` reports lifecycle state — `working` on turn
+  start, `blocked` while the Confirmer waits for `y/a/n/d`, `idle` when the
+  turn finishes/interrupts/fails — over Herdr's integration socket
+  (`pane.report_agent`), so `herdr agent list` and the sidebar show a
+  first-class `nanomite` agent. Fire-and-forget writer thread; the UI thread
+  never touches the socket. implemented+tested (protocol verified live against
+  herdr 0.8.2; socket round-trip covered by unit tests).
+- **OSC window title**: the pane title tracks the same states (`nanomite`,
+  `nanomite — working`, `nanomite — approval needed`) so screen detection and
+  other multiplexers see the state too. Herdr-only; bare terminals are never
+  touched. implemented+tested.
+- **`[herdr]` config section**: `enabled` (default true), `NANOMITE_HERDR`
+  env override as the kill-switch. Without Herdr's env vars nothing happens.
+  implemented+tested.
+- **Screen-detection manifest**: `distribution/agent-detection/nanomite.toml`
+  ships the manifest for future herdr versions that load third-party manifests
+  (0.8.2 only loads built-in kinds; the hook is the authority today). Docs:
+  `docs/HERDR.md`. implemented+tested.
+
 ## [1.3.4] — 2026-11-09
 
 ### Added

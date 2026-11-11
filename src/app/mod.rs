@@ -1960,6 +1960,12 @@ pub struct App {
     /// can be diagnosed.
     pub debug_drops: bool,
     session_started: Instant,
+    /// Herdr integration: reports lifecycle state (idle/working/blocked) when
+    /// running inside a Herdr pane. A no-op link when the env is absent.
+    herdr: crate::herdr::HerdrLink,
+    /// Stable id reported as `agent_session_id` so Herdr can route prompts to
+    /// this session; derived once at startup.
+    herdr_session_id: String,
     undo_stack: Vec<UndoStep>,
     control_tx: Option<UnboundedSender<Control>>,
 
@@ -2208,6 +2214,14 @@ impl App {
             show_thinking: true,
             pending_editor: false,
             session_started: Instant::now(),
+            herdr: crate::herdr::HerdrLink::spawn(cfg.herdr.enabled),
+            herdr_session_id: {
+                let now = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                format!("nanomite-{now}")
+            },
             undo_stack: Vec::new(),
             control_tx: None,
             runtime,
@@ -2620,6 +2634,15 @@ impl App {
             // in flight; a replaced one (interrupted turn) fails its reply
             // channel and the call is refused.
             self.pending_confirm = Some(request);
+            // The turn is parked on this call; tell Herdr the pane is blocked
+            // and needs the operator's eyes before work continues.
+            self.report_herdr(
+                crate::herdr::AgentState::Blocked,
+                Some(&format!(
+                    "{} needs approval",
+                    self.pending_confirm.as_ref().expect("just set").tool
+                )),
+            );
         }
         if changed {
             self.mark_dirty();
@@ -2997,6 +3020,7 @@ impl App {
         self.last_esc = None;
         self.turn_started = None;
         self.view.scroll_from_bottom = 0;
+        self.report_herdr(crate::herdr::AgentState::Idle, None);
         self.mark_dirty();
         // Drain the prompt queue: the next queued prompt starts immediately
         // as a fresh turn, exactly as if the user had submitted it now.
@@ -3134,6 +3158,19 @@ impl App {
         self.handle.spawn_blocking(move || {
             let _ = crate::hooks::run_hooks(&hooks, &event, &workspace);
         });
+    }
+
+    /// Reports a lifecycle state to Herdr (when running inside a Herdr pane)
+    /// and updates the OSC window title. Both are best-effort, never block
+    /// and never error: integration failures are advisory, exactly like hooks.
+    /// Inactive when not under Herdr, so bare terminals never see title writes.
+    fn report_herdr(&self, state: crate::herdr::AgentState, message: Option<&str>) {
+        if !self.herdr.is_live() {
+            return;
+        }
+        self.herdr
+            .report(state, message, Some(&self.herdr_session_id));
+        crate::herdr::set_osc_title(state);
     }
 
     /// Bounds the conversation window, dropping the oldest whole turn at a
@@ -3448,6 +3485,7 @@ impl App {
         self.turn_task = Some(self.handle.spawn(async move {
             runtime.run(prompt, &history, cancel, tx).await;
         }));
+        self.report_herdr(crate::herdr::AgentState::Working, None);
         self.mark_dirty();
     }
 
@@ -7000,6 +7038,9 @@ impl App {
             }
         }
         let _ = request.respond.send(allow);
+        // The turn resumes the moment the answer lands (or fails with
+        // `user_declined`, which finish_turn reports as idle).
+        self.report_herdr(crate::herdr::AgentState::Working, None);
         self.mark_dirty();
     }
 

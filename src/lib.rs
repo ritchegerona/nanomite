@@ -11,6 +11,7 @@ pub mod commands;
 pub mod config;
 pub mod extract;
 pub mod hacker;
+pub mod herdr;
 pub mod hooks;
 pub mod improve;
 pub mod learn;

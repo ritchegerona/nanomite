@@ -576,6 +576,24 @@ impl Default for HackerConfig {
     }
 }
 
+/// Herdr terminal-workspace-manager integration (`[herdr]` section).
+///
+/// When nanomite runs inside a Herdr pane (`HERDR_ENV=1`), it reports its
+/// lifecycle (idle / working / blocked) to Herdr over the integration socket
+/// so `herdr agent list` and the sidebar show a first-class nanomite agent.
+/// Detection is automatic; `enabled = false` kills the link for users who
+/// don't want it. `NANOMITE_HERDR` overrides the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HerdrConfig {
+    pub enabled: bool,
+}
+
+impl Default for HerdrConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 /// Errors produced when validating a `HackerConfig`.
 #[derive(Debug)]
 pub enum HackerConfigError {
@@ -703,6 +721,8 @@ pub struct Config {
     pub prompt_file: Option<PathBuf>,
     /// HACKER MODE settings (`[hacker]` section).
     pub hacker: HackerConfig,
+    /// Herdr multiplexer integration (`[herdr]` section).
+    pub herdr: HerdrConfig,
     /// Run a learning session automatically once per calendar day. Off by
     /// default: a daily session spends model tokens, so it is an explicit
     /// opt-in. Persisted; `NANOMITE_LEARN_DAILY` overrides.
@@ -748,6 +768,8 @@ struct Stored {
     hacker_audit: Option<bool>,
     hacker_store: Option<bool>,
     hacker_allowed_modules: Option<Vec<String>>,
+    // `[herdr]` section.
+    herdr_enabled: Option<bool>,
     // `[learn]` section.
     learning_daily: Option<bool>,
     learning_topic: Option<String>,
@@ -812,6 +834,11 @@ fn parse_stored(text: &str) -> Stored {
                 "topic" => stored.learning_topic = Some(value),
                 _ => {}
             },
+            "herdr" => {
+                if key == "enabled" {
+                    stored.herdr_enabled = parse_bool_opt(&value);
+                }
+            }
             "" => match key {
                 "provider" => stored.provider = Some(value),
                 "base_url" => stored.base_url = Some(value),
@@ -986,6 +1013,10 @@ fn stored_text(cfg: &Config) -> String {
             lines.push(format!("allowed_modules = {}", quote(&modules.join(","))));
         }
     }
+    lines.push(String::new());
+    // Herdr integration. Auto-detected inside Herdr; `enabled = false` opts out.
+    lines.push("[herdr]".to_string());
+    lines.push(format!("enabled = {}", cfg.herdr.enabled));
     lines.push(String::new());
     // Auto-update behavior.
     lines.push(format!("autoupdate = {}", quote(&cfg.autoupdate)));
@@ -1248,6 +1279,19 @@ impl Config {
         // the file for capability token and allowed modules.
         let hacker = hacker;
 
+        // Herdr integration: auto-detected when running inside a Herdr pane;
+        // the file/env knob only kills the link.
+        let herdr = HerdrConfig {
+            enabled: if use_env {
+                match first_env_one("NANOMITE_HERDR") {
+                    Some(v) => parse_bool(&v),
+                    None => stored.herdr_enabled.unwrap_or(true),
+                }
+            } else {
+                stored.herdr_enabled.unwrap_or(true)
+            },
+        };
+
         // Custom prompt file: the environment wins over the persisted path, and the
         // default location is always resolved so callers can report it.
         let prompt_file = (if use_env {
@@ -1367,6 +1411,7 @@ impl Config {
                 stored.offline.unwrap_or(false)
             },
             hacker,
+            herdr,
         }
     }
 
