@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::sync::Mutex;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -206,30 +207,25 @@ impl FileTools {
 
     pub fn search(&self, args: SearchArgs) -> Result<SearchResult, Box<dyn Error + Send + Sync>> {
         let start = self.resolve(args.path.as_deref())?;
-        let mut hits = Vec::with_capacity(MAX_HITS);
-        let mut files_scanned = 0usize;
-        let mut truncated = false;
         let needle = args.query.to_ascii_lowercase();
         let needle_bytes = needle.as_bytes();
-        let mut stack = vec![(start, 0usize)];
-        let mut small_buf: Vec<u8> = Vec::new();
 
-        while let Some((dir, depth)) = stack.pop() {
-            if files_scanned >= MAX_SCAN_FILES || hits.len() >= MAX_HITS {
-                truncated = true;
-                break;
-            }
+        // Phase 1 (single-threaded): walk the tree, collect candidate paths.
+        // Directory traversal is syscall-bound and benefits little from
+        // threads; the expensive per-file scan below does.
+        let mut stack = vec![(start, 0usize)];
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        let mut walk_truncated = false;
+        'outer: while let Some((dir, depth)) = stack.pop() {
             let Ok(read_dir) = fs::read_dir(&dir) else {
                 continue;
             };
             let mut children: Vec<_> = read_dir.flatten().collect();
             children.sort_by_key(|e| e.file_name());
-
             for entry in children {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let Ok(ft) = entry.file_type() else { continue };
-
                 if ft.is_dir() {
                     if depth < 6 && !is_noise_dir(&name) {
                         stack.push((path, depth + 1));
@@ -239,153 +235,70 @@ impl FileTools {
                 if is_noise_file(&name) {
                     continue;
                 }
-                files_scanned += 1;
-                if files_scanned > MAX_SCAN_FILES {
-                    truncated = true;
-                    break;
-                }
-
-                // Read straight into a buffer reused across files, bounded
-                // with `take` so oversized files are rejected without a
-                // separate stat: one open + one read beats open + fstat +
-                // munmap, and the warm buffer avoids per-file allocation.
-                small_buf.clear();
-                let too_big = {
-                    let Ok(mut file) = File::open(&path) else {
-                        continue;
-                    };
-                    let Ok(read_len) = (&mut file)
-                        .take(self.max_file_bytes as u64 + 1)
-                        .read_to_end(&mut small_buf)
-                    else {
-                        continue;
-                    };
-                    read_len > self.max_file_bytes
-                };
-                if too_big {
-                    continue;
-                }
-                let bytes = &small_buf[..];
-
-                if bytes.is_empty() || looks_binary(bytes) {
-                    continue;
-                }
-
-                // Prefilter: candidate search on raw bytes without decoding.
-                // Sound for any needle: the first byte's two ASCII case
-                // variants are located with SIMD memchr2 (or memchr when they
-                // coincide) and each candidate window is verified with
-                // `eq_ignore_ascii_case`. Non-ASCII bytes never match an ASCII
-                // case pair, so multibyte UTF-8 is skipped safely, and a miss
-                // exits before the lossy decode + line walk entirely.
-                if !needle_bytes.is_empty() && needle.is_ascii() {
-                    let first = needle_bytes[0];
-                    let (lo, hi) = if first.is_ascii_alphabetic() {
-                        (first | 32, first & !32)
-                    } else {
-                        (first, first)
-                    };
-                    let n = needle_bytes.len();
-                    let mut found = false;
-                    let mut pos = 0;
-                    while let Some(i) = memchr2(lo, hi, &bytes[pos..]) {
-                        let start = pos + i;
-                        if start + n > bytes.len() {
-                            break;
-                        }
-                        if bytes[start..start + n].eq_ignore_ascii_case(needle_bytes) {
-                            found = true;
-                            break;
-                        }
-                        pos = start + 1;
-                    }
-                    if !found {
-                        continue;
-                    }
-                } else if !needle_bytes.is_empty() {
-                    // Non-ASCII needle: fold to lowercase once; a raw-byte
-                    // scan for the lowercase form is a sound candidate filter
-                    // because any case-variant match must contain the folded
-                    // code units as a byte subsequence at some offset.
-                    let mut found = false;
-                    let mut pos = 0;
-                    let low = needle.as_bytes();
-                    while let Some(i) = memchr(low[0], &bytes[pos..]) {
-                        let start = pos + i;
-                        if start + low.len() <= bytes.len()
-                            && bytes[start..start + low.len()] == *low
-                        {
-                            found = true;
-                            break;
-                        }
-                        pos = start + 1;
-                    }
-                    if !found {
-                        continue;
-                    }
-                }
-
-                // Only decode if we found a candidate
-                let text = String::from_utf8_lossy(bytes);
-                let rel = self.relative(&path);
-
-                // Line boundaries come from the DECODED string, never from the
-                // raw bytes: lossy decoding expands invalid bytes into 3-byte
-                // replacement characters, so raw-byte offsets drift and a
-                // `&text[..]` slice can land mid-character (the abort this
-                // fixes). '\n' is ASCII and cannot appear inside a multi-byte
-                // sequence, so memchr on the decoded bytes finds the same
-                // boundaries safely.
-                let decoded = text.as_bytes();
-                let mut line_start = 0usize;
-                let mut line_no = 1usize;
-                let mut search_pos = 0usize;
-
-                while search_pos < decoded.len() {
-                    // Find next newline
-                    let line_end = memchr(b'\n', &decoded[search_pos..])
-                        .map(|i| search_pos + i)
-                        .unwrap_or(decoded.len());
-
-                    let line_str = &text[line_start..line_end];
-                    let matched = if !needle_bytes.is_empty() && line_str.is_ascii() {
-                        contains_ci_ascii(line_str.as_bytes(), needle_bytes)
-                    } else {
-                        line_str.to_lowercase().contains(&needle)
-                    };
-
-                    if matched {
-                        hits.push(SearchHit {
-                            path: rel.clone(),
-                            line: line_no,
-                            text: line_str.trim_end().chars().take(200).collect(),
-                        });
-                        if hits.len() >= MAX_HITS {
-                            truncated = true;
-                            break;
-                        }
-                    }
-
-                    line_start = line_end + 1;
-                    search_pos = line_start;
-                    line_no += 1
-                }
-
-                if hits.len() >= MAX_HITS {
-                    truncated = true;
-                    break;
+                candidates.push(path);
+                if candidates.len() >= MAX_SCAN_FILES {
+                    walk_truncated = true;
+                    break 'outer;
                 }
             }
         }
 
+        // Phase 2: scan files in parallel with scoped threads (no deps).
+        // Each thread gets its own reusable buffer; per-thread local hit
+        // vectors are merged at the end so the mutex is touched once per
+        // thread. Ordering is restored by the final sort + truncate.
+        let hits: Mutex<Vec<SearchHit>> = Mutex::new(Vec::new());
+        let needle_ref = &needle;
+        let needle_bytes_ref = &needle_bytes;
+        let root_ref = &self.root;
+        let max_bytes = self.max_file_bytes;
+        std::thread::scope(|scope| {
+            let hits_ref = &hits;
+            let threads = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .min(8);
+            let chunk = candidates.len().div_ceil(threads);
+            if chunk == 0 {
+                return;
+            }
+            for group in candidates.chunks(chunk) {
+                scope.spawn(move || {
+                    let mut local: Vec<SearchHit> = Vec::new();
+                    let mut buf: Vec<u8> = Vec::new();
+                    for path in group {
+                        scan_file(
+                            path,
+                            root_ref,
+                            max_bytes,
+                            needle_ref,
+                            needle_bytes_ref,
+                            &mut buf,
+                            &mut local,
+                            MAX_HITS,
+                        );
+                        if local.len() >= MAX_HITS {
+                            break; // per-thread safety cap; union still >= MAX_HITS
+                        }
+                    }
+                    if !local.is_empty() {
+                        let mut all = hits_ref.lock().unwrap_or_else(|e| e.into_inner());
+                        all.extend(local);
+                    }
+                });
+            }
+        });
+
+        let mut hits = hits.into_inner()?;
         hits.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
+        let hits_overflow = hits.len() > MAX_HITS;
+        hits.truncate(MAX_HITS);
         Ok(SearchResult {
             hits,
-            files_scanned,
-            truncated,
+            files_scanned: candidates.len(),
+            truncated: walk_truncated || hits_overflow,
         })
     }
-
     pub fn write_file(
         &self,
         args: WriteFileArgs,
@@ -492,6 +405,146 @@ fn canonicalize_deepest(path: &Path) -> PathBuf {
         };
         tail.push(name);
         cur = parent;
+    }
+}
+
+/// Scans one file for `needle` (case-insensitive ASCII fast path, Unicode
+/// fallback), appending hits to `out`. Reads into the caller's reusable
+/// buffer; returns early on unreadable/oversized/binary files. Stops scanning
+/// lines once `out` reaches `cap`.
+#[allow(clippy::too_many_arguments)]
+fn scan_file(
+    path: &Path,
+    root: &Path,
+    max_file_bytes: usize,
+    needle: &str,
+    needle_bytes: &[u8],
+    buf: &mut Vec<u8>,
+    out: &mut Vec<SearchHit>,
+    cap: usize,
+) {
+    if out.len() >= cap {
+        return;
+    }
+    // Read straight into a buffer reused across files, bounded with `take`
+    // so oversized files are rejected without a separate stat: one open + one
+    // read beats open + fstat + munmap, and the warm buffer avoids per-file
+    // allocation.
+    buf.clear();
+    let too_big = {
+        let Ok(mut file) = File::open(path) else { return };
+        let Ok(read_len) = (&mut file)
+            .take(max_file_bytes as u64 + 1)
+            .read_to_end(buf)
+        else {
+            return;
+        };
+        read_len > max_file_bytes
+    };
+    if too_big {
+        return;
+    }
+    let bytes = &buf[..];
+    if bytes.is_empty() || looks_binary(bytes) {
+        return;
+    }
+
+    // Prefilter: candidate search on raw bytes without decoding.
+    // Sound for any needle: the first byte's two ASCII case variants are
+    // located with SIMD memchr2 (or memchr when they coincide) and each
+    // candidate window is verified with `eq_ignore_ascii_case`. Non-ASCII
+    // bytes never match an ASCII case pair, so multibyte UTF-8 is skipped
+    // safely, and a miss exits before the lossy decode + line walk entirely.
+    if !needle_bytes.is_empty() && needle.is_ascii() {
+        let first = needle_bytes[0];
+        let (lo, hi) = if first.is_ascii_alphabetic() {
+            (first | 32, first & !32)
+        } else {
+            (first, first)
+        };
+        let n = needle_bytes.len();
+        let mut found = false;
+        let mut pos = 0;
+        while let Some(i) = memchr2(lo, hi, &bytes[pos..]) {
+            let start = pos + i;
+            if start + n > bytes.len() {
+                break;
+            }
+            if bytes[start..start + n].eq_ignore_ascii_case(needle_bytes) {
+                found = true;
+                break;
+            }
+            pos = start + 1;
+        }
+        if !found {
+            return;
+        }
+    } else if !needle_bytes.is_empty() {
+        // Non-ASCII needle: fold to lowercase once; a raw-byte scan for the
+        // lowercase form is a sound candidate filter because any case-variant
+        // match must contain the folded code units as a byte subsequence at
+        // some offset.
+        let mut found = false;
+        let mut pos = 0;
+        let low = needle.as_bytes();
+        while let Some(i) = memchr(low[0], &bytes[pos..]) {
+            let start = pos + i;
+            if start + low.len() <= bytes.len() && bytes[start..start + low.len()] == *low {
+                found = true;
+                break;
+            }
+            pos = start + 1;
+        }
+        if !found {
+            return;
+        }
+    }
+
+    // Only decode if we found a candidate
+    let text = String::from_utf8_lossy(bytes);
+    let rel = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    // Line boundaries come from the DECODED string, never from the raw bytes:
+    // lossy decoding expands invalid bytes into 3-byte replacement
+    // characters, so raw-byte offsets drift and a `&text[..]` slice can land
+    // mid-character. '\n' is ASCII and cannot appear inside a multi-byte
+    // sequence, so memchr on the decoded bytes finds the same boundaries
+    // safely.
+    let decoded = text.as_bytes();
+    let mut line_start = 0usize;
+    let mut line_no = 1usize;
+    let mut search_pos = 0usize;
+
+    while search_pos < decoded.len() {
+        let line_end = memchr(b'\n', &decoded[search_pos..])
+            .map(|i| search_pos + i)
+            .unwrap_or(decoded.len());
+
+        let line_str = &text[line_start..line_end];
+        let matched = if !needle_bytes.is_empty() && line_str.is_ascii() {
+            contains_ci_ascii(line_str.as_bytes(), needle_bytes)
+        } else {
+            line_str.to_lowercase().contains(needle)
+        };
+
+        if matched {
+            out.push(SearchHit {
+                path: rel.clone(),
+                line: line_no,
+                text: line_str.trim_end().chars().take(200).collect(),
+            });
+            if out.len() >= cap {
+                return;
+            }
+        }
+
+        line_start = line_end + 1;
+        search_pos = line_start;
+        line_no += 1;
     }
 }
 
