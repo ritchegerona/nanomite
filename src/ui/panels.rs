@@ -344,7 +344,6 @@ pub fn suggestions(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
-
 /// Keys table shown at the bottom of the sheet. Cross-checked against
 /// `App::on_key` (src/app.rs): every row here describes a binding that key
 /// handling actually implements, and every binding handled there appears

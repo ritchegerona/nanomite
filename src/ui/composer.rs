@@ -694,11 +694,7 @@ pub fn status_line(app: &App, width: usize) -> Line<'static> {
         glyph::DOT
     );
     if !app.pending_images.is_empty() {
-        let names: Vec<String> = app
-            .pending_images
-            .iter()
-            .map(|i| i.name.clone())
-            .collect();
+        let names: Vec<String> = app.pending_images.iter().map(|i| i.name.clone()).collect();
         text.push_str(&format!(
             "  {} {} image(s) queued: {}",
             glyph::DOT,
@@ -770,24 +766,7 @@ fn render_compact(
     );
     let text_x = area.x + 2;
     let text_w = area.width.saturating_sub(2);
-
-    // Compact has no border to carry the status line, so actionable status
-    // (approval / toast / search) gets its own guaranteed row at the bottom;
-    // `ui::render` grows `input_h` by one whenever this fires.
-    let mut text_h = area.height as usize;
-    if has_priority_status(app) && area.height >= 2 {
-        text_h -= 1;
-        let row = area.y + area.height - 1;
-        frame.render_widget(
-            Paragraph::new(status_line(app, area.width as usize)),
-            Rect {
-                x: area.x,
-                y: row,
-                width: area.width,
-                height: 1,
-            },
-        );
-    }
+    let text_h = area.height as usize;
 
     let y = render_image_chips(frame, area, app, text_top, text_w.into());
     let text_top = y;

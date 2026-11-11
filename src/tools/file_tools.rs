@@ -4,8 +4,8 @@ use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::sync::Mutex;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ListFilesArgs {
@@ -432,11 +432,10 @@ fn scan_file(
     // allocation.
     buf.clear();
     let too_big = {
-        let Ok(mut file) = File::open(path) else { return };
-        let Ok(read_len) = (&mut file)
-            .take(max_file_bytes as u64 + 1)
-            .read_to_end(buf)
-        else {
+        let Ok(mut file) = File::open(path) else {
+            return;
+        };
+        let Ok(read_len) = (&mut file).take(max_file_bytes as u64 + 1).read_to_end(buf) else {
             return;
         };
         read_len > max_file_bytes

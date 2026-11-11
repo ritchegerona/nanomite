@@ -221,12 +221,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         composer::rows(&prompt_layout)
     };
     let min_input = if app.compact { 1 } else { 5 };
-    let mut input_h = composer_rows.max(min_input);
-    // Compact density has no composer border to host the status line, so an
-    // actionable status (tool approval, toast, search) gets a dedicated row.
-    if app.compact && composer::has_priority_status(app) {
-        input_h += 1;
-    }
+    let input_h = composer_rows.max(min_input);
     let rects = app.view.layout(area, input_h);
 
     panels::header(frame, rects.header, app);
@@ -238,6 +233,23 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     chat::render(frame, rects.main_chat, app);
     let cursor = composer::render(frame, rects.left_input, app, &prompt_layout, app.compact);
+
+    // Transient action bar: when a tool approval, toast or transcript search
+    // needs attention, it draws full-width over the bottom row in both
+    // densities (the composer's own border line is too narrow for approval
+    // prompts). The old permanent footer row is gone; this row exists only
+    // while something actionable is pending.
+    if composer::has_priority_status(app) && area.height >= 2 {
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new(composer::status_line(app, area.width as usize)),
+            Rect {
+                x: area.x,
+                y: area.y + area.height - 1,
+                width: area.width,
+                height: 1,
+            },
+        );
+    }
 
     // Overlays render full-width on top of everything; they don't need to
     // respect the left info column since they are modal and painted last.

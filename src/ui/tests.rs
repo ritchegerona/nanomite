@@ -1725,7 +1725,10 @@ async fn pending_confirm_renders_on_the_composer_status_line() {
         text.contains("needs approval - y/a allow, n/d deny"),
         "confirm prompt missing:\n{text}"
     );
-    assert!(text.contains("cargo test"), "confirm preview missing:\n{text}");
+    assert!(
+        text.contains("cargo test"),
+        "confirm preview missing:\n{text}"
+    );
 }
 
 #[tokio::test]

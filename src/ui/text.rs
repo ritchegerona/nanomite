@@ -57,17 +57,17 @@ pub fn professionalize(s: &str) -> Cow<'_, str> {
 /// preserved glyphs (`✓` `✗` `✘`) return false so plain text allocates nothing.
 fn needs_professionalize(ch: char) -> bool {
     match ch {
-        '\u{2705}' | '\u{2714}' | '\u{2611}'
-        | '\u{274C}' | '\u{2716}' | '\u{274E}'
-        | '\u{26A0}' | '\u{2757}'
-        | '\u{FE0F}' | '\u{200D}' | '\u{20E3}'
-        | '\u{2B50}' => true,
+        '\u{2705}' | '\u{2714}' | '\u{2611}' | '\u{274C}' | '\u{2716}' | '\u{274E}'
+        | '\u{26A0}' | '\u{2757}' | '\u{FE0F}' | '\u{200D}' | '\u{20E3}' | '\u{2B50}' => true,
         c if ('\u{1F3FB}'..='\u{1F3FF}').contains(&c) => true,
         c if ('\u{1F1E6}'..='\u{1F1FF}').contains(&c) => true,
         c if ('\u{1F000}'..='\u{1FAFF}').contains(&c) => true,
         c if ('\u{2600}'..='\u{26FF}').contains(&c) => true,
         c if ('\u{2700}'..='\u{27BF}').contains(&c)
-            && !matches!(c, '\u{2713}' | '\u{2717}' | '\u{2718}') => true,
+            && !matches!(c, '\u{2713}' | '\u{2717}' | '\u{2718}') =>
+        {
+            true
+        }
         _ => false,
     }
 }
