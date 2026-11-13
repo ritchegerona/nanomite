@@ -4,7 +4,7 @@ Name:           nanomite
 Version:        0.6.0
 Release:        1%{?dist}
 Summary:        A microscopic terminal coding agent
-License:        MIT
+License:        NANOMITE Proprietary License
 URL:            https://github.com/ritchegerona/nanomite
 Source0:        %{url}/archive/v%{version}/nanomite-%{version}.tar.gz
 BuildRequires:  cargo

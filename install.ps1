@@ -3,7 +3,7 @@
 .GUID 8f3b2e1a-4c7d-4a9e-8b6f-1e2d3c4a5b6c
 .AUTHOR ritchegerona
 .COMPANYNAME nanomite
-.COPYRIGHT (c) 2026 ritchegerona. MIT License.
+.COPYRIGHT (c) 2026 ritchegerona. All rights reserved.
 .TAGS nanomite, installer, rust, ai, agent
 .PROJECTURI https://github.com/ritchegerona/nanomite
 .LICENSEURI https://github.com/ritchegerona/nanomite/blob/master/LICENSE

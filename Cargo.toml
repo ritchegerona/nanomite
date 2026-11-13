@@ -3,11 +3,27 @@ name = "nanomite"
 version = "1.3.5"
 edition = "2021"
 description = "NANOMITE — Intelligence Without Boundaries."
-license = "MIT"
+license-file = "LICENSE"
 repository = "https://github.com/ritchegerona/nanomite"
 readme = "README.md"
 keywords = ["cli", "terminal", "ai", "agent", "tui"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    ".github/",
+    ".opencode/",
+    "benchmarks/",
+    "nanomite-rescue/",
+    "pack/",
+    "report/",
+    "src/nanomite.egg-info/",
+    "brute_pin.py",
+    "comparison_report.json",
+    "inventory.json",
+    "inventory_nonroot.json",
+    "msr_hash.txt",
+    "custom_wordlist.txt",
+    "extensive_wordlist.txt",
+]
 
 [dependencies]
 crossterm = { version = "0.29.0", features = ["event-stream"] }

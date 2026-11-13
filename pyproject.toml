@@ -2,6 +2,7 @@
 name = "nanomite"
 version = "0.1.0"
 description = "Minimal-resource security and AI toolkit for old laptops"
+license = { text = "NANOMITE Proprietary License" }
 requires-python = ">=3.9"
 dependencies = []
 

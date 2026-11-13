@@ -14,7 +14,7 @@ binary.
 It remembers your projects between sessions, streams its reasoning, drives
 a headless browser, and runs 500+ tests offline.
 
-MIT. No telemetry. No account.
+NANOMITE Proprietary License. No telemetry. No account.
 
 ⬇ github.com/ritchegerona/nanomite
 
@@ -55,7 +55,7 @@ github.com/ritchegerona/nanomite
 
 **Title:** nanomite v0.7.0 — a tiny Rust terminal coding agent with
 persistent memory, a workspace time machine and headless browser tools
-(MIT, works with any OpenAI-compatible endpoint)
+(NANOMITE Proprietary License, works with any OpenAI-compatible endpoint)
 
 **Body:**
 I have been building a terminal coding agent that treats three things as
@@ -80,7 +80,7 @@ What is in v0.7.0:
 It speaks any OpenAI-compatible endpoint (Ollama, NVIDIA NIM, OpenRouter,
 Groq, LM Studio, llama.cpp) — so local models work fully offline.
 
-500+ offline tests, clippy clean, MIT.
+500+ offline tests, clippy clean, NANOMITE Proprietary License.
 Source + screenshots: github.com/ritchegerona/nanomite
 
 ---
@@ -102,7 +102,7 @@ state, headless browser automation for JavaScript-heavy pages, three
 parallel analysts on one goal, and a self-update command.
 
 500+ tests run offline; the render pipeline is measured in the repo's
-bench harness. MIT licensed — critique welcome, especially on the TUI
+bench harness. NANOMITE Proprietary License — critique welcome, especially on the TUI
 selection implementation and the tool policy gates.
 
 github.com/ritchegerona/nanomite
@@ -117,5 +117,5 @@ What makes it different: durable project memory that survives restarts and
 model switches, a workspace time machine, headless browser automation, 4
 auditable tool-modes with policy gates, and 500+ tests that run offline.
 
-MIT. Any OpenAI-compatible endpoint. Your code never leaves your disk.
+NANOMITE Proprietary License. Any OpenAI-compatible endpoint. Your code never leaves your disk.
 github.com/ritchegerona/nanomite

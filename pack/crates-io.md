@@ -7,7 +7,7 @@ to be complete. Checklist:
    Add if missing:
    ```toml
    description = "A microscopic terminal coding agent"
-   license = "MIT"
+   license-file = "LICENSE"
    repository = "https://github.com/ritchegerona/nanomite"
    ```
 2. `cargo publish --dry-run` (checks the packaged file list; target/ and

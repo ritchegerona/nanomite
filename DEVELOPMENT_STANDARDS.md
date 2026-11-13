@@ -106,7 +106,7 @@ Applies to every language in the stack unless explicitly overridden by the user.
 ```
 project/
 ├── README.md
-├── LICENSE (MIT/Apache-2.0)
+├── LICENSE (NANOMITE Proprietary License)
 ├── .github/workflows/ci.yml
 ├── src/
 │   └── <module>/

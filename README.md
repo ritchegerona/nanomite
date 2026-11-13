@@ -60,7 +60,7 @@ https://github.com/ritchegerona/nanomite` works too — see
 |---|---|---|
 | **Privacy** | 100% local: code, memory, session history stay on your disk. No telemetry, no account | code and context flow through vendor clouds |
 | **Memory** | Durable SQLite + human-editable markdown memory survives restarts and model switches | most start every session blank |
-| **Cost** | MIT-licensed, works with any OpenAI-compatible endpoint — local Ollama, NVIDIA NIM, OpenRouter, Groq | subscription or metered tokens on their stack |
+| **Cost** | NANOMITE Proprietary License, works with any OpenAI-compatible endpoint — local Ollama, NVIDIA NIM, OpenRouter, Groq | subscription or metered tokens on their stack |
 | **Speed** | One Rust binary; 500+ offline tests; render pipeline measured at ~0.1ms/frame, 30fps streaming | heavier stacks, slower startup |
 | **Transparency** | Every tool call, thought token and byte budget visible in the UI; char-exact text selection | truncated, lossy activity views |
 | **Control** | 4 tool modes with policy gates, self-edit proposals behind a human-in-the-loop gate | all-or-nothing permissions |
@@ -687,4 +687,6 @@ cargo build --release
 
 ## License
 
-MIT
+NANOMITE Proprietary License. Copyright (c) 2026 ritchegerona. All rights reserved.
+See [LICENSE](LICENSE) for terms. Commercial and evaluation licenses are
+available on request.
