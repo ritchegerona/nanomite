@@ -917,6 +917,29 @@ pub fn tool_schemas() -> Vec<Tool> {
                 "additionalProperties": false
             }),
         ),
+        Tool::new(
+            "skills_list",
+            "List all tracked skills (tools nanomite knows how to install/use). Filter: \"present\", \"missing\", or \"all\".",
+            json!({
+                "type": "object",
+                "properties": {
+                    "filter": { "type": "string", "description": "Filter to only present skills: \"present\", \"missing\", or \"all\" (default \"all\")" }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "skills_known",
+            "Check whether nanomite knows a specific tool and whether it is installed/present on PATH.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Tool name to check (e.g. nmap, sqlmap, gobuster)" }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+        ),
     ];
     #[cfg(any(feature = "vpn", feature = "tor"))]
     schemas.extend(crate::tools::privacy_tools::privacy_tool_schemas());

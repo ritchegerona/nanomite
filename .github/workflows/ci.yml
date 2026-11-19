@@ -10,22 +10,25 @@ env:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: cargo check
+      - name: cargo check --all-targets
         run: cargo check --all-targets
-      - name: cargo fmt
+      - name: cargo fmt --check
         run: cargo fmt --all -- --check
-      - name: cargo clippy
+      - name: cargo clippy -D warnings
         run: cargo clippy --all-targets -- -D warnings
-      - name: cargo test (lib, offline)
+      - name: cargo test --lib
         run: cargo test --lib -- --test-threads=1
-      - name: cargo test (integration)
+      - name: cargo test integration
         run: cargo test --test production_attach --test agent_integration
 
   vpn-tor:
@@ -36,11 +39,11 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: cargo check (vpn,tor features)
+      - name: cargo check --all-targets --features vpn,tor
         run: cargo check --all-targets --features vpn,tor
-      - name: cargo clippy (vpn,tor features)
+      - name: cargo clippy --features vpn,tor -D warnings
         run: cargo clippy --all-targets --features vpn,tor -- -D warnings
-      - name: cargo test (vpn,tor features)
+      - name: cargo test --lib --features vpn,tor
         run: cargo test --lib --features vpn,tor -- --test-threads=1
 
   bench:
@@ -53,8 +56,11 @@ jobs:
         run: cargo bench
 
   release-build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     permissions:
       contents: write
     steps:
@@ -67,5 +73,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            target/release/nanomite
-            target/release/nanomite-vpn
+            target/release/nanomite-ai

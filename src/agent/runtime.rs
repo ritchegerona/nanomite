@@ -18,6 +18,9 @@ use crate::tools::memory_tools::{
     MemoryUpdateArgs,
 };
 use crate::tools::plan_tools::{CreatePlanArgs, DeletePlanArgs, GetPlanArgs, UpdateTaskArgs};
+use crate::tools::skills::{
+    Skill, SkillSummary, SkillsKnownArgs, SkillsKnownResult, SkillsListArgs, SkillsListResult,
+};
 use crate::tools::test_tools::RunTestsArgs;
 use crate::tools::web_tools::{IpLookupArgs, WebFetchArgs, WebSearchArgs};
 use crate::tools::ToolSet;
@@ -462,6 +465,12 @@ impl AgentRuntime {
     /// Returns a mutable reference to the system prompt (used by neural injection).
     pub fn system_prompt_mut(&mut self) -> &mut String {
         &mut self.system_prompt
+    }
+
+    /// Returns a shared handle to the skill registry so the UI can list skills
+    /// (e.g. `/skills`) without reaching into the private `tools` field.
+    pub fn skills(&self) -> std::sync::Arc<crate::tools::skills::SkillRegistry> {
+        std::sync::Arc::clone(&self.tools.skills)
     }
 
     /// The live tool set, shared with the approval-path tests so they can drive
@@ -1601,6 +1610,67 @@ pub(crate) fn run_tool(
             let payload = serde_json::to_string(&result).unwrap_or_default();
             Ok((payload, summary))
         }
+        "skills_list" => {
+            let parsed: SkillsListArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad skills_list arguments: {e}"))?;
+            let skills = tools.skills.list();
+            let filtered: Vec<&Skill> = match parsed.filter.as_str() {
+                "present" => skills.iter().filter(|s| s.present).copied().collect(),
+                "missing" => skills.iter().filter(|s| !s.present).copied().collect(),
+                _ => skills,
+            };
+            let present_count = filtered.iter().filter(|s| s.present).count();
+            let missing_count = filtered.iter().filter(|s| !s.present).count();
+            let result = SkillsListResult {
+                skills: filtered
+                    .iter()
+                    .map(|s| SkillSummary {
+                        name: s.name.clone(),
+                        category: s.category.to_string(),
+                        installed_via: s.installed_via.clone(),
+                        package_name: s.package_name.clone(),
+                        present: s.present,
+                        use_count: s.use_count,
+                        first_recorded: s.first_recorded,
+                        last_used: s.last_used,
+                    })
+                    .collect(),
+                total: filtered.len(),
+                present_count,
+                missing_count,
+            };
+            let summary = format!(
+                "{} skills ({} present, {} missing)",
+                result.total, present_count, missing_count
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
+        "skills_known" => {
+            let parsed: SkillsKnownArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad skills_known arguments: {e}"))?;
+            let skill = tools.skills.get(&parsed.name);
+            let result = SkillsKnownResult {
+                name: parsed.name.clone(),
+                known: skill.is_some(),
+                present: skill.is_some_and(|s| s.present),
+                installed_via: skill.map(|s| s.installed_via.clone()),
+                package_name: skill.map(|s| s.package_name.clone()),
+                use_count: skill.map(|s| s.use_count).unwrap_or(0),
+                category: skill.map(|s| s.category.to_string()),
+            };
+            let summary = if result.known {
+                if result.present {
+                    format!("{} installed ({} uses)", result.name, result.use_count)
+                } else {
+                    format!("{} known but not present on PATH", result.name)
+                }
+            } else {
+                format!("{} not known", result.name)
+            };
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
         #[cfg(feature = "vpn")]
         "vpn_control" => {
             return crate::tools::privacy_tools::dispatch(call.name.as_str(), args);
@@ -1892,6 +1962,14 @@ fn preview_args(call: &ToolCall) -> Option<String> {
         "delete_plan" => {
             let name = args.get("name").and_then(|v| v.as_str())?;
             Some(shorten(&format!("delete_plan: {name}"), 120))
+        }
+        "skills_list" => {
+            let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
+            Some(shorten(&format!("skills_list ({filter})"), 120))
+        }
+        "skills_known" => {
+            let name = args.get("name").and_then(|v| v.as_str())?;
+            Some(shorten(&format!("skills_known {name}"), 120))
         }
         _ => None,
     }
@@ -2396,7 +2474,7 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        let expected = 29
+        let expected = 31
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(filter_disabled_schemas(schemas, &[]).len(), expected);

@@ -226,6 +226,16 @@ impl ToolSet {
                 description: "Delete a plan by name (requires confirmation).",
                 category: Plan,
             },
+            ToolSpec {
+                name: "skills_list",
+                description: "List all tracked skills (tools nanomite knows how to install/use). Filter: \"present\", \"missing\", or \"all\".",
+                category: Exec,
+            },
+            ToolSpec {
+                name: "skills_known",
+                description: "Check whether nanomite knows a specific tool and whether it is installed/present on PATH.",
+                category: Exec,
+            },
             #[cfg(feature = "vpn")]
             ToolSpec {
                 name: "vpn_control",
@@ -257,7 +267,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate tool names in catalog");
-        let expected = 37usize
+        let expected = 39usize
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(

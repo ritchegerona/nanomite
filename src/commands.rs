@@ -56,6 +56,7 @@ pub enum Command {
     Settings,
     Hacker,
     Learn,
+    Skills,
     Update,
     Vpn,
     Tor,
@@ -268,6 +269,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &["/telemetry"],
         hint: "show recent turn and tool-call timing stats (alt+p)",
         kind: Command::Perf,
+    },
+    Entry {
+        command: "/skills",
+        aliases: &[],
+        hint: "list tracked skills - skills_list | skills_known <tool> (alt+j)",
+        kind: Command::Skills,
     },
     // -- security -------------------------------------------------------------
     Entry {

@@ -3570,6 +3570,7 @@ impl App {
             Command::New => self.new_session(),
             Command::Panel => self.open_board(args),
             Command::Perf => self.show_perf(),
+            Command::Skills => self.show_skills(),
             Command::Reasoning => self.cycle_reasoning(),
             Command::Refresh => self.refresh(),
             Command::Copy => self.copy_selection(),
@@ -3988,6 +3989,44 @@ impl App {
             for t in &recent_tools {
                 let status = if t.ok { "ok" } else { "FAILED" };
                 text.push_str(&format!("  {}ms · {} · {}\n", t.elapsed_ms, t.name, status));
+            }
+        }
+
+        self.entries
+            .push(Entry::new(EntryRole::System, text.trim_end().to_string()));
+        let last = self.entries.last_mut().unwrap();
+        last.phase = Phase::Done;
+        self.mark_dirty();
+    }
+
+    /// `/skills`: list tracked skills (tools nanomite knows how to use).
+    fn show_skills(&mut self) {
+        let skills_registry = self.runtime.skills();
+        let skills = skills_registry.list();
+        let present_count = skills.iter().filter(|s| s.present).count();
+        let missing_count = skills.iter().filter(|s| !s.present).count();
+
+        let mut text = String::new();
+        text.push_str("Skills — tools nanomite knows how to install and use\\n\\n");
+        text.push_str(&format!(
+            "Total: {} · Present: {} · Missing: {}\\n\\n",
+            skills.len(),
+            present_count,
+            missing_count
+        ));
+
+        for s in &skills {
+            let status = if s.present { "●" } else { "○" };
+            text.push_str(&format!(
+                "  {} {} · {} · {} · {} uses\\n",
+                status,
+                s.name,
+                s.category,
+                s.installed_via,
+                s.use_count
+            ));
+            if !s.package_name.is_empty() {
+                text.push_str(&format!("      package: {}\\n", s.package_name));
             }
         }
 
@@ -7867,6 +7906,7 @@ impl App {
             KeyCode::Char('v') if alt => self.run_command(Command::Image, ""),
             KeyCode::Char('b') if alt => self.run_command(Command::Panel, ""),
             KeyCode::Char('p') if alt => self.run_command(Command::Perf, ""),
+            KeyCode::Char('j') if alt => self.run_command(Command::Skills, ""),
             KeyCode::Char('x') if alt => self.run_command(Command::Ab, ""),
             KeyCode::Char('T') if alt => self.run_command(Command::Team, ""),
             KeyCode::Char('i') if alt => self.run_command(Command::Improve, ""),
