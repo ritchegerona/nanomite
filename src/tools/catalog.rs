@@ -247,6 +247,26 @@ impl ToolSet {
                 category: Exec,
             },
             ToolSpec {
+                name: "local_model_list",
+                description: "List all locally loaded GGUF models served by llama.cpp / llama-server.",
+                category: Exec,
+            },
+            ToolSpec {
+                name: "local_model_load",
+                description: "Load a GGUF model for offline inference via llama-server.",
+                category: Exec,
+            },
+            ToolSpec {
+                name: "local_model_unload",
+                description: "Unload (stop) a locally served GGUF model by id.",
+                category: Exec,
+            },
+            ToolSpec {
+                name: "local_model_chat",
+                description: "Send a chat completion to a locally loaded GGUF model via llama-server.",
+                category: Exec,
+            },
+            ToolSpec {
                 name: "autonomous_execute",
                 description: "Run an autonomous security assessment plan against a goal. Decomposes the goal into ordered tasks and executes them through the tool layer, with optional human approval before each risky command.",
                 category: Exec,
@@ -282,7 +302,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate tool names in catalog");
-        let expected = 42usize
+        let expected = 46usize
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(

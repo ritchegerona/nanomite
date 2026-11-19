@@ -18,6 +18,7 @@ pub mod test_tools;
 pub mod web_tools;
 pub mod recon_tools;
 pub mod wireless_tools;
+pub mod local_model;
 
 use crate::evidence::EvidenceLocker;
 use crate::improve::ImproveEngine;
@@ -62,6 +63,8 @@ pub struct ToolSet {
     pub wireless: crate::tools::wireless_tools::WirelessTools,
     /// Skill registry: tracks installed tools as reusable skills across sessions.
     pub skills: Arc<crate::tools::skills::SkillRegistry>,
+    /// Local GGUF model manager for offline inference via llama.cpp.
+    pub local_model: crate::tools::local_model::LocalModelManager,
     /// Evidence locker: persistent, content-addressed storage for assessment
     /// artifacts (tool outputs, screenshots, reasoning traces).
     pub evidence: Option<Arc<EvidenceLocker>>,
@@ -98,6 +101,7 @@ impl ToolSet {
             recon: crate::tools::recon_tools::ReconTools::new(workspace.clone()),
             wireless: crate::tools::wireless_tools::WirelessTools::new(workspace.clone()),
             skills: Arc::new(crate::tools::skills::SkillRegistry::new()),
+            local_model: crate::tools::local_model::LocalModelManager::default(),
             evidence: None,
             improve_roots: None,
             offline,

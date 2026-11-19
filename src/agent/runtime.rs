@@ -1845,6 +1845,93 @@ pub(crate) fn run_tool(
             let payload = serde_json::to_string(&result).unwrap_or_default();
             Ok((payload, summary))
         }
+        "local_model_list" => {
+            let models = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(tools.local_model.list_models())
+            });
+            let payload = serde_json::to_string(&models).unwrap_or_default();
+            let summary = format!("{} local model(s) loaded", models.len());
+            Ok((payload, summary))
+        }
+        "local_model_load" => {
+            use std::path::PathBuf;
+            let parsed: serde_json::Value = serde_json::from_value(args)
+                .map_err(|e| format!("bad local_model_load arguments: {e}"))?;
+            let model_id = parsed["model_id"].as_str()
+                .ok_or("model_id required")?.to_string();
+            let label = parsed["label"].as_str()
+                .ok_or("label required")?.to_string();
+            let model_url = parsed["model_url"].as_str();
+            let model_name = parsed["model_name"].as_str();
+            let ctx_size = parsed["ctx_size"].as_u64().map(|v| v as u32);
+            let n_gpu_layers = parsed["n_gpu_layers"].as_i64().map(|v| v as i32);
+
+            // Determine model_path: either provided directly or downloaded
+            let model_path = if let Some(p) = parsed["model_path"].as_str() {
+                PathBuf::from(p)
+            } else if let Some(url) = model_url {
+                let name = model_name.ok_or("model_name required when downloading")?;
+                let dest = tools.local_model.models_dir().join(name);
+                if !dest.exists() {
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(
+                            tools.local_model.download_model(url, &dest)
+                        )
+                    })?;
+                }
+                dest
+            } else {
+                return Err("model_path or model_url required".to_string());
+            };
+
+            let entry = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(
+                    tools.local_model.load_model(
+                        &model_id, &label, &model_path, ctx_size, n_gpu_layers,
+                    )
+                )
+            }).map_err(|e| format!("local_model_load failed: {e}"))?;
+            let payload = serde_json::to_string(&entry).unwrap_or_default();
+            let summary = format!("local model {} loaded on port {}", model_id, entry.port);
+            Ok((payload, summary))
+        }
+        "local_model_unload" => {
+            let parsed: serde_json::Value = serde_json::from_value(args)
+                .map_err(|e| format!("bad local_model_unload arguments: {e}"))?;
+            let model_id = parsed["model_id"].as_str()
+                .ok_or("model_id required")?.to_string();
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(
+                    tools.local_model.unload_model(&model_id)
+                )
+            }).map_err(|e| format!("local_model_unload failed: {e}"))?;
+            let summary = format!("local model {} unloaded", model_id);
+            Ok(("{}".to_string(), summary))
+        }
+        "local_model_chat" => {
+            let parsed: serde_json::Value = serde_json::from_value(args)
+                .map_err(|e| format!("bad local_model_chat arguments: {e}"))?;
+            let model_id = parsed["model_id"].as_str()
+                .ok_or("model_id required")?.to_string();
+            let messages = parsed["messages"].as_str()
+                .ok_or("messages required")?.to_string();
+            let temperature = parsed["temperature"].as_f64().unwrap_or(0.7);
+            let max_tokens = parsed["max_tokens"].as_u64().unwrap_or(2048) as u32;
+
+            let provider = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(
+                    tools.local_model.provider_for(&model_id)
+                )
+            }).map_err(|e| format!("local_model_chat failed: {e}"))?;
+            let result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(
+                    provider.local_chat(&messages, temperature, max_tokens)
+                )
+            }).map_err(|e| format!("local model chat failed: {e}"))?;
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            let summary = format!("local model {} responded", model_id);
+            Ok((payload, summary))
+        }
         #[cfg(feature = "vpn")]
         "vpn_control" => {
             return crate::tools::privacy_tools::dispatch(call.name.as_str(), args);
@@ -2648,7 +2735,7 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        let expected = 34
+        let expected = 38
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(filter_disabled_schemas(schemas, &[]).len(), expected);

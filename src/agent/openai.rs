@@ -83,6 +83,52 @@ impl OpenAiProvider {
         })
     }
 
+    /// Non-streaming chat completion to this provider's endpoint. Used for local
+    /// llama-server chat tool dispatch.
+    pub async fn local_chat(
+        &self,
+        messages_json: &str,
+        temperature: f64,
+        max_tokens: u32,
+    ) -> Result<String, DynError> {
+        let messages: Vec<ChatMessage> = serde_json::from_str(messages_json)
+            .map_err(|e| format!("invalid messages JSON: {e}"))?;
+        let mut req = self
+            .client
+            .post(&self.endpoint)
+            .header("content-type", "application/json")
+            .json(&json!({
+                "model": self.model,
+                "messages": messages.iter().map(Self::message_to_wire).collect::<Vec<_>>(),
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": false,
+            }));
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req.send().await.map_err(|e| {
+            DynError::from(format!("request to {} failed: {e} (is the base URL correct?)", self.endpoint))
+        })?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(describe_http_error(status.as_u16(), &body).into());
+        }
+        let value: Value = resp.json().await.map_err(|e| format!("malformed response: {e}"))?;
+        let choice = value
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|c| c.first())
+            .ok_or("no choices in response")?;
+        let message = choice.get("message").ok_or("no message in choice")?;
+        let content = message.get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok(content)
+    }
+
     /// OpenAI wire format for a chat message. Tool calls must be nested under a
     /// `function` object with `id` + `type`, and tool results must carry
     /// `tool_call_id` - serde's derived shape is flat and providers reject it.
@@ -969,6 +1015,60 @@ pub fn tool_schemas() -> Vec<Tool> {
                     "timeout_ms": { "type": "integer", "description": "Hard cap in milliseconds (default 120000, max 300000)" }
                 },
                 "required": ["interface"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "local_model_list",
+            "List all locally loaded GGUF models served by llama.cpp / llama-server.",
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "local_model_load",
+            "Load a GGUF model for offline inference via llama-server. Downloads from a URL if not already present.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "model_id": { "type": "string", "description": "Stable id to refer to this model (e.g. llama-3.1-8b-q4)" },
+                    "label": { "type": "string", "description": "Human-readable label" },
+                    "model_path": { "type": "string", "description": "Local path to the GGUF file" },
+                    "model_url": { "type": "string", "description": "Optional http(s) URL to download the GGUF from if model_path is missing" },
+                    "model_name": { "type": "string", "description": "Filename to store under the models directory (required if downloading)" },
+                    "ctx_size": { "type": "integer", "description": "Context window size (default 4096)" },
+                    "n_gpu_layers": { "type": "integer", "description": "GPU offload layers (0 = CPU only, default 0)" }
+                },
+                "required": ["model_id", "label"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "local_model_unload",
+            "Unload (stop) a locally served GGUF model by id.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "model_id": { "type": "string", "description": "Id of the model to unload" }
+                },
+                "required": ["model_id"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
+            "local_model_chat",
+            "Send a chat completion to a locally loaded GGUF model via llama-server. Supports tool calling and reasoning delta streaming.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "model_id": { "type": "string", "description": "Id of the loaded local model to chat with" },
+                    "messages": { "type": "string", "description": "JSON array of {role, content} message objects" },
+                    "temperature": { "type": "number", "description": "Sampling temperature (default 0.7)" },
+                    "max_tokens": { "type": "integer", "description": "Max tokens to generate (default 2048)" }
+                },
+                "required": ["model_id", "messages"],
                 "additionalProperties": false
             }),
         ),
