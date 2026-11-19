@@ -18,6 +18,7 @@ pub mod test_tools;
 pub mod web_tools;
 pub mod recon_tools;
 
+use crate::evidence::EvidenceLocker;
 use crate::improve::ImproveEngine;
 use crate::memory::MemoryEngine;
 use std::sync::Arc;
@@ -58,6 +59,9 @@ pub struct ToolSet {
     pub recon: crate::tools::recon_tools::ReconTools,
     /// Skill registry: tracks installed tools as reusable skills across sessions.
     pub skills: Arc<crate::tools::skills::SkillRegistry>,
+    /// Evidence locker: persistent, content-addressed storage for assessment
+    /// artifacts (tool outputs, screenshots, reasoning traces).
+    pub evidence: Option<Arc<EvidenceLocker>>,
     /// Anchor paths the engine validates against. Travels with the engine so
     /// tool dispatch needs nothing from the runtime.
     pub improve_roots: Option<crate::improve::Roots>,
@@ -90,6 +94,7 @@ impl ToolSet {
             plan: crate::tools::plan_tools::PlanTools::new(workspace.clone()),
             recon: crate::tools::recon_tools::ReconTools::new(workspace.clone()),
             skills: Arc::new(crate::tools::skills::SkillRegistry::new()),
+            evidence: None,
             improve_roots: None,
             offline,
             pre_tool_gate: None,

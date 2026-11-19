@@ -2,6 +2,7 @@ use crate::agent::openai::OpenAiProvider;
 use crate::agent::policy::ToolPolicy;
 use crate::agent::provider::{AgentProvider, ChatMessage, Role, Usage};
 use crate::agent::runtime::{AgentEvent, AgentRuntime, Cancel};
+use crate::evidence::EvidenceFilter;
 use crate::neural::autonomous_planner::PlanStatus;
 use crate::agent::suggest::{self, SuggestResult};
 use crate::agent::swarm::Swarm;
@@ -3573,6 +3574,7 @@ impl App {
             Command::Plan => self.run_autonomous_plan(args),
             Command::Perf => self.show_perf(),
             Command::Skills => self.show_skills(),
+            Command::Evidence => self.show_evidence(args),
             Command::Reasoning => self.cycle_reasoning(),
             Command::Refresh => self.refresh(),
             Command::Copy => self.copy_selection(),
@@ -4029,6 +4031,75 @@ impl App {
             ));
             if !s.package_name.is_empty() {
                 text.push_str(&format!("      package: {}\\n", s.package_name));
+            }
+        }
+
+        self.entries
+            .push(Entry::new(EntryRole::System, text.trim_end().to_string()));
+        let last = self.entries.last_mut().unwrap();
+        last.phase = Phase::Done;
+        self.mark_dirty();
+    }
+
+    /// `/evidence`: view stored evidence artifacts for an assessment.
+    fn show_evidence(&mut self, args: &str) {
+        let assessment_id = if args.trim().is_empty() {
+            "session-default".to_string()
+        } else {
+            args.trim().to_string()
+        };
+
+        let Some(locker) = &self.runtime.tool_set().evidence else {
+            self.entries.push(Entry::new(
+                EntryRole::System,
+                "No evidence locker attached to this session.".to_string(),
+            ));
+            let last = self.entries.last_mut().unwrap();
+            last.phase = Phase::Done;
+            self.mark_dirty();
+            return;
+        };
+
+        let filter = EvidenceFilter {
+            assessment_id: Some(assessment_id.clone()),
+            ..Default::default()
+        };
+
+        let query = match locker.list(&filter) {
+            Ok(q) => q,
+            Err(e) => {
+                self.entries.push(Entry::new(
+                    EntryRole::System,
+                    format!("Failed to list evidence: {e}"),
+                ));
+                let last = self.entries.last_mut().unwrap();
+                last.phase = Phase::Done;
+                self.mark_dirty();
+                return;
+            }
+        };
+
+        let mut text = String::new();
+        text.push_str(&format!("Evidence — assessment `{assessment_id}`\n\n"));
+        text.push_str(&format!("Total artifacts: {}\n\n", query.total));
+
+        if query.items.is_empty() {
+            text.push_str("No evidence artifacts recorded yet.\n");
+        } else {
+            for a in &query.items {
+                text.push_str(&format!(
+                    "  [{}] {} · {}\n      target: {} · {} bytes · tags: {}\n",
+                    crate::evidence::truncate_hash(&a.hash, 12),
+                    crate::evidence::escape_md(&a.label),
+                    a.origin,
+                    crate::evidence::escape_md(&a.target),
+                    a.size_bytes,
+                    if a.tags.is_empty() {
+                        "-".into()
+                    } else {
+                        a.tags.join(", ")
+                    }
+                ));
             }
         }
 

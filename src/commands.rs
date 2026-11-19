@@ -48,6 +48,7 @@ pub enum Command {
     Revert,
     Fork,
     EditTurn,
+    Evidence,
     History,
     Doctor,
     Ab,
@@ -282,6 +283,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "list tracked skills - skills_list | skills_known <tool> (alt+j)",
         kind: Command::Skills,
+    },
+    Entry {
+        command: "/evidence",
+        aliases: &[],
+        hint: "view assessment evidence - /evidence [assessment_id] (alt+shift+e)",
+        kind: Command::Evidence,
     },
     // -- security -------------------------------------------------------------
     Entry {

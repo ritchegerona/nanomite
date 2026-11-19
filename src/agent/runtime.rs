@@ -1239,6 +1239,18 @@ pub(crate) fn run_tool(
                 format!("exit {}", result.exit_code)
             };
             let payload = serde_json::to_string(&result).unwrap_or_default();
+            // Store evidence if locker is attached.
+            if let Some(locker) = &tools.evidence {
+                let _ = locker.store(
+                    "session-default",
+                    &cmd,
+                    "run_command",
+                    &format!("run_command: {}", shorten(&cmd, 40)),
+                    payload.as_bytes(),
+                    vec!["tool_output".into(), "run_command".into()],
+                    "application/json",
+                );
+            }
             Ok((payload, format!("{} · {summary}", shorten(&cmd, 40))))
         }
         "ssh_run" => {
@@ -1256,6 +1268,17 @@ pub(crate) fn run_tool(
                 format!("exit {}", result.exit_code)
             };
             let payload = serde_json::to_string(&result).unwrap_or_default();
+            if let Some(locker) = &tools.evidence {
+                let _ = locker.store(
+                    "session-default",
+                    &host,
+                    "ssh_run",
+                    &format!("ssh_run: {} @ {}", shorten(&cmd, 32), shorten(&host, 24)),
+                    payload.as_bytes(),
+                    vec!["tool_output".into(), "ssh_run".into()],
+                    "application/json",
+                );
+            }
             Ok((
                 payload,
                 format!("{} @ {} · {summary}", shorten(&cmd, 32), shorten(&host, 24)),
@@ -1279,6 +1302,17 @@ pub(crate) fn run_tool(
                 )
             };
             let payload = serde_json::to_string(&result).unwrap_or_default();
+            if let Some(locker) = &tools.evidence {
+                let _ = locker.store(
+                    "session-default",
+                    &host,
+                    "scan_ports",
+                    &format!("scan_ports: {}", shorten(&host, 40)),
+                    payload.as_bytes(),
+                    vec!["tool_output".into(), "scan_ports".into(), "recon".into()],
+                    "application/json",
+                );
+            }
             Ok((payload, format!("{} · {}", shorten(&host, 40), summary)))
         }
         "web_fetch" => {
@@ -1709,6 +1743,17 @@ pub(crate) fn run_tool(
                 shorten(&result.target, 40)
             );
             let payload = serde_json::to_string(&result).unwrap_or_default();
+            if let Some(locker) = &tools.evidence {
+                let _ = locker.store(
+                    "session-default",
+                    &result.target,
+                    "web_recon",
+                    &format!("web_recon: {}", shorten(&result.target, 40)),
+                    payload.as_bytes(),
+                    vec!["tool_output".into(), "web_recon".into(), "recon".into()],
+                    "application/json",
+                );
+            }
             Ok((payload, summary))
         }
         "skills_list" => {

@@ -1,8 +1,15 @@
 # Changelog
 
-Every entry describes a verified change. Labels: implemented+tested,
-implemented unverified, planned, experimental, unsupported. Planned work is
-never listed as released.
+Every entry describes a verified change. Labels: implemented+tested, implemented unverified, planned, experimental, unsupported. Planned work is never listed as released.
+
+## [1.5.0] — 2026-11-20
+
+### Added
+
+- **Evidence Locker** (`src/evidence/`): persistent, content-addressed storage for assessment artifacts — tool outputs, screenshots, reasoning traces, provenance metadata. Files live under `<data_dir>/evidence/<assessment_id>/<sha256>/` with a sidecar `.meta.json` describing origin tool, timestamp, target and tags. Every artifact is content-addressed by SHA-256 for integrity verification. `store`, `retrieve`, `metadata`, `list` (filtered by assessment/target/origin/tag) and `verify_integrity`. implemented+tested (4 tests).
+- **Auto-Reporting** (`src/reporting/`): generates Markdown and HTML assessment reports from neural memory + evidence locker artifacts + autonomous plan summaries. implemented+tested (5 tests).
+- **Evidence wired into tool dispatch**: `run_command`, `ssh_run`, `scan_ports` and `web_recon` auto-store their output as evidence when the locker is attached to `ToolSet.evidence`. implemented.
+- **`/evidence <assessment_id>` slash command**: lists stored evidence artifacts from the TUI. implemented.
 
 ## [1.3.7] — 2026-11-19
 

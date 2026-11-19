@@ -9,12 +9,14 @@ pub mod app;
 pub mod board;
 pub mod commands;
 pub mod config;
+pub mod evidence;
 pub mod extract;
 pub mod hacker;
 pub mod herdr;
 pub mod hooks;
 pub mod improve;
 pub mod learn;
+pub mod reporting;
 #[cfg(feature = "tor")]
 pub mod nanomite_tor;
 #[cfg(feature = "vpn")]
