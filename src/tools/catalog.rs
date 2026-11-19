@@ -102,6 +102,11 @@ impl ToolSet {
                 category: Web,
             },
             ToolSpec {
+                name: "ip_lookup",
+                description: "Look up a public IPv4/IPv6 address (or your own public IP) for approximate location, ISP/ASN and timezone.",
+                category: Web,
+            },
+            ToolSpec {
                 name: "browse",
                 description: "Open a URL in a headless browser (JavaScript rendered) and return the page's readable text.",
                 category: Web,
@@ -252,7 +257,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate tool names in catalog");
-        let expected = 36usize
+        let expected = 37usize
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(

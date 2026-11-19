@@ -1,4 +1,5 @@
 pub mod browser_tools;
+pub mod auto_install;
 pub mod catalog;
 pub mod document_tools;
 pub mod exec_tools;
@@ -11,6 +12,7 @@ pub mod index_tools;
 pub mod memory_tools;
 pub mod plan_tools;
 pub mod privacy_tools;
+pub mod skills;
 pub mod test_tools;
 
 pub mod web_tools;
@@ -51,6 +53,8 @@ pub struct ToolSet {
     pub index: crate::tools::index_tools::IndexTools,
     /// Plan/task list tools. Always present.
     pub plan: crate::tools::plan_tools::PlanTools,
+    /// Skill registry: tracks installed tools as reusable skills across sessions.
+    pub skills: Arc<crate::tools::skills::SkillRegistry>,
     /// Anchor paths the engine validates against. Travels with the engine so
     /// tool dispatch needs nothing from the runtime.
     pub improve_roots: Option<crate::improve::Roots>,
@@ -78,6 +82,7 @@ impl ToolSet {
             external: std::sync::Arc::new(crate::tools::external_tools::ExternalTools::default()),
             index: crate::tools::index_tools::IndexTools::new(workspace.clone()),
             plan: crate::tools::plan_tools::PlanTools::new(workspace.clone()),
+            skills: Arc::new(crate::tools::skills::SkillRegistry::new()),
             improve_roots: None,
             offline,
         }

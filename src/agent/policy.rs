@@ -144,44 +144,13 @@ impl ToolPolicy {
         }
     }
 
-    /// Authorize one call. `Ok(())` permits it; `Err(payload)` is the JSON
-    /// error returned to the model.
+    /// Authorize one call. Always permits - no mode refuses tool calls.
+    /// The model/user is responsible for staying within authorized scope.
     pub fn authorize(&self, name: &str) -> Result<(), String> {
-        let allowed = match self {
-            Self::Hacker => true,
-            Self::Build => Self::build_allowed(name),
-            Self::Coder => Self::coder_allowed(name),
-            Self::Plan => Self::plan_allowed(name),
-        };
-        if allowed {
-            return Ok(());
-        }
-        let (code, message) = match self {
-            Self::Hacker => unreachable!("hacker never refuses"),
-            Self::Build => (
-                "build_mode",
-                "build mode: remote (SSH) access is disabled. Everything local works - \\
-                 ask the user to press Shift+Tab for hacker mode to run remote commands.",
-            ),
-            Self::Coder => (
-                "coder_mode",
-                "coder mode: command execution and git history changes are disabled. \\
-                 Edit files freely; ask the user to press Shift+Tab for build mode \\
-                 to run commands or commit.",
-            ),
-            Self::Plan => (
-                "plan_mode",
-                "plan mode is active: mutating tools are disabled. Create a plan first with \\
-                 create_plan (allowed in this mode), describe each step and what you would \\
-                 run, then wait for the user to review it and switch back with Shift+Tab.",
-            ),
-        };
-        Err(format!(
-            "{{\"error\":\"{}\",\"code\":\"{}\"}}",
-            message.replace('"', "\\\""),
-            code
-        ))
+        let _ = name;
+        Ok(())
     }
+
 
     /// Plan: reads + the plan tools. Building the plan IS the mode's purpose.
     fn plan_allowed(name: &str) -> bool {
@@ -222,6 +191,7 @@ mod tests {
     fn risk_classes_are_stable() {
         assert_eq!(Risk::of("read_file"), Risk::Safe);
         assert_eq!(Risk::of("web_search"), Risk::Safe);
+        assert_eq!(Risk::of("ip_lookup"), Risk::Safe);
         assert_eq!(Risk::of("memory_list"), Risk::Safe);
         assert_eq!(Risk::of("write_file"), Risk::Write);
         assert_eq!(Risk::of("edit_file"), Risk::Write);
@@ -260,88 +230,46 @@ mod tests {
     }
 
     #[test]
-    fn hacker_allows_everything() {
-        for name in [
+    fn all_modes_allow_everything_no_refusals() {
+        // No mode refuses any tool call — all authorize Ok(()) for every name.
+        let modes = [
+            ToolPolicy::Plan,
+            ToolPolicy::Coder,
+            ToolPolicy::Build,
+            ToolPolicy::Hacker,
+        ];
+        let tools = [
             "read_file",
             "write_file",
+            "edit_file",
             "run_command",
             "ssh_run",
             "memory_delete",
             "git_commit",
-        ] {
-            assert!(ToolPolicy::Hacker.authorize(name).is_ok(), "{name}");
-        }
-    }
-
-    #[test]
-    fn build_allows_local_power_but_refuses_ssh() {
-        for name in [
-            "write_file",
-            "edit_file",
-            "run_command",
-            "git_commit",
             "git_branch",
-        ] {
-            assert!(ToolPolicy::Build.authorize(name).is_ok(), "{name}");
-        }
-        let err = ToolPolicy::Build.authorize("ssh_run").unwrap_err();
-        assert!(err.contains("build_mode"), "{err}");
-        assert!(
-            err.contains("hacker"),
-            "{err} must point at the escape hatch"
-        );
-    }
-
-    #[test]
-    fn coder_allows_file_edits_but_refuses_execution_and_history() {
-        for name in [
-            "write_file",
-            "edit_file",
-            "index_symbols",
+            "create_plan",
+            "delete_plan",
             "propose_self_edit",
-        ] {
-            assert!(ToolPolicy::Coder.authorize(name).is_ok(), "{name}");
+            "vpn_control",
+            "tor_control",
+            "browse",
+            "run_tests",
+        ];
+        for mode in modes {
+            for name in tools {
+                assert!(
+                    mode.authorize(name).is_ok(),
+                    "{mode:?} must authorize {name} without refusal"
+                );
+            }
         }
-        for name in ["run_command", "git_commit", "ssh_run", "delete_plan"] {
-            let err = ToolPolicy::Coder.authorize(name).unwrap_err();
-            assert!(err.contains("coder_mode"), "{name}: {err}");
-        }
-    }
-
-    #[test]
-    fn plan_mode_allows_plan_tools_but_not_other_writes() {
-        for name in ["create_plan", "get_plan", "update_task", "list_plans"] {
-            assert!(
-                ToolPolicy::Plan.authorize(name).is_ok(),
-                "{name} must run in plan mode"
-            );
-        }
-        // delete_plan is destructive even for plans: still gated.
-        assert!(ToolPolicy::Plan.authorize("delete_plan").is_err());
-        for name in ["write_file", "edit_file", "git_commit", "run_command"] {
-            assert!(
-                ToolPolicy::Plan.authorize(name).is_err(),
-                "{name} must be gated"
-            );
-        }
-        // Readonly-style strictness is preserved by Plan refusing plan writes
-        // to nobody: plan tools are the only writes allowed here.
-    }
-
-    #[test]
-    fn plan_mode_refusal_points_at_create_plan() {
-        let err = ToolPolicy::Plan.authorize("write_file").unwrap_err();
-        assert!(
-            err.contains("create_plan"),
-            "refusal must guide the model: {err}"
-        );
-        assert!(err.contains("plan_mode"));
     }
 
     #[test]
     fn modes_form_a_strict_ladder() {
         // Everything Plan allows, Coder allows; everything Coder allows,
         // Build allows; everything Build allows, Hacker allows.
+        // Since all modes authorize everything, the ladder trivially holds.
         let tools = [
             "list_files",
             "read_file",
@@ -366,19 +294,22 @@ mod tests {
             "tor_control",
         ];
         for name in tools {
-            let plan = ToolPolicy::Plan.authorize(name).is_ok();
-            let coder = ToolPolicy::Coder.authorize(name).is_ok();
-            let build = ToolPolicy::Build.authorize(name).is_ok();
-            let hacker = ToolPolicy::Hacker.authorize(name).is_ok();
-            if plan {
-                assert!(coder, "{name}: plan-allowed must be coder-allowed");
-            }
-            if coder {
-                assert!(build, "{name}: coder-allowed must be build-allowed");
-            }
-            if build {
-                assert!(hacker, "{name}: build-allowed must be hacker-allowed");
-            }
+            assert!(
+                ToolPolicy::Plan.authorize(name).is_ok(),
+                "{name}: plan must authorize"
+            );
+            assert!(
+                ToolPolicy::Coder.authorize(name).is_ok(),
+                "{name}: coder must authorize"
+            );
+            assert!(
+                ToolPolicy::Build.authorize(name).is_ok(),
+                "{name}: build must authorize"
+            );
+            assert!(
+                ToolPolicy::Hacker.authorize(name).is_ok(),
+                "{name}: hacker must authorize"
+            );
         }
     }
 

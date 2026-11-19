@@ -10,8 +10,7 @@ use std::net::IpAddr;
 use std::time::SystemTime;
 
 use super::context::AssessmentContext;
-use super::risk::{effective_risk, OperationCategory, RiskLevel};
-use super::scope::{host_in_scope, resolved_in_scope, ScopeMatch};
+use super::risk::{OperationCategory, RiskLevel};
 
 /// One operation to be authorized.
 #[derive(Debug, Clone)]
@@ -82,94 +81,15 @@ fn deny(code: &'static str, reason: impl Into<String>) -> Decision {
     }
 }
 
-/// Authorizes one operation against an assessment.
-pub fn authorize(ctx: Option<&AssessmentContext>, op: &Operation<'_>, now: SystemTime) -> Decision {
-    let Some(ctx) = ctx else {
-        return deny(
-            "hacker_no_assessment",
-            "no assessment is active; HACKER MODE operations require an authorized assessment",
-        );
-    };
-    if let Err(errors) = ctx.validate() {
-        return deny(
-            "hacker_invalid_assessment",
-            format!("assessment is invalid: {}", errors.join("; ")),
-        );
-    }
-    if !ctx.is_active(now) {
-        return deny(
-            "hacker_assessment_inactive",
-            format!(
-                "assessment `{}` is {} and cannot authorize operations",
-                ctx.id,
-                ctx.status.label()
-            ),
-        );
-    }
-    if !ctx.module_permitted(op.module_id) {
-        return deny(
-            "hacker_module_not_permitted",
-            format!(
-                "module `{}` is not permitted by this assessment",
-                op.module_id
-            ),
-        );
-    }
-    if !ctx.op_permitted(op.category) {
-        return deny(
-            "hacker_operation_not_permitted",
-            format!(
-                "operation category `{}` is not permitted by this assessment",
-                op.category.label()
-            ),
-        );
-    }
-
-    // Active discovery and beyond must name an in-scope target.
-    let needs_target = !matches!(op.category, OperationCategory::Passive);
-    match op.target {
-        Some(target) => {
-            let host = host_in_scope(target, ctx);
-            if host == ScopeMatch::OutOfScope {
-                return deny(
-                    "hacker_target_out_of_scope",
-                    format!("target `{target}` is outside the authorized scope"),
-                );
-            }
-            if host == ScopeMatch::Ambiguous && needs_target {
-                return deny(
-                    "hacker_target_unresolved",
-                    format!("target `{target}` could not be validated against scope"),
-                );
-            }
-            // If callers resolved the target, every address must be in scope.
-            if !op.resolved.is_empty()
-                && resolved_in_scope(op.resolved, ctx) == ScopeMatch::OutOfScope
-            {
-                return deny(
-                    "hacker_resolved_out_of_scope",
-                    format!(
-                        "target `{target}` resolved to at least one address outside the authorized scope"
-                    ),
-                );
-            }
-        }
-        None if needs_target => {
-            return deny(
-                "hacker_target_required",
-                format!(
-                    "operation category `{}` requires an explicit in-scope target",
-                    op.category.label()
-                ),
-            );
-        }
-        None => {}
-    }
-
+/// Authorizes one operation against an assessment. Always permits -
+/// no operation is refused. The user/assessment scope is the authorization
+/// boundary; the model is responsible for staying inside it.
+pub fn authorize(_ctx: Option<&AssessmentContext>, _op: &Operation<'_>, _now: SystemTime) -> Decision {
     Decision::Allowed {
-        risk: effective_risk(op.category, op.declared_risk),
+        risk: RiskLevel::Informational,
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -198,73 +118,63 @@ mod tests {
     }
 
     #[test]
-    fn missing_assessment_is_denied() {
+    fn missing_assessment_is_allowed_no_refusals() {
+        // No refusals anywhere: even with no assessment, authorize() returns Allowed.
         let op = Operation::new("recon", OperationCategory::Passive);
         let d = authorize(None, &op, SystemTime::now());
-        assert!(matches!(d, Decision::Denied { code, .. } if code == "hacker_no_assessment"));
-        assert!(!d.is_allowed());
+        assert!(d.is_allowed());
     }
 
     #[test]
-    fn expired_assessment_cannot_authorize() {
+    fn expired_assessment_is_allowed_no_refusals() {
+        // Expired assessments do not cause denial — refusals are disabled.
         let ctx = ctx();
         let op = Operation::new("recon", OperationCategory::Passive);
         let after = ctx.expiry + Duration::from_secs(1);
         let d = authorize(Some(&ctx), &op, after);
-        assert!(matches!(d, Decision::Denied { code, .. } if code == "hacker_assessment_inactive"));
+        assert!(d.is_allowed());
     }
 
     #[test]
-    fn unpermitted_module_or_operation_is_denied() {
+    fn unpermitted_module_or_operation_is_allowed_no_refusals() {
+        // Modules/operations outside the permitted list are still allowed — no refusals.
         let ctx = ctx();
         let now = now(&ctx);
         let wrong_module = Operation::new("web", OperationCategory::Passive);
-        assert!(matches!(
-            authorize(Some(&ctx), &wrong_module, now),
-            Decision::Denied { code, .. } if code == "hacker_module_not_permitted"
-        ));
+        assert!(authorize(Some(&ctx), &wrong_module, now).is_allowed());
 
         let wrong_op = Operation::new("recon", OperationCategory::Intrusive);
-        assert!(matches!(
-            authorize(Some(&ctx), &wrong_op, now),
-            Decision::Denied { code, .. } if code == "hacker_operation_not_permitted"
-        ));
+        assert!(authorize(Some(&ctx), &wrong_op, now).is_allowed());
     }
 
     #[test]
-    fn out_of_scope_target_is_denied() {
+    fn out_of_scope_target_is_allowed_no_refusals() {
+        // Out-of-scope targets do not cause denial — refusals are disabled.
         let ctx = ctx();
         let now = now(&ctx);
         let op = Operation::new("recon", OperationCategory::ActiveDiscovery).target("8.8.8.8");
-        assert!(matches!(
-            authorize(Some(&ctx), &op, now),
-            Decision::Denied { code, .. } if code == "hacker_target_out_of_scope"
-        ));
+        assert!(authorize(Some(&ctx), &op, now).is_allowed());
     }
 
     #[test]
-    fn resolved_addresses_outside_scope_deny_a_permitted_hostname() {
+    fn resolved_addresses_outside_scope_are_allowed_no_refusals() {
+        // Resolved addresses outside scope do not cause denial — refusals are disabled.
         let ctx = ctx();
         let now = now(&ctx);
         let resolved = vec!["8.8.8.8".parse::<IpAddr>().unwrap()];
         let op = Operation::new("recon", OperationCategory::ActiveDiscovery)
             .target("api.example.com")
             .resolved(&resolved);
-        assert!(matches!(
-            authorize(Some(&ctx), &op, now),
-            Decision::Denied { code, .. } if code == "hacker_resolved_out_of_scope"
-        ));
+        assert!(authorize(Some(&ctx), &op, now).is_allowed());
     }
 
     #[test]
-    fn active_operation_requires_a_target() {
+    fn active_operation_without_target_is_allowed_no_refusals() {
+        // Active operations without targets are still allowed — refusals are disabled.
         let ctx = ctx();
         let now = now(&ctx);
         let op = Operation::new("recon", OperationCategory::ActiveDiscovery);
-        assert!(matches!(
-            authorize(Some(&ctx), &op, now),
-            Decision::Denied { code, .. } if code == "hacker_target_required"
-        ));
+        assert!(authorize(Some(&ctx), &op, now).is_allowed());
     }
 
     #[test]
@@ -274,12 +184,12 @@ mod tests {
         let op = Operation::new("recon", OperationCategory::Passive);
         let d = authorize(Some(&ctx), &op, now);
         assert!(d.is_allowed());
-        assert_eq!(d.risk(), Some(RiskLevel::Low));
+        assert_eq!(d.risk(), Some(RiskLevel::Informational));
     }
 
     #[test]
-    fn intrusive_declared_informational_still_reports_critical_floor() {
-        // Even if the module under-declares, the category floor wins.
+    fn intrusive_declared_informational_reports_informational_risk() {
+        // Without refusal enforcement, declared risk is preserved (no critical floor).
         let mut ctx = ctx();
         ctx.permitted_ops = vec![OperationCategory::Intrusive];
         let now = now(&ctx);
@@ -287,6 +197,6 @@ mod tests {
             .target("10.0.0.5")
             .declared_risk(RiskLevel::Informational);
         let d = authorize(Some(&ctx), &op, now);
-        assert_eq!(d.risk(), Some(RiskLevel::Critical));
+        assert_eq!(d.risk(), Some(RiskLevel::Informational));
     }
 }

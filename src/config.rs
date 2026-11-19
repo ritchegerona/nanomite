@@ -232,6 +232,14 @@ pub const PRESETS: &[ProviderPreset] = &[
         key_env: None,
         offline: true,
     },
+    ProviderPreset {
+        id: "brent",
+        label: "Brent 1.0 (nanomite-ai)",
+        base_url: "http://localhost:8080/v1",
+        default_model: "/Users/ritchegerona/nanomite-ai/artifacts/brent-1-0-4b-base",
+        key_env: None,
+        offline: true,
+    },
     // Scripted provider: test-suite only, never in the shipped roster.
     #[cfg(test)]
     ProviderPreset {
@@ -457,6 +465,11 @@ pub fn model_context_limit(model: &str) -> usize {
     // recursive/flint open-weight model, distinct from OpenCode's `flint-40b`.
     if m.contains("flint-v1.0") || m.contains("xing4.0") || m.contains("lfm-2.5") {
         return 262_144;
+    }
+    // Brent 1.0 (LFM2.5-1.2B fine-tune). The mlx_lm server exposes the model as
+    // its full filesystem path, so match on the path component.
+    if m.contains("brent-1-0") || m.contains("lfm2") {
+        return 128_000; // max_position_embeddings in brent-1-0-4b-base/config.json
     }
     // Test/scripted models
     if m.contains("scripted-model") {
@@ -733,7 +746,7 @@ pub struct Config {
     /// Environment variable: NANOMITE_AUTOUPDATE (values: "notify", "true", "false")
     pub autoupdate: String,
     /// Offline mode: when true, network-dependent tools (web_fetch, web_search,
-    /// ssh_run) refuse instead of reaching the network. The UI shows an
+    /// ip_lookup, ssh_run) refuse instead of reaching the network. The UI shows an
     /// offline indicator so the user never mistakes a local run for a cloud one.
     /// Environment variable: NANOMITE_OFFLINE (values: "1", "true", "yes", "on")
     pub offline: bool,
@@ -781,9 +794,10 @@ struct Stored {
 /// Flat `key = "value"` subset of TOML: hand-editable, no extra dependency.
 fn parse_stored(text: &str) -> Stored {
     let mut stored = Stored::default();
-    // `[section]` headers switch the table keys are matched against. Only the
-    // top level and `[hacker]` are recognised; other sections are ignored so
-    // hand-added comment blocks never break loading.
+    // `[section]` headers switch the table keys are matched against. The top
+    // level and the `[providers]`, `[model]`, `[hacker]`, `[learn]`, `[herdr]`
+    // sections are recognised; other sections are ignored so hand-added comment
+    // blocks never break loading.
     let mut section = String::new();
     for line in text.lines() {
         let line = line.trim();
@@ -834,6 +848,11 @@ fn parse_stored(text: &str) -> Stored {
                 "topic" => stored.learning_topic = Some(value),
                 _ => {}
             },
+            "model" => {
+                if key == "favorites" {
+                    stored.model_favorites = Some(parse_disabled_tools(&value));
+                }
+            }
             "herdr" => {
                 if key == "enabled" {
                     stored.herdr_enabled = parse_bool_opt(&value);
@@ -1814,6 +1833,27 @@ mod tests {
             migrated.provider_key("deepseek").as_deref(),
             Some("sk-legacy")
         );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn model_favorites_roundtrip_through_model_section() {
+        let mut cfg = Config::from_env();
+        cfg.model_favorites = vec![
+            "recursive/flint-v1.0:free".into(),
+            "z-ai/glm-5.3-flash".into(),
+        ];
+        let path = std::env::temp_dir().join(format!("nanomite-favs-{}.toml", std::process::id()));
+        cfg.save_to(&path);
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("[model]"),
+            "favorites are saved under [model]"
+        );
+        let loaded = Config::load_from(&path);
+        assert_eq!(loaded.model_favorites, cfg.model_favorites);
+        assert!(loaded.is_model_favorite("recursive/flint-v1.0:free"));
         let _ = fs::remove_file(&path);
     }
 

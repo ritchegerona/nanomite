@@ -109,6 +109,9 @@ pub struct SshRunResult {
 #[derive(Clone)]
 pub struct ExecTools {
     root: PathBuf,
+    /// Auto-installer shared with the tool layer so missing tools can be
+    /// installed on demand and remembered as skills.
+    pub auto_installer: std::sync::Arc<crate::tools::auto_install::AutoInstaller>,
 }
 
 // ===== Native Port Scanner ======================================================
@@ -193,7 +196,16 @@ fn service_name(port: u16) -> Option<String> {
 
 impl ExecTools {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            auto_installer: std::sync::Arc::new(
+                crate::tools::auto_install::AutoInstaller::new(std::sync::Arc::new(
+                    tokio::sync::Mutex::new(
+                        crate::tools::auto_install::SkillTracker::new(),
+                    ),
+                )),
+            ),
+        }
     }
 
     /// Resolves a workspace-relative cwd; refuses anything that escapes it.

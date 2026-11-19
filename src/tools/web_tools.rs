@@ -1,14 +1,18 @@
-//! Web tools: `web_fetch` (GET + readability-ish extraction) and `web_search`
-//! (DuckDuckGo Lite). Sync by design — the runtime dispatches tool calls through
+//! Web tools: `web_fetch` (GET + readability-ish extraction), `web_search`
+//! (DuckDuckGo Lite) and `ip_lookup` (public-IP geolocation/ISP/ASN via
+//! ipapi.co). Sync by design — the runtime dispatches tool calls through
 //! `tokio::task::spawn_blocking`.
 
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
+use std::str::FromStr;
 
 const MAX_BODY: usize = 512 * 1024;
 const MAX_CONTENT: usize = 24 * 1024;
 const MAX_SNIPPET: usize = 240;
 const MAX_RESULTS: usize = 8;
 const UA: &str = "nanomite/0.1 (terminal coding agent)";
+const IP_LOOKUP_ENDPOINT: &str = "https://ipapi.co";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebFetchArgs {
@@ -42,6 +46,31 @@ pub struct WebSearchHit {
 pub struct WebSearchResult {
     pub query: String,
     pub results: Vec<WebSearchHit>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpLookupArgs {
+    /// Public IPv4/IPv6 address. Omit (or pass "me") to look up this machine's
+    /// own public IP.
+    #[serde(default)]
+    pub ip: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpLookupResult {
+    pub ip: String,
+    pub version: Option<String>,
+    pub city: Option<String>,
+    pub region: Option<String>,
+    pub country: Option<String>,
+    pub country_code: Option<String>,
+    pub postal: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub timezone: Option<String>,
+    pub asn: Option<String>,
+    pub org: Option<String>,
+    pub source: String,
 }
 
 fn client() -> Result<reqwest::blocking::Client, String> {
@@ -226,6 +255,104 @@ impl WebTools {
             results: results.into_iter().take(MAX_RESULTS).collect(),
         })
     }
+
+    /// Look up geolocation/ISP/ASN for a public IP, or for this machine's own
+    /// public IP when no address (or "me") is supplied.
+    pub fn ip_lookup(&self, args: IpLookupArgs) -> Result<IpLookupResult, String> {
+        if self.offline {
+            return Err("refused: ip_lookup is disabled in offline mode".into());
+        }
+        let requested = args
+            .ip
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty() && s != "me");
+        let (url, queried) = match requested {
+            Some(ip) => {
+                let parsed = IpAddr::from_str(&ip)
+                    .map_err(|_| format!("refused: invalid IP address `{ip}`"))?;
+                if !is_public_ip(parsed) {
+                    return Err(format!("refused: `{ip}` is not a public IP address"));
+                }
+                (format!("{IP_LOOKUP_ENDPOINT}/{ip}/json/"), ip)
+            }
+            None => (format!("{IP_LOOKUP_ENDPOINT}/json/"), "me".to_string()),
+        };
+        let resp = client()?
+            .get(&url)
+            .send()
+            .map_err(|e| format!("ip lookup failed: {e}"))?;
+        let status = resp.status();
+        let body = resp.text().map_err(|e| format!("read failed: {e}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "ip lookup failed: HTTP {status} {}",
+                crate::agent::runtime::shorten(&body, 120)
+            ));
+        }
+        parse_ip_lookup(&body, &queried)
+    }
+}
+
+/// Only public unicast addresses have meaningful geolocation data; rejecting
+/// private/loopback/link-local/multicast input keeps the request well-formed
+/// and avoids sending junk to the lookup service.
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(o[0] == 0
+                || o[0] == 10
+                || o[0] == 127
+                || o[0] >= 224
+                || (o[0] == 169 && o[1] == 254)
+                || (o[0] == 172 && (16..=31).contains(&o[1]))
+                || (o[0] == 192 && o[1] == 168)
+                || (o[0] == 100 && (64..=127).contains(&o[1])))
+        }
+        IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.to_ipv4().is_some()
+                || (first & 0xffc0) == 0xfe80
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xff00) == 0xff00)
+        }
+    }
+}
+
+/// Parse an ipapi.co JSON response into the bounded result the model sees.
+fn parse_ip_lookup(body: &str, queried: &str) -> Result<IpLookupResult, String> {
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|_| {
+        format!(
+            "ip lookup failed: unexpected response {}",
+            crate::agent::runtime::shorten(body, 120)
+        )
+    })?;
+    if value.get("error").and_then(|v| v.as_bool()) == Some(true) {
+        let reason = value
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return Err(format!("ip lookup failed: {reason}"));
+    }
+    let text = |key: &str| value.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    let number = |key: &str| value.get(key).and_then(|v| v.as_f64());
+    Ok(IpLookupResult {
+        ip: text("ip").unwrap_or_else(|| queried.to_string()),
+        version: text("version"),
+        city: text("city"),
+        region: text("region"),
+        country: text("country_name"),
+        country_code: text("country"),
+        postal: text("postal"),
+        latitude: number("latitude"),
+        longitude: number("longitude"),
+        timezone: text("timezone"),
+        asn: text("asn"),
+        org: text("org"),
+        source: "ipapi.co".to_string(),
+    })
 }
 
 /// Parses DuckDuckGo Lite result rows without a regex dependency.
@@ -374,5 +501,78 @@ mod tests {
         assert_eq!(hits[0].title, "A Site");
         assert_eq!(hits[0].snippet, format!("first {} result", "\u{26}"));
         assert_eq!(hits[1].url, "https://b.dev");
+    }
+
+    #[test]
+    fn ip_lookup_offline_refuses() {
+        let err = WebTools::new(true)
+            .ip_lookup(IpLookupArgs { ip: None })
+            .unwrap_err();
+        assert!(err.contains("offline"), "{err}");
+    }
+
+    #[test]
+    fn ip_lookup_refuses_invalid_and_non_public_addresses() {
+        let web = WebTools::new(false);
+        for bad in [
+            "not-an-ip",
+            "192.168.1.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "127.0.0.1",
+            "169.254.1.1",
+            "::1",
+            "fe80::1",
+            "fc00::1",
+        ] {
+            let err = web
+                .ip_lookup(IpLookupArgs {
+                    ip: Some(bad.into()),
+                })
+                .unwrap_err();
+            assert!(err.starts_with("refused:"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn public_ip_classification() {
+        for ok in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            assert!(is_public_ip(IpAddr::from_str(ok).unwrap()), "{ok}");
+        }
+        for no in [
+            "0.0.0.0",
+            "10.1.2.3",
+            "172.20.0.1",
+            "192.168.0.1",
+            "100.64.0.1",
+            "224.0.0.1",
+            "::",
+            "fd00::1",
+            "ff02::1",
+            "::ffff:8.8.8.8",
+        ] {
+            assert!(!is_public_ip(IpAddr::from_str(no).unwrap()), "{no}");
+        }
+    }
+
+    #[test]
+    fn parses_ip_lookup_response() {
+        let body = r#"{"ip":"8.8.8.8","version":"IPv4","city":"Mountain View","region":"California","country":"US","country_name":"United States","postal":"94043","latitude":37.38605,"longitude":-122.08385,"timezone":"America/Los_Angeles","asn":"AS15169","org":"Google LLC"}"#;
+        let result = parse_ip_lookup(body, "8.8.8.8").unwrap();
+        assert_eq!(result.ip, "8.8.8.8");
+        assert_eq!(result.version.as_deref(), Some("IPv4"));
+        assert_eq!(result.city.as_deref(), Some("Mountain View"));
+        assert_eq!(result.country.as_deref(), Some("United States"));
+        assert_eq!(result.country_code.as_deref(), Some("US"));
+        assert_eq!(result.asn.as_deref(), Some("AS15169"));
+        assert_eq!(result.org.as_deref(), Some("Google LLC"));
+        assert_eq!(result.source, "ipapi.co");
+        assert!((result.latitude.unwrap() - 37.38605).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parses_ip_lookup_error() {
+        let err = parse_ip_lookup(r#"{"error":true,"reason":"RateLimited"}"#, "me").unwrap_err();
+        assert!(err.contains("RateLimited"), "{err}");
     }
 }

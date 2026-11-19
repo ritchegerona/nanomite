@@ -54,6 +54,15 @@ impl From<rusqlite::Error> for FindingStoreError {
     }
 }
 
+// Manual conversion for csv::Error to avoid conflicting blanket impls.
+fn csv_err(err: csv::Error) -> FindingStoreError {
+    FindingStoreError::Database(err.to_string())
+}
+
+fn csv_inner_err(err: csv::IntoInnerError<csv::Writer<Vec<u8>>>) -> FindingStoreError {
+    FindingStoreError::Database(err.to_string())
+}
+
 /// A persisted assessment header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredAssessment {
@@ -184,6 +193,7 @@ pub enum ReportFormat {
     Markdown,
     Json,
     Sarif,
+    Csv,
 }
 
 impl ReportFormat {
@@ -192,6 +202,7 @@ impl ReportFormat {
             "" | "md" | "markdown" => Some(ReportFormat::Markdown),
             "json" => Some(ReportFormat::Json),
             "sarif" => Some(ReportFormat::Sarif),
+            "csv" => Some(ReportFormat::Csv),
             _ => None,
         }
     }
@@ -201,6 +212,7 @@ impl ReportFormat {
             ReportFormat::Markdown => "md",
             ReportFormat::Json => "json",
             ReportFormat::Sarif => "sarif",
+            ReportFormat::Csv => "csv",
         }
     }
 }
@@ -550,6 +562,48 @@ impl FindingsStore {
             .map_err(FindingStoreError::from)
     }
 
+    /// Returns all assessment specifications (for resuming completed assessments).
+    pub fn assessment_specs(&self) -> Result<Vec<StoredAssessmentSpec>, FindingStoreError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.name, a.authorization_ref, a.status, a.started_at, a.expiry_at,
+                    COALESCE(s.cidrs, '[]'), COALESCE(s.domains, '[]')
+             FROM assessments a
+             LEFT JOIN assessment_scopes s ON s.assessment_id = a.id
+             ORDER BY a.created_at DESC, a.id DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            let authorization_ref: Option<String> = row.get(2)?;
+            let status: String = row.get(3)?;
+            let started_at: String = row.get(4)?;
+            let expiry_at: String = row.get(5)?;
+            let cidrs_json: String = row.get(6)?;
+            let domains_json: String = row.get(7)?;
+
+            let start = parse_rfc3339(&started_at).ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("assessment {id}: bad started_at"))))
+            })?;
+            let expiry = parse_rfc3339(&expiry_at).ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("assessment {id}: bad expiry_at"))))
+            })?;
+
+            Ok(StoredAssessmentSpec {
+                id,
+                name,
+                authorization_ref,
+                status,
+                start,
+                expiry,
+                cidrs: parse_json_list(&cidrs_json),
+                domains: parse_json_list(&domains_json),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(FindingStoreError::from)
+    }
+
     /// Number of findings, optionally scoped to one assessment.
     pub fn count_findings(&self, assessment_id: Option<&str>) -> Result<i64, FindingStoreError> {
         let conn = self.lock();
@@ -695,7 +749,48 @@ impl FindingsStore {
             ReportFormat::Markdown => self.render_markdown(assessment_id),
             ReportFormat::Json => self.render_json(assessment_id),
             ReportFormat::Sarif => self.render_sarif(assessment_id),
+            ReportFormat::Csv => self.render_csv(assessment_id),
         }
+    }
+
+    /// Renders a CSV report for spreadsheet import.
+    pub fn render_csv(
+        &self,
+        assessment_id: Option<&str>,
+    ) -> Result<String, FindingStoreError> {
+        let findings = self.findings(assessment_id, HARD_FINDING_LIMIT)?;
+        let mut wtr = csv::Writer::from_writer(vec![]);
+        wtr.write_record(&[
+            "id",
+            "assessment_id",
+            "module",
+            "operation",
+            "target",
+            "title",
+            "severity",
+            "confidence",
+            "status",
+            "detail",
+            "created_at",
+        ]).map_err(csv_err)?;
+        for f in &findings {
+            wtr.write_record(&[
+                &f.id.to_string(),
+                &f.assessment_id,
+                &f.module,
+                &f.operation,
+                &f.target,
+                &f.title,
+                &f.severity,
+                &f.confidence,
+                &f.status,
+                &f.detail,
+                &f.created_at,
+            ]).map_err(csv_err)?;
+        }
+        let csv_data = wtr.into_inner().map_err(csv_inner_err)?;
+        String::from_utf8(csv_data)
+            .map_err(|e| FindingStoreError::Database(format!("csv utf8: {e}")))
     }
 
     /// Writes a report in `format` into `dir` and returns the path.

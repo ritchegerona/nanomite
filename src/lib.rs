@@ -24,6 +24,7 @@ pub mod nanomite_vpn;
 // published library surface are not dead code.
 #[allow(dead_code)]
 pub mod memory;
+pub mod neural;
 pub mod privacy;
 pub mod session;
 pub mod telemetry;

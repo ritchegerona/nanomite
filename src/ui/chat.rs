@@ -47,7 +47,7 @@ fn tool_icon(name: &str) -> &'static str {
         "write_file" | "edit_file" => "←",
         "search" => "✱",
         "web_fetch" | "browse" | "browse_screenshot" => "%",
-        "web_search" => "◈",
+        "web_search" | "ip_lookup" => "◈",
         _ => "⚙",
     }
 }

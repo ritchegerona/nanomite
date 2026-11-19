@@ -1,5 +1,5 @@
-use nanomite::app::{App, Control};
-use nanomite::ui;
+use nanomite_ai::app::{App, Control};
+use nanomite_ai::ui;
 use ratatui::crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -138,7 +138,7 @@ async fn main() -> io::Result<()> {
                 }
             },
             "update" => {
-                return nanomite::update::run();
+                return nanomite_ai::update::run();
             }
             "--version" | "-V" => {
                 println!("nanomite {}", env!("CARGO_PKG_VERSION"));
@@ -158,9 +158,9 @@ async fn main() -> io::Result<()> {
             }
         }
     }
-    let mut cfg = nanomite::config::Config::load();
+    let mut cfg = nanomite_ai::config::Config::load();
     if let Some(branch) = &worktree_branch {
-        match nanomite::worktree::ensure(&cfg.workspace, branch) {
+        match nanomite_ai::worktree::ensure(&cfg.workspace, branch) {
             Ok(path) => {
                 eprintln!("nanomite: worktree ready at {}", path.display());
                 // Open the agent in the worktree: workspace = worktree path.
@@ -198,7 +198,7 @@ async fn main() -> io::Result<()> {
     let mut engine_rx = app.take_engine_rx();
     if want_update_check {
         tokio::task::spawn_blocking(move || {
-            let status = nanomite::update::check_status();
+            let status = nanomite_ai::update::check_status();
             let _ = update_tx.send(Control::UpdateChecked(status));
         });
     }
@@ -505,7 +505,7 @@ fn run_control(
 fn write_clipboard(text: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use std::io::Write;
     let mut stdout = io::stdout();
-    stdout.write_all(nanomite::app::osc52(text).as_bytes())?;
+    stdout.write_all(nanomite_ai::app::osc52(text).as_bytes())?;
     stdout.flush()?;
     Ok(())
 }
