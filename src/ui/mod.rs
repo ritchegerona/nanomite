@@ -225,10 +225,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let rects = app.view.layout(area, input_h);
 
     panels::header(frame, rects.header, app);
-    // Show activity panel when toggled, otherwise show thinking panel
+    // Left info column: activity timeline overrides the thinking panel when
+    // toggled on; otherwise the thinking panel shows (gated by show_thinking,
+    // default true). Neither flag shows an empty panel.
     if app.show_activity {
         panels::activity_timeline(frame, rects.left_info, app);
-    } else {
+    } else if app.show_thinking {
         draw_thinking_panel(frame, rects.left_info, app, &theme);
     }
     chat::render(frame, rects.main_chat, app);
