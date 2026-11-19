@@ -23,6 +23,7 @@ use crate::tools::skills::{
 };
 use crate::tools::test_tools::RunTestsArgs;
 use crate::tools::web_tools::{IpLookupArgs, WebFetchArgs, WebSearchArgs};
+use crate::tools::recon_tools::WebReconArgs;
 use crate::tools::ToolSet;
 use serde_json::json;
 use std::path::PathBuf;
@@ -1621,6 +1622,22 @@ pub(crate) fn run_tool(
             let payload = serde_json::to_string(&result).unwrap_or_default();
             Ok((payload, summary))
         }
+        "web_recon" => {
+            let parsed: WebReconArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad web_recon arguments: {e}"))?;
+            let result = tools
+                .recon
+                .run(parsed)
+                .map_err(|e| format!("web_recon failed: {e}"))?;
+            let summary = format!(
+                "{} findings ({} scanners) on {}",
+                result.total_findings,
+                result.scanners_run.len(),
+                shorten(&result.target, 40)
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            Ok((payload, summary))
+        }
         "skills_list" => {
             let parsed: SkillsListArgs = serde_json::from_value(args)
                 .map_err(|e| format!("bad skills_list arguments: {e}"))?;
@@ -2485,7 +2502,7 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        let expected = 31
+        let expected = 32
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(filter_disabled_schemas(schemas, &[]).len(), expected);

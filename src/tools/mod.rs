@@ -16,6 +16,7 @@ pub mod skills;
 pub mod test_tools;
 
 pub mod web_tools;
+pub mod recon_tools;
 
 use crate::improve::ImproveEngine;
 use crate::memory::MemoryEngine;
@@ -53,6 +54,8 @@ pub struct ToolSet {
     pub index: crate::tools::index_tools::IndexTools,
     /// Plan/task list tools. Always present.
     pub plan: crate::tools::plan_tools::PlanTools,
+    /// Web recon tools: gobuster/nikto wrappers for authorized recon.
+    pub recon: crate::tools::recon_tools::ReconTools,
     /// Skill registry: tracks installed tools as reusable skills across sessions.
     pub skills: Arc<crate::tools::skills::SkillRegistry>,
     /// Anchor paths the engine validates against. Travels with the engine so
@@ -85,6 +88,7 @@ impl ToolSet {
             external: std::sync::Arc::new(crate::tools::external_tools::ExternalTools::default()),
             index: crate::tools::index_tools::IndexTools::new(workspace.clone()),
             plan: crate::tools::plan_tools::PlanTools::new(workspace.clone()),
+            recon: crate::tools::recon_tools::ReconTools::new(workspace.clone()),
             skills: Arc::new(crate::tools::skills::SkillRegistry::new()),
             improve_roots: None,
             offline,

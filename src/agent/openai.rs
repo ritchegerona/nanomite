@@ -940,6 +940,22 @@ pub fn tool_schemas() -> Vec<Tool> {
                 "additionalProperties": false
             }),
         ),
+        Tool::new(
+            "web_recon",
+            "Run authorized web reconnaissance against a target URL using gobuster (directory busting) and/or nikto (vulnerability scanning). Results are stored as neural memory techniques.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "Target URL (http:// or https://)" },
+                    "scanners": { "type": "string", "description": "Which scanners: \"gobuster\", \"nikto\", or \"both\" (default \"both\")" },
+                    "wordlist": { "type": "string", "description": "Wordlist path for gobuster (optional)" },
+                    "gobuster_extra": { "type": "string", "description": "Extra gobuster flags (optional)" },
+                    "timeout_ms": { "type": "integer", "description": "Hard cap in milliseconds (default 120000, max 300000)" }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+        ),
     ];
     #[cfg(any(feature = "vpn", feature = "tor"))]
     schemas.extend(crate::tools::privacy_tools::privacy_tool_schemas());
