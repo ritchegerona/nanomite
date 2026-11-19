@@ -17,6 +17,7 @@ pub mod test_tools;
 
 pub mod web_tools;
 pub mod recon_tools;
+pub mod wireless_tools;
 
 use crate::evidence::EvidenceLocker;
 use crate::improve::ImproveEngine;
@@ -57,6 +58,8 @@ pub struct ToolSet {
     pub plan: crate::tools::plan_tools::PlanTools,
     /// Web recon tools: gobuster/nikto wrappers for authorized recon.
     pub recon: crate::tools::recon_tools::ReconTools,
+    /// Wireless auditing tools: aircrack-ng, wifite, wash wrappers for authorized wireless assessments.
+    pub wireless: crate::tools::wireless_tools::WirelessTools,
     /// Skill registry: tracks installed tools as reusable skills across sessions.
     pub skills: Arc<crate::tools::skills::SkillRegistry>,
     /// Evidence locker: persistent, content-addressed storage for assessment
@@ -93,6 +96,7 @@ impl ToolSet {
             index: crate::tools::index_tools::IndexTools::new(workspace.clone()),
             plan: crate::tools::plan_tools::PlanTools::new(workspace.clone()),
             recon: crate::tools::recon_tools::ReconTools::new(workspace.clone()),
+            wireless: crate::tools::wireless_tools::WirelessTools::new(workspace.clone()),
             skills: Arc::new(crate::tools::skills::SkillRegistry::new()),
             evidence: None,
             improve_roots: None,

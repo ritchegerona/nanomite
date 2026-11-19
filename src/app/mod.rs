@@ -4,6 +4,7 @@ use crate::agent::provider::{AgentProvider, ChatMessage, Role, Usage};
 use crate::agent::runtime::{AgentEvent, AgentRuntime, Cancel};
 use crate::evidence::EvidenceFilter;
 use crate::neural::autonomous_planner::PlanStatus;
+use crate::tools::wireless_tools::WirelessReconArgs;
 use crate::agent::suggest::{self, SuggestResult};
 use crate::agent::swarm::Swarm;
 #[cfg(test)]
@@ -3575,6 +3576,7 @@ impl App {
             Command::Perf => self.show_perf(),
             Command::Skills => self.show_skills(),
             Command::Evidence => self.show_evidence(args),
+            Command::Wireless => self.show_wireless(args),
             Command::Reasoning => self.cycle_reasoning(),
             Command::Refresh => self.refresh(),
             Command::Copy => self.copy_selection(),
@@ -4099,6 +4101,99 @@ impl App {
                     } else {
                         a.tags.join(", ")
                     }
+                ));
+            }
+        }
+
+        self.entries
+            .push(Entry::new(EntryRole::System, text.trim_end().to_string()));
+        let last = self.entries.last_mut().unwrap();
+        last.phase = Phase::Done;
+        self.mark_dirty();
+    }
+
+    /// `/wireless`: run wireless auditing against an interface.
+    fn show_wireless(&mut self, args: &str) {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        if parts.is_empty() {
+            self.entries.push(Entry::new(
+                EntryRole::System,
+                "Usage: /wireless <interface> [tools=all|wash|aircrack|wifite]".to_string(),
+            ));
+            let last = self.entries.last_mut().unwrap();
+            last.phase = Phase::Done;
+            self.mark_dirty();
+            return;
+        }
+
+        let interface = parts[0].to_string();
+        let tools = parts
+            .iter()
+            .skip(1)
+            .find(|p| p.starts_with("tools="))
+            .map(|p| p.trim_start_matches("tools=").to_string())
+            .unwrap_or_else(|| "all".to_string());
+
+        let args = WirelessReconArgs {
+            interface,
+            tools,
+            bssid: None,
+            channel: None,
+            timeout_ms: None,
+        };
+
+        let result = match self.runtime.tool_set().wireless.run(args) {
+            Ok(r) => r,
+            Err(e) => {
+                self.entries.push(Entry::new(
+                    EntryRole::System,
+                    format!("wireless_recon failed: {e}"),
+                ));
+                let last = self.entries.last_mut().unwrap();
+                last.phase = Phase::Done;
+                self.mark_dirty();
+                return;
+            }
+        };
+
+        // Store evidence if locker is attached.
+        if let Some(locker) = &self.runtime.tool_set().evidence {
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            let _ = locker.store(
+                "session-default",
+                &result.interface,
+                "wireless_recon",
+                &format!("wireless_recon: {}", &result.interface),
+                payload.as_bytes(),
+                vec!["tool_output".into(), "wireless_recon".into(), "wireless".into()],
+                "application/json",
+            );
+        }
+
+        let mut text = String::new();
+        text.push_str(&format!(
+            "Wireless recon — interface `{}`\n\n",
+            result.interface
+        ));
+        text.push_str(&format!(
+            "Tools run: {} · Findings: {} · Timed out: {}\n\n",
+            result.tools_run.join(", "),
+            result.total_findings,
+            result.timed_out
+        ));
+
+        if result.findings.is_empty() {
+            text.push_str("No wireless findings.\n");
+        } else {
+            for f in &result.findings {
+                text.push_str(&format!(
+                    "  [{}] {} · BSSID: {:?} · SSID: {:?} · CH: {:?} · Signal: {:?} dBm\n",
+                    f.tool,
+                    crate::evidence::escape_md(&f.finding),
+                    f.bssid,
+                    f.ssid,
+                    f.channel,
+                    f.signal
                 ));
             }
         }

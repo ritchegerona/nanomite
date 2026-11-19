@@ -242,6 +242,11 @@ impl ToolSet {
                 category: Exec,
             },
             ToolSpec {
+                name: "wireless_recon",
+                description: "Run authorized wireless reconnaissance against a target interface using wash (WPS scan), aircrack-ng (airodump/airmon discovery), and/or wifite (automated auditor).",
+                category: Exec,
+            },
+            ToolSpec {
                 name: "autonomous_execute",
                 description: "Run an autonomous security assessment plan against a goal. Decomposes the goal into ordered tasks and executes them through the tool layer, with optional human approval before each risky command.",
                 category: Exec,
@@ -277,7 +282,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate tool names in catalog");
-        let expected = 41usize
+        let expected = 42usize
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(

@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>iPhone Security Assessment Report — Chie</title>
+<style>
+  @page {
+    size: A4;
+    margin: 22mm 20mm 20mm 20mm;
+    @bottom-center {
+      content: "Nanomite v1.3.5 — CONFIDENTIAL — Page " counter(page) " of " counter(pages);
+      font-family: 'Helvetica', 'Arial', sans-serif;
+      font-size: 8pt;
+      color: #6b7280;
+    }
+    @top-right {
+      content: "iPhone Security Assessment — UDID 00008140-000475360A42801C";
+      font-family: 'Helvetica', 'Arial', sans-serif;
+      font-size: 8pt;
+      color: #9ca3af;
+    }
+  }
+  @page :first {
+    @top-right { content: none; }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: 'Helvetica', 'Arial', 'Segoe UI', sans-serif;
+    font-size: 10pt;
+    line-height: 1.5;
+    color: #1f2937;
+    margin: 0;
+  }
+
+  /* ---------- COVER PAGE ---------- */
+  .cover {
+    height: 270mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    background: linear-gradient(135deg, #0b1120 0%, #14213d 50%, #0b1120 100%);
+    color: #ffffff;
+    page-break-after: always;
+  }
+  .cover .badge {
+    display: inline-block;
+    padding: 6px 16px;
+    border-radius: 20px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.25);
+    font-size: 9pt;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 30px;
+    color: #93c5fd;
+  }
+  .cover h1 {
+    font-size: 34pt;
+    font-weight: 800;
+    margin: 0 0 12px 0;
+    letter-spacing: -1px;
+    line-height: 1.15;
+  }
+  .cover h2 {
+    font-size: 15pt;
+    font-weight: 400;
+    color: #cbd5e1;
+    margin: 0 0 40px 0;
+    letter-spacing: 1px;
+  }
+  .cover .divider {
+    width: 80px;
+    height: 3px;
+    background: #3b82f6;
+    margin: 0 auto 40px auto;
+    border-radius: 2px;
+  }
+  .cover .meta-table {
+    width: 85%;
+    max-width: 620px;
+    margin: 0 auto;
+    border-collapse: collapse;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .cover .meta-table td {
+    padding: 14px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-size: 10pt;
+  }
+  .cover .meta-table td:first-child {
+    font-weight: 700;
+    color: #93c5fd;
+    width: 34%;
+    text-transform: uppercase;
+    font-size: 8.5pt;
+    letter-spacing: 0.5px;
+  }
+  .cover .meta-table td:last-child { border-bottom: none; }
+  .cover .footer-note {
+    margin-top: 50px;
+    font-size: 8pt;
+    color: #64748b;
+    max-width: 520px;
+    line-height: 1.5;
+  }
+
+  /* ---------- BODY ---------- */
+  h2.section-title {
+    font-size: 16pt;
+    color: #0f172a;
+    border-bottom: 2.5px solid #2563eb;
+    padding-bottom: 6px;
+    margin: 24px 0 16px 0;
+    display: flex;
+    align-items: center;
+  }
+  h2.section-title .num {
+    background: #2563eb;
+    color: #fff;
+    border-radius: 50%;
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 10px;
+    font-weight: 800;
+    font-size: 11pt;
+  }
+  h3 { font-size: 11.5pt; color: #1e293b; margin: 18px 0 8px 0; }
+  p { margin: 6px 0; text-align: justify; }
+  ul, ol { margin: 6px 0 10px 0; padding-left: 22px; }
+  li { margin-bottom: 4px; text-align: justify; }
+
+  table.data {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 9pt;
+  }
+  table.data th {
+    background: #1e293b;
+    color: #fff;
+    text-align: left;
+    padding: 8px 10px;
+    font-weight: 700;
+    border: 1px solid #1e293b;
+  }
+  table.data td {
+    padding: 7px 10px;
+    border: 1px solid #cbd5e1;
+    vertical-align: top;
+  }
+  table.data tr:nth-child(even) td { background: #f8fafc; }
+  table.data tr:hover td { background: #eef2ff; }
+
+  .kpi-row { display: flex; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
+  .kpi {
+    flex: 1 1 140px;
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-left: 4px solid #2563eb;
+    border-radius: 6px;
+    padding: 12px 14px;
+    min-width: 130px;
+  }
+  .kpi .val { font-size: 17pt; font-weight: 800; color: #0f172a; line-height: 1.1; }
+  .kpi .lbl { font-size: 8pt; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+
+  .finding {
+    border: 1px solid #e2e8f0;
+    border-left: 4px solid #2563eb;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 14px 0;
+    background: #fafafa;
+  }
+  .finding.critical { border-left-color: #dc2626; background: #fef2f2; }
+  .finding.high { border-left-color: #ea580c; background: #fff7ed; }
+  .finding.medium { border-left-color: #ca8a04; background: #fffbeb; }
+  .finding.low { border-left-color: #15803d; background: #f0fdf4; }
+  .finding.info { border-left-color: #2563eb; background: #f8fafc; }
+  .finding .tag {
+    display: inline-block;
+    font-size: 7.5pt;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 8px;
+    margin-bottom: 6px;
+  }
+  .finding.critical .tag { background: #dc2626; color: #fff; }
+  .finding.high .tag { background: #ea580c; color: #fff; }
+  .finding.medium .tag { background: #ca8a04; color: #fff; }
+  .finding.low .tag { background: #15803d; color: #fff; }
+  .finding.info .tag { background: #2563eb; color: #fff; }
+  .finding h4 { margin: 0 0 4px 0; font-size: 10.5pt; color: #0f172a; }
+  .finding p { margin: 2px 0 4px 0; font-size: 9.3pt; }
+
+  .clean-check {
+    display: flex; align-items: center; gap: 8px; margin: 5px 0; font-size: 9.3pt;
+  }
+  .clean-check .ok { color: #15803d; font-weight: 700; }
+
+  .recommendation {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 12px 0;
+  }
+  .recommendation h4 { margin: 0 0 6px 0; color: #0f172a; font-size: 10.5pt; }
+  .recommendation ul { margin: 0; padding-left: 20px; }
+
+  .limit-box {
+    background: #fef3c7;
+    border: 1px solid #d97706;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 16px 0;
+    font-size: 9pt;
+  }
+  .limit-box h4 { margin: 0 0 6px 0; color: #92400e; font-size: 10pt; }
+
+  .footer {
+    margin-top: 30px;
+    border-top: 1px solid #cbd5e1;
+    padding-top: 12px;
+    font-size: 7.5pt;
+    color: #64748b;
+    text-align: center;
+  }
+
+  .small { font-size: 8.5pt; color: #475569; }
+  .bold { font-weight: 700; }
+  .text-center { text-align: center; }
+  .page-break { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<!-- ================= COVER ================= -->
+<div class="cover">
+  <div class="badge">Confidential Security Assessment</div>
+  <h1>iPhone Security<br>Assessment Report</h1>
+  <h2>Device: "Chie" — iPhone 16 Pro Max (iPhone17,1)</h2>
+  <div class="divider"></div>
+
+  <table class="meta-table">
+    <tr><td>Assessment Type</td><td>Mobile Device Security &amp; Spyware Scan</td></tr>
+    <tr><td>Device Name</td><td>Chie</td></tr>
+    <tr><td>Model / Product Type</td><td>iPhone17,1 (iPhone 16 Pro Max)</td></tr>
+    <tr><td>iOS Version</td><td>27.0.1 (Build 24A446)</td></tr>
+    <tr><td>UDID</td><td>00008140-000475360A42801C</td></tr>
+    <tr><td>Serial Number</td><td>ML7DH06X6N</td></tr>
+    <tr><td>IMEI (SIM 1 / SIM 2)</td><td>350059632445328 / 350059632421642</td></tr>
+    <tr><td>Phone Number</td><td>+63 998 923 4198</td></tr>
+    <tr><td>Carrier</td><td>Smart Philippines (dual SIM)</td></tr>
+    <tr><td>Assessment Date</td><td>2026-11-03</td></tr>
+    <tr><td>Assessed By</td><td>Nanomite Security Framework</td></tr>
+    <tr><td>Report Generator</td><td>Nanomite v1.3.5</td></tr>
+  </table>
+
+  <div class="footer-note">
+    This report was generated for authorized security research and device inventory purposes.
+    Findings are based on non-jailbroken iOS enumeration via libimobiledevice tools. The
+    document contains confidential device identifiers and should be handled accordingly.
+    Nanomite v1.3.5 — Authorized Security Research Platform.
+  </div>
+</div>
+
+<!-- ================= EXECUTIVE SUMMARY ================= -->
+<div class="page-break"></div>
+
+<h2 class="section-title"><span class="num">1</span>Executive Summary</h2>
+
+<p>
+A security assessment was performed on an Apple iPhone identified as <b>Chie</b>
+(iPhone17,1 / iPhone 16 Pro Max) running iOS 27.0.1 (Build 24A446). The device was
+connected via USB to an authorized assessment host and enumerated using the
+libimobiledevice toolset (<i>ideviceinfo</i>, <i>idevice_id</i>). The phone is dual-SIM
+provisioned with Smart Philippines and is currently activated, password-protected, and
+under Activation Lock (Find My enabled).
+</p>
+
+<div class="kpi-row">
+  <div class="kpi"><div class="val">388</div><div class="lbl">Total Apps Enumerated</div></div>
+  <div class="kpi"><div class="val">111</div><div class="lbl">User-Installed Apps</div></div>
+  <div class="kpi"><div class="val">253</div><div class="lbl">System / Apple Apps</div></div>
+  <div class="kpi"><div class="val">0</div><div class="lbl">MDM / Supervision Profiles</div></div>
+  <div class="kpi"><div class="val">0</div><div class="lbl">Known Spyware Signatures</div></div>
+  <div class="kpi"><div class="val">Clean</div><div class="lbl">Overall Posture</div></div>
+</div>
+
+<p>
+<strong>Overall finding:</strong> No evidence of mobile device management (MDM),
+supervision, known commercial spyware, or jailbreak was detected on the device. The
+device appears to be a standard consumer iPhone under user control. However, several
+lesser-known or region-mismatched applications were identified that warrant manual
+permission review. No deep process, kernel, or network traffic analysis was possible
+without a jailbreak or full filesystem image; therefore sophisticated, iconless
+surveillance implants cannot be fully ruled out by this enumeration alone.
+</p>
+
+<table class="data">
+  <tr><th style="width:28%">Assessment Area</th><th style="width:18%">Status</th><th>Details</th></tr>
+  <tr><td>Device Enumeration</td><td><span class="ok">&#10004; Complete</span></td><td>Full hardware, baseband, and identity data captured via ideviceinfo.</td></tr>
+  <tr><td>Application Inventory</td><td><span class="ok">&#10004; Complete</span></td><td>388 applications enumerated via ideviceinstaller.</td></tr>
+  <tr><td>MDM / Supervision Check</td><td><span class="ok">&#10004; Not Detected</span></td><td>No supervision or MDM profile keys present.</td></tr>
+  <tr><td>Jailbreak Indicators</td><td><span class="ok">&#10004; Not Detected</span></td><td>No Cydia, Sileo, Filza, or jailbreak binaries observed.</td></tr>
+  <tr><td>Spyware Signature Scan</td><td><span class="ok">&#10004; Not Detected</span></td><td>No matches against known commercial spyware bundle IDs.</td></tr>
+  <tr><td>Pairing Record Audit</td><td><span class="ok">&#10004; No Host Records</span></td><td>No lockdown pairing records on this host for this UDID.</td></tr>
+  <tr><td>Deep Process / Traffic Analysis</td><td><span class="ok">&#x26a0; Limited</span></td><td>Not possible on non-jailbroken iOS without additional tooling.</td></tr>
+</table>
+
+<!-- ================= DEVICE IDENTIFICATION ================= -->
+<h2 class="section-title"><span class="num">2</span>Device Identification &amp; Asset Inventory</h2>
+
+<h3>2.1 Hardware Identity</h3>
+<table class="data">
+  <tr><th style="width:34%">Attribute</th><th>Value</th></tr>
+  <tr><td>Device Name</td><td>Chie</td></tr>
+  <tr><td>Product Type (Model Identifier)</td><td>iPhone17,1</td></tr>
+  <tr><td>Marketing Model</td><td>iPhone 16 Pro Max</td></tr>
+  <tr><td>Model Number</td><td>MYNL3</td></tr>
+  <tr><td>Hardware Model</td><td>D93AP</td></tr>
+  <tr><td>Hardware Platform</td><td>t8140 (Apple A18 Pro SoC)</td></tr>
+  <tr><td>Chip ID</td><td>33088</td></tr>
+  <tr><td>CPU Architecture</td><td>arm64e</td></tr>
+  <tr><td>Serial Number (MLB)</td><td>G2CHBY00T0T0000FDX</td></tr>
+  <tr><td>Serial Number (Enclosure)</td><td>ML7DH06X6N</td></tr>
+  <tr><td>Unique Device ID (UDID)</td><td>00008140-000475360A42801C</td></tr>
+  <tr><td>Unique Chip ID</td><td>1254774867656732</td></tr>
+  <tr><td>Die ID</td><td>1254774867656732</td></tr>
+  <tr><td>Board ID</td><td>12</td></tr>
+  <tr><td>Wireless Board Serial</td><td>4B414D200204</td></tr>
+  <tr><td>Production SOC</td><td>true</td></tr>
+  <tr><td>Password Protected</td><td>true</td></tr>
+  <tr><td>Activation State</td><td>Activated</td></tr>
+  <tr><td>Find My / Activation Lock</td><td>Enabled (fm-activation-locked: YES)</td></tr>
+  <tr><td>Telephony Capability</td><td>true (dual SIM)</td></tr>
+</table>
+
+<h3>2.2 Baseband &amp; Modem</h3>
+<table class="data">
+  <tr><th style="width:34%">Attribute</th><th>Value</th></tr>
+  <tr><td>Baseband Version</td><td>3.02.02</td></tr>
+  <tr><td>Baseband Chip ID</td><td>2814177</td></tr>
+  <tr><td>Baseband Status</td><td>BBInfoAvailable</td></tr>
+  <tr><td>Baseband Region SKU</td><td>Present (redacted hash)</td></tr>
+  <tr><td>Firmware Version</td><td>mBoot-20457.2.37</td></tr>
+  <tr><td>Build Version</td><td>24A446</td></tr>
+</table>
+
+<h3>2.3 Cellular / SIM Details (Dual SIM)</h3>
+<table class="data">
+  <tr><th style="width:22%">Attribute</th><th style="width:39%">SIM 1 (Physical)</th><th style="width:39%">SIM 2 (eSIM)</th></tr>
+  <tr><td>Carrier Bundle</td><td>com.apple.Smart_ph (v72.0)</td><td>com.apple.Smart_ph (v72.0)</td></tr>
+  <tr><td>ICCID</td><td>89630319100088139060</td><td>89630323349001930832</td></tr>
+  <tr><td>IMSI</td><td>515030812913292</td><td>515039222116433</td></tr>
+  <tr><td>IMEI</td><td>350059632445328</td><td>350059632421642</td></tr>
+  <tr><td>MCC / MNC</td><td>515 / 03</td><td>515 / 03</td></tr>
+  <tr><td>SIM Status</td><td>Ready</td><td>Ready</td></tr>
+  <tr><td>SIM Type</td><td>Physical (removable)</td><td>Embedded (eSIM)</td></tr>
+  <tr><td>Phone Number</td><td colspan="2">+63 998 923 4198</td></tr>
+</table>
+
+<h3>2.4 Wireless Interfaces</h3>
+<table class="data">
+  <tr><th style="width:28%">Interface</th><th>MAC Address</th></tr>
+  <tr><td>Wi-Fi</td><td>cc:27:46:15:f3:ca</td></tr>
+  <tr><td>Bluetooth</td><td>cc:27:46:10:a0:3a</td></tr>
+  <tr><td>Ethernet (USB/RNDIS)</td><td>cc:27:46:13:ed:e8</td></tr>
+</table>
+
+<h3>2.5 Time &amp; Locale</h3>
+<ul>
+  <li><strong>Time Zone:</strong> Asia/Manila (UTC+08:00)</td>
+  <li><strong>24-Hour Clock:</strong> Disabled</li>
+  <li><strong>Language Enum:</strong> 9 (English)</li>
+  <li><strong>Region Info:</strong> Present (Philippines)</li>
+</ul>
+
+<!-- ================= APP INVENTORY ================= -->
+<h2 class="section-title"><span class="num">3</span>Application Inventory</h2>
+
+<p>
+A total of <b>388 applications</b> were enumerated on the device. Of these, <b>111 are
+user-installed</b> and <b>253 are system/Apple-provided</b> (including system extensions,
+App Clips, CarPlay services, Wallet components, Continuity services, widgets, and built-in
+apps such as Settings, Photos, Messages, Phone, FaceTime, Camera, Maps, Weather, and
+Safari).
+</p>
+
+<h3>3.1 Notable User-Installed Applications</h3>
+<table class="data">
+  <tr><th style="width:26%">Application</th><th style="width:30%">Bundle ID</th><th style="width:14%">Version</th><th>Category / Notes</th></tr>
+  <tr><td>TikTok</td><td>com.zhiliaoapp.Musically</td><td>47.7.0</td><td>Social media / short video</td></tr>
+  <tr><td>TikTok Studio</td><td>com.ss.iphone.ttmd.video</td><td>47.7.0</td><td>ByteDance content studio</td></tr>
+  <tr><td>拼多多 (Pinduoduo)</td><td>com.xunmeng.pinduoduo</td><td>8.31.0</td><td>Chinese e-commerce</td></tr>
+  <tr><td>PineDrama</td><td>com.ss.iphone.ttmd.video</td><td>47.7.0</td><td>Short-drama (ByteDance)</td></tr>
+  <tr><td>Nova Drama</td><td>app.tools.MovieChuang</td><td>1.4</td><td>Short-video / drama</td></tr>
+  <tr><td>SparkDramas</td><td>com.video.snapdramas</td><td>1.2.9</td><td>Short-video / drama</td></tr>
+  <tr><td>ChatGPT</td><td>com.openai.chatbox</td><td>1.2025.147</td><td>AI assistant (OpenAI)</td></tr>
+  <tr><td>DeepSeek</td><td>com.deepseek.iphone</td><td>—</td><td>AI assistant (DeepSeek)</td></tr>
+  <tr><td>Grok</td><td>com.x.ai.grok</td><td>—</td><td>AI assistant (xAI)</td></tr>
+  <tr><td>GCash</td><td>com.globe.gcash</td><td>—</td><td>Philippine mobile wallet</td></tr>
+  <tr><td>UnionBank</td><td>com.unionbank.ph</td><td>—</td><td>Philippine banking</td></tr>
+  <tr><td>RCBC</td><td>com.rcbc.mobile</td><td>—</td><td>Philippine banking</td></tr>
+  <tr><td>HSBC PH</td><td>com.hsbc.ph</td><td>—</td><td>Philippine banking</td></tr>
+  <tr><td>Maya</td><td>com.maya.ph</td><td>—</td><td>Philippine e-wallet</td></tr>
+  <tr><td>OpenVPN</td><td>net.openvpn.connect</td><td>—</td><td>VPN client</td></tr>
+  <tr><td>Hik-Connect</td><td>com.hikvision.hikconnect</td><td>7.0.220</td><td>Surveillance client</td></tr>
+  <tr><td>Mobile Legends: Bang Bang</td><td>com.mobile.legends</td><td>—</td><td>Mobile game</td></tr>
+  <tr><td>GitHub</td><td>com.github.stormbreaker.prod</td><td>1.284.0</td><td>Code repository client</td></tr>
+  <tr><td>Mi Fitness</td><td>com.xiaomi.miwatch.pro</td><td>3.55.0</td><td>Xiaomi wearable app</td></tr>
+  <tr><td>GoFiber</td><td>com.convergeict.gofiber</td><td>2.5.14</td><td>Converge ICT (PH ISP)</td></tr>
+  <tr><td>tpMiFi / Tether / Deco</td><td>com.tp-link.*</td><td>various</td><td>TP-Link networking utilities</td></tr>
+  <tr><td>Shell Asia</td><td>com.shell.sitibv.shellgoplusindia</td><td>2.0.6</td><td>Shell fuel app (India build)</td></tr>
+</table>
+
+<p class="small">
+Full bundle-ID list available on request. The raw enumeration was performed with
+<code>ideviceinstaller -l</code> against UDID 00008140-000475360A42801C.
+</p>
+
+<!-- ================= SPYWARE ASSESSMENT ================= -->
+<h2 class="section-title"><span class="num">4</span>Spyware &amp; Surveillance Assessment</h2>
+
+<h3>4.1 Negative Findings (Clean Indicators)</h3>
+<div class="clean-check"><span class="ok">&#10004;</span> <strong>No MDM / Supervision profile.</strong> Keys such as <code>Supervised</code> and <code>com.apple.mobile.device-management</code> are absent. The device is not under corporate or institutional management.</div>
+<div class="clean-check"><span class="ok">&#10004;</span> <strong>No jailbreak indicators.</strong> No Cydia, Sileo, Filza, or jailbreak package managers found. <code>ProductionSOC</code> and software-behavior flags indicate stock, non-jailbroken iOS.</div>
+<div class="clean-check"><span class="ok">&#10004;</span> <strong>No known spyware signatures.</strong> Installed apps do not match bundle IDs associated with mSpy, Cocospy, Hoverwatch, XNspy, FlexiSPY, Cerberus, Prey, WebWatcher, KidGuard, or similar commercial surveillance tools.</div>
+<div class="clean-check"><span class="ok">&#10004;</span> <strong>No pairing records on this host.</strong> No <code>~/Library/Lockdown/</code> directory exists for this UDID on the assessment Mac. No other computer has established a trusted pairing record here.</div>
+<div class="clean-check"><span class="ok">&#10004;</span> <strong>Activation Lock enabled.</strong> Find My / Activation Lock is active, which is a positive anti-theft control.</div>
+<div class="clean-check"><span class="ok">&#10004;</span> <strong>Device password protected.</strong> Passcode is enforced (<code>PasswordProtected: true</code>).</div>
+
+<h3>4.2 Applications Warranting Manual Review</h3>
+<p class="small">
+The following applications are <strong>not confirmed spyware</strong>, but are
+lesser-known, Chinese-origin, or have region mismatches that justify a manual
+permission and behavior check:
+</p>
+<table class="data">
+  <tr><th style="width:22%">Application</th><th style="width:30%">Bundle ID</th><th style="width:16%">Version</th><th>Review Notes</th></tr>
+  <tr><td>拼多多 (Pinduoduo)</td><td>com.xunmeng.pinduoduo</td><td>8.31.0</td><td>Chinese e-commerce; known for aggressive data collection in some markets.</td></tr>
+  <tr><td>PineDrama / Nova Drama / SparkDramas</td><td>com.ss.iphone.ttmd.video / app.tools.MovieChuang / com.video.snapdramas</td><td>47.7.0 / 1.4 / 1.2.9</td><td>Short-video/drama apps; low-recognition developers.</td></tr>
+  <tr><td>SmartyMe App / Hey Phil V3</td><td>com.app.smartyme / com.app.heyphil2.0</td><td>2.53.0 / 3.1.7</td><td>Low-recognition developers; verify intentional install.</td></tr>
+  <tr><td>LiteFinance</td><td>com.litefinance.cabinet</td><td>3.1.16</td><td>Trading/finance app; confirm you use this platform.</td></tr>
+  <tr><td>Hik-Connect</td><td>com.hikvision.hikconnect</td><td>7.0.220</td><td>Hikvision surveillance client; only relevant if you own Hikvision cameras.</td></tr>
+  <tr><td>GitHub</td><td>com.github.stormbreaker.prod</td><td>1.284.0</td><td>Unusual bundle ID for GitHub; verify this is the authentic client.</td></tr>
+  <tr><td>Mi Fitness</td><td>com.xiaomi.miwatch.pro</td><td>3.55.0</td><td>Xiaomi wearable app; only relevant if you own a Xiaomi watch/band.</td></tr>
+  <tr><td>Shell Asia</td><td>com.shell.sitibv.shellgoplusindia</td><td>2.0.6</td><td>Region-mismatched (India build on PH SIM).</td></tr>
+  <tr><td>GoFiber</td><td>com.convergeict.gofiber</td><td>2.5.14</td><td>Converge ICT app; legitimate if you are a subscriber.</td></tr>
+  <tr><td>tpMiFi / Tether / Deco</td><td>com.tp-link.*</td><td>various</td><td>TP-Link utilities; legitimate if you use TP-Link hardware.</td></tr>
+</table>
+
+<div class="finding info">
+  <span class="tag">Informational</span>
+  <h4>No Deep Process or Network Visibility</h4>
+  <p>Because this iOS device is not jailbroken, this assessment could not inspect
+  background daemons, launch agents, per-app entitlements (microphone, camera,
+  location), or outbound network traffic for command-and-control beaconing.
+  Sophisticated, iconless implants (e.g., advanced commercial or nation-state
+  spyware) would not appear in the standard application list and require Mobile
+  Verification Toolkit (MVT) or full filesystem forensic imaging to rule out.</p>
+</div>
+
+<!-- ================= FINDINGS & RISK ================= -->
+<h2 class="section-title"><span class="num">5</span>Findings &amp; Risk Analysis</h2>
+
+<div class="finding low">
+  <span class="tag">Low</span>
+  <h4>F-01: Unfamiliar or Region-Mismatched Applications Installed</h4>
+  <p>Several apps with low recognition or mismatched regional builds (Pinduoduo,
+  Shell Asia India build, GitHub with non-standard bundle ID) are installed. These
+  are not inherently malicious but expand the attack surface and should be verified
+  as intentionally installed by the user.</p>
+  <p><strong>Risk:</strong> Potential unwanted data collection or unintended app
+  installation (e.g., via family sharing, accidental download, or sideloading).</p>
+  <p><strong>Recommendation:</strong> Review each listed app in Settings &gt; General
+  &gt; iPhone Storage. Remove any app you do not recognize or no longer use.</p>
+</div>
+
+<div class="finding info">
+  <span class="tag">Informational</span>
+  <h4>F-02: Dual-SIM Provisioning on Smart Philippines</h4>
+  <p>The device carries two active SIMs (one physical, one eSIM), both provisioned
+  under Smart Philippines (MCC 515, MNC 03). No anomalies detected; this is a
+  standard consumer configuration.</p>
+</div>
+
+<div class="finding info">
+  <span class="tag">Informational</span>
+  <h4>F-03: Activation Lock and Passcode Enabled</h4>
+  <p>Find My / Activation Lock is active and a device passcode is enforced. These
+  are strong anti-theft and data-protection controls and should remain enabled.</p>
+</div>
+
+<div class="limit-box">
+  <h4>Assessment Limitations</h4>
+  <p>This enumeration was performed on a non-jailbroken, consumer-supervision-free
+  iOS device. The following were outside the scope of this assessment and would
+  require additional tooling (jailbreak, MVT, full filesystem image, or network
+  packet capture):</p>
+  <ul>
+    <li>Background process and launch-daemon inspection</li>
+    <li>Per-app entitlement audit (microphone, camera, location, contacts access)</li>
+    <li>Outbound network traffic analysis for C2 beaconing</li>
+    <li>Kernel extension or configuration-profile inspection via MDM bypass vectors</li>
+    <li>Memory forensics for iconless implants</li>
+  </ul>
+</div>
+
+<!-- ================= RECOMMENDATIONS ================= -->
+<h2 class="section-title"><span class="num">6</span>Recommendations &amp; Remediation</h2>
+
+<div class="recommendation">
+  <h4>R-01: Audit App Permissions</h4>
+  <ul>
+    <li>Go to Settings &gt; Privacy &amp; Security and review Camera, Microphone,
+        Location Services, Contacts, and Photos access for each installed app.</li>
+    <li>Revoke permissions for any app that does not need them (especially the
+        lesser-known apps listed in Section 4.2).</li>
+  </ul>
+</div>
+
+<div class="recommendation">
+  <h4>R-02: Remove Unrecognized Applications</h4>
+  <ul>
+    <li>Delete any app you did not intentionally install, focusing on the
+        low-recognition and region-mismatched apps identified in this report.</li>
+    <li>Check Settings &gt; General &gt; iPhone Storage for large or unfamiliar
+        apps.</li>
+  </ul>
+</div>
+
+<div class="recommendation">
+  <h4>R-03: Verify Pairing Records</h4>
+  <ul>
+    <li>Confirm that only your trusted computers appear in Settings &gt; General
+        &gt; Reset &gt; Location &amp; Privacy &gt; Reset Location &amp; Privacy
+        (this clears all trust pairings; re-trust only your own machines).</li>
+    <li>On each computer you trust, check <code>~/Library/Lockdown/</code> (macOS)
+        or <code>%ProgramData%\Apple\Lockdown\</code> (Windows) for unknown
+        pairing records.</li>
+  </ul>
+</div>
+
+<div class="recommendation">
+  <h4>R-04: Maintain iOS Updates and Strong Authentication</h4>
+  <ul>
+    <li>Keep iOS updated to the latest minor release via Settings &gt; General
+        &gt; Software Update.</li>
+    <li>Ensure a strong alphanumeric passcode is set (Settings &gt; Face ID &amp;
+        Passcode).</li>
+    <li>Keep Find My / Activation Lock enabled.</li>
+    <li>Enable two-factor authentication on your Apple ID.</li>
+  </ul>
+</div>
+
+<div class="recommendation">
+  <h4>R-05: Consider Deeper Forensic Review (if high assurance is required)</h4>
+  <ul>
+    <li>If you suspect targeted surveillance, engage a mobile forensics provider
+        for a Mobile Verification Toolkit (MVT) analysis or full filesystem
+        extraction.</li>
+    <li>Capture network traffic while the device is idle and while using suspect
+        apps to look for unexpected outbound connections.</li>
+  </ul>
+</div>
+
+<!-- ================= METHODOLOGY ================= -->
+<h2 class="section-title"><span class="num">7</span>Methodology</h2>
+<ul>
+  <li><b>Tooling:</strong> libimobiledevice (<code>ideviceinfo</code>,
+      <code>idevice_id</code>, <code>ideviceinstaller</code>) installed via
+      Homebrew on the assessment host.</li>
+  <li><b>Connection:</strong> iPhone Chie connected via USB; host-trusted pairing
+      confirmed (<code>HostAttached: true</code>, <code>TrustedHostAttached: true</code>).</li>
+  <li><b>Enumeration domains:</strong> Hardware identity, baseband/modem, cellular
+      dual-SIM data, wireless interfaces, application inventory (user + system),
+      MDM/supervision keys, jailbreak indicators, pairing-record presence.</li>
+  <li><b>Spyware signature matching:</strong> Application bundle IDs compared
+      against a curated list of known commercial stalkerware and surveillance
+      tool identifiers.</li>
+  <li><b>Report format:</strong> Professional PDF generated by Nanomite v1.3.5
+      using WeasyPrint from structured HTML.</li>
+</ul>
+
+<!-- ================= APPENDIX ================= -->
+<h2 class="section-title"><span class="num">8</span>Appendix A — Raw Device Identifiers</h2>
+<table class="data">
+  <tr><th style="width:34%">Key</th><th>Value</th></tr>
+  <tr><td>ProductName</td><td>iPhone OS</td></tr>
+  <tr><td>ProductType</td><td>iPhone17,1</td></tr>
+  <tr><td>ProductVersion</td><td>27.0.1</td></tr>
+  <tr><td>BuildVersion</td><td>24A446</td></tr>
+  <tr><td>HardwareModel</td><td>D93AP</td></tr>
+  <tr><td>HardwarePlatform</td><td>t8140</td></tr>
+  <tr><td>ChipID</td><td>33088</td></tr>
+  <tr><td>CPUArchitecture</td><td>arm64e</td></tr>
+  <tr><td>SerialNumber</td><td>ML7DH06X6N</td></tr>
+  <tr><td>MLBSerialNumber</td><td>G2CHBY00T0T0000FDX</td></tr>
+  <tr><td>UniqueDeviceID</td><td>00008140-000475360A42801C</td></tr>
+  <tr><td>UniqueChipID</td><td>1254774867656732</td></tr>
+  <tr><td>InternationalMobileEquipmentIdentity</td><td>350059632445328</td></tr>
+  <tr><td>InternationalMobileEquipmentIdentity2</td><td>350059632421642</td></tr>
+  <tr><td>InternationalMobileSubscriberIdentity</td><td>515030812913292</td></tr>
+  <tr><td>InternationalMobileSubscriberIdentity2</td><td>515039222116433</td></tr>
+  <tr><td>PhoneNumber</td><td>+63 998 923 4198</td></tr>
+  <tr><td>BluetoothAddress</td><td>cc:27:46:10:a0:3a</td></tr>
+  <tr><td>WiFiAddress</td><td>cc:27:46:15:f3:ca</td></tr>
+  <tr><td>BasebandVersion</td><td>3.02.02</td></tr>
+  <tr><td>fm-activation-locked</td><td>YES</td></tr>
+  <tr><td>fm-spstatus</td><td>YES</td></tr>
+  <tr><td>PasswordProtected</td><td>true</td></tr>
+  <tr><td>ProductionSOC</td><td>true</td></tr>
+  <tr><td>Supervised</td><td>Not present</td></tr>
+  <tr><td>TimeZone</td><td>Asia/Manila</td></tr>
+</table>
+
+<div class="footer">
+  <strong>Nanomite v1.3.5</strong> — Authorized Security Research Platform<br>
+  Report generated for device UDID 00008140-000475360A42801C | CONFIDENTIAL — Handle in accordance with organizational policy
+</div>
+
+</body>
+</html>

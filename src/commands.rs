@@ -59,6 +59,7 @@ pub enum Command {
     Hacker,
     Learn,
     Skills,
+    Wireless,
     Update,
     Vpn,
     Tor,
@@ -289,6 +290,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "view assessment evidence - /evidence [assessment_id] (alt+shift+e)",
         kind: Command::Evidence,
+    },
+    Entry {
+        command: "/wireless",
+        aliases: &[],
+        hint: "wireless auditing - /wireless <interface> [tools=all|wash|aircrack|wifite] (alt+shift+w)",
+        kind: Command::Wireless,
     },
     // -- security -------------------------------------------------------------
     Entry {

@@ -957,6 +957,22 @@ pub fn tool_schemas() -> Vec<Tool> {
             }),
         ),
         Tool::new(
+            "wireless_recon",
+            "Run authorized wireless reconnaissance against a target interface using wash (WPS scan), aircrack-ng (airodump/airmon discovery), and/or wifite (automated auditor). Results are stored as neural memory techniques.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "interface": { "type": "string", "description": "Wireless interface (e.g. wlan0, wlan1mon)" },
+                    "tools": { "type": "string", "description": "Which tools: \"wash\", \"aircrack\", \"wifite\", or \"all\" (default \"all\")" },
+                    "bssid": { "type": "string", "description": "Target BSSID (optional; scan all if omitted)" },
+                    "channel": { "type": "integer", "description": "Channel to lock to (optional)" },
+                    "timeout_ms": { "type": "integer", "description": "Hard cap in milliseconds (default 120000, max 300000)" }
+                },
+                "required": ["interface"],
+                "additionalProperties": false
+            }),
+        ),
+        Tool::new(
             "autonomous_execute",
             "Run an autonomous security assessment plan against a goal. Decomposes the goal into ordered tasks and executes them through the tool layer, with optional human approval before each risky command. Results are stored as neural memory techniques.",
             json!({

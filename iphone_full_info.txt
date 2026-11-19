@@ -1,0 +1,121 @@
+ActivationState: Activated
+ActivationStateAcknowledged: true
+BasebandActivationTicketVersion: V2
+BasebandCertId: 1652214800
+BasebandChipID: 2814177
+BasebandKeyHashInformation: AKeyStatus: 2
+ SKeyHash: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+ SKeyStatus: 0
+BasebandMasterKeyHash: 1B41607650EBF11C6B39F41CB267DC64C121A9BCF44DBA5D28F55ACC86361BBA366554CD57B4C466055803E1EF81C870
+BasebandRegionSKU: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+BasebandSerialNumber: KICIxw==
+BasebandStatus: BBInfoAvailable
+BasebandVersion: 3.02.02
+BluetoothAddress: cc:27:46:10:a0:3a
+BoardId: 12
+BootSessionID: 4D5EA8DB-D43D-4463-ABA7-8AD67376C23E
+BrickState: false
+BuildVersion: 24A446
+CPUArchitecture: arm64e
+CarrierBundleInfoArray[2]:
+ 0: CFBundleIdentifier: com.apple.Smart_ph
+  CFBundleVersion: 72.0
+  IntegratedCircuitCardIdentity: 89630319100088139060
+  InternationalMobileSubscriberIdentity: 515030812913292
+  MCC: 515
+  MNC: 03
+  Slot: kOne
+  kCTPostponementInfoAvailable: SIMCarrierInfo
+ 1: CFBundleIdentifier: com.apple.Smart_ph
+  CFBundleVersion: 72.0
+  IntegratedCircuitCardIdentity: 89630323349001930832
+  InternationalMobileSubscriberIdentity: 515039222116433
+  MCC: 515
+  MNC: 03
+  Slot: kTwo
+  kCTPostponementInfoAvailable: SIMCarrierInfo
+CertID: 1652214800
+ChipID: 33088
+ChipSerialNo: KICIxw==
+DeviceClass: iPhone
+DeviceColor: 1
+DeviceName: Chie
+DieID: 1254774867656732
+EthernetAddress: cc:27:46:13:ed:e8
+FirmwareVersion: mBoot-20457.2.37
+FusingStatus: 3
+HardwareModel: D93AP
+HardwarePlatform: t8140
+HasSiDP: true
+HostAttached: true
+HumanReadableProductVersionString: 27.0.1
+IntegratedCircuitCardIdentity: 89630319100088139060
+IntegratedCircuitCardIdentity2: 89630323349001930832
+InternationalMobileEquipmentIdentity: 350059632445328
+InternationalMobileEquipmentIdentity2: 350059632421642
+InternationalMobileSubscriberIdentity: 515030812913292
+InternationalMobileSubscriberIdentity2: 515039222116433
+InternationalMobileSubscriberIdentityOverride: false
+MLBSerialNumber: G2CHBY00T0T0000FDX
+MobileSubscriberCountryCode: 515
+MobileSubscriberNetworkCode: 03
+ModelNumber: MYNL3
+NonVolatileRAM: OTA-commit-tmp-cp-required: MQ==
+ RecoveryEPLY: eAEBgIE=
+ StartupMute: MA==
+ SystemAudioVolumeExtension: Ogg=
+ alpm-24h-mode: MA==
+ alpm-dst-offset: MA==
+ alpm-language-direction: MQ==
+ alpm-next-dst: MA==
+ alpm-number-system: bGF0bg==
+ auto-boot: dHJ1ZQ==
+ backlight-level: NDU2
+ backlight-nits: MHgwMDUwMDAwMA==
+ bootdelay: MA==
+ display-crossbar0: AAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+ fm-account-masked: cuKAouKAouKAouKAouKAokBnbWFpbC5jb20=
+ fm-activation-locked: WUVT
+ fm-spkeys: YnBsaXN0MDDWAQIDBAUGBwgREhMUUXNRdlFsUWJRaVFwTxAgaPj7MBox22Cgwxc0LeeOIZd+BQ0cyhg4xLAZQoYJQ2fSCQoLEFExUTLSDA0OD1FsUXMQABBg0gwNDg9PEBD8V4nKgD5EM7dy4dZznPC5M0HGuUoDWu2BEa6dTxA5BKBZaoIiW1/Z6dpjaYeObpSIQRlk6oOKICg1rFsH7ifsQbJH+xhmOgM7ph/zvtTQ91wdF1s5Q0VACBUXGRsdHyFESUtNUlRWWFpfcnt+AAAAAAAAAQEAAAAAAAAAFQAAAAAAAAAAAAAAAAAAALo=
+ fm-spstatus: WUVT
+ ota-updateType: aW5jcmVtZW50YWw=
+ usbc,version,rid0: AAMxAA8A
+ user_language_enum: OQ==
+ utc-offset: Mjg4MDA=
+PRIVersion_Major: 0
+PRIVersion_Minor: 1
+PRIVersion_ReleaseNo: 161
+PairRecordProtectionClass: 4
+PartitionType: GUID_partition_scheme
+PasswordProtected: true
+PhoneNumber: +63 998 923 4198
+PkHash: YnrMEITVO6l/gAaDKJcR5sHBFdMPgzPxa1NeYu8NiTqLqAfyLaIbNFxNoj+3N/aV
+ProductName: iPhone OS
+ProductType: iPhone17,1
+ProductVersion: 27.0.1
+ProductionSOC: true
+ProtocolVersion: 2
+RegionInfo: ZP/A
+SIM1IsEmbedded: false
+SIM2IsEmbedded: true
+SIMStatus: kCTSIMSupportSIMStatusReady
+SIMTrayStatus: kCTSIMSupportSIMTrayInsertedWithSIM
+SerialNumber: ML7DH06X6N
+SoftwareBehavior: AQAAAAAAAAAAAAAAAAAAAA==
+SoftwareBundleVersion: 
+SupportedDeviceFamilies[1]:
+ 0: 1
+TelephonyCapability: true
+TimeIntervalSince1970: 1795090621.9928999
+TimeZone: Asia/Manila
+TimeZoneOffsetFromUTC: 28800
+TrustedHostAttached: true
+UniqueChipID: 1254774867656732
+UniqueDeviceID: 00008140-000475360A42801C
+UseRaptorCerts: true
+Uses24HourClock: false
+WiFiAddress: cc:27:46:15:f3:ca
+WirelessBoardSerialNumber: 4B414D200204
+kCTPostponementInfoPRIVersion: 0.1.161
+kCTPostponementInfoServiceProvisioningState: true
+kCTPostponementStatus: kCTPostponementStatusActivated

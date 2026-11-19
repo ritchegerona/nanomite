@@ -26,6 +26,7 @@ use crate::tools::skills::{
 use crate::tools::test_tools::RunTestsArgs;
 use crate::tools::web_tools::{IpLookupArgs, WebFetchArgs, WebSearchArgs};
 use crate::tools::recon_tools::WebReconArgs;
+use crate::tools::wireless_tools::WirelessReconArgs;
 use crate::tools::ToolSet;
 use serde_json::json;
 use std::path::PathBuf;
@@ -787,7 +788,7 @@ impl AgentRuntime {
                                             |tool, _args| {
                                                 matches!(
                                                     tool,
-                                                    "run_command" | "ssh_run" | "web_recon" | "scan_ports"
+                                                    "run_command" | "ssh_run" | "web_recon" | "wireless_recon" | "scan_ports"
                                                 )
                                             },
                                         ));
@@ -1756,6 +1757,33 @@ pub(crate) fn run_tool(
             }
             Ok((payload, summary))
         }
+        "wireless_recon" => {
+            let parsed: WirelessReconArgs = serde_json::from_value(args)
+                .map_err(|e| format!("bad wireless_recon arguments: {e}"))?;
+            let result = tools
+                .wireless
+                .run(parsed)
+                .map_err(|e| format!("wireless_recon failed: {e}"))?;
+            let summary = format!(
+                "{} findings ({} tools) on {}",
+                result.total_findings,
+                result.tools_run.len(),
+                shorten(&result.interface, 40)
+            );
+            let payload = serde_json::to_string(&result).unwrap_or_default();
+            if let Some(locker) = &tools.evidence {
+                let _ = locker.store(
+                    "session-default",
+                    &result.interface,
+                    "wireless_recon",
+                    &format!("wireless_recon: {}", shorten(&result.interface, 40)),
+                    payload.as_bytes(),
+                    vec!["tool_output".into(), "wireless_recon".into(), "wireless".into()],
+                    "application/json",
+                );
+            }
+            Ok((payload, summary))
+        }
         "skills_list" => {
             let parsed: SkillsListArgs = serde_json::from_value(args)
                 .map_err(|e| format!("bad skills_list arguments: {e}"))?;
@@ -2620,7 +2648,7 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        let expected = 33
+        let expected = 34
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(filter_disabled_schemas(schemas, &[]).len(), expected);
