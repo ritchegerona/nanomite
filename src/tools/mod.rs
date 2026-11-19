@@ -61,6 +61,9 @@ pub struct ToolSet {
     /// Offline mode: when true, network tools refuse instead of reaching the
     /// network.
     pub offline: bool,
+    /// Optional pre-tool-call gate: consulted before dispatching any tool.
+    /// Returns true to allow the call, false to block it.
+    pub pre_tool_gate: Option<std::sync::Arc<dyn Fn(&str, &str) -> bool + Send + Sync>>,
 }
 
 impl ToolSet {
@@ -85,6 +88,7 @@ impl ToolSet {
             skills: Arc::new(crate::tools::skills::SkillRegistry::new()),
             improve_roots: None,
             offline,
+            pre_tool_gate: None,
         }
     }
 }

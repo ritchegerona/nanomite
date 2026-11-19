@@ -1001,6 +1001,17 @@ pub(crate) fn run_tool(
     let requested = call.name.trim().to_ascii_lowercase();
     // Central tool policy gate: authorize before dispatch.
     tool_policy.authorize(&requested)?;
+    // Pre-tool-call gate: human-approved tool gate for risky commands.
+    // Used by NeuralAgent's autonomous planner to ask the operator before
+    // executing run_command / ssh_run etc. Returns structured refusal if blocked.
+    if let Some(gate) = &tools.pre_tool_gate {
+        if !gate(&requested, &call.arguments) {
+            return Err(format!(
+                "pre_tool_gate: tool `{}` blocked by human-approval gate",
+                call.name
+            ));
+        }
+    }
     let args: serde_json::Value = if call.arguments.trim().is_empty() {
         json!({})
     } else {
