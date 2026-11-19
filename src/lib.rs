@@ -9,6 +9,7 @@ pub mod app;
 pub mod board;
 pub mod commands;
 pub mod config;
+pub mod debug;
 pub mod evidence;
 pub mod extract;
 pub mod hacker;

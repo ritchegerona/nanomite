@@ -63,6 +63,9 @@ pub enum Command {
     Update,
     Vpn,
     Tor,
+    Debug,
+    Fix,
+    Heal,
 }
 
 pub struct Entry {
@@ -284,6 +287,24 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "list tracked skills - skills_list | skills_known <tool> (alt+j)",
         kind: Command::Skills,
+    },
+    Entry {
+        command: "/debug",
+        aliases: &[],
+        hint: "debug last failure - /debug <command> | output (alt+shift+d)",
+        kind: Command::Debug,
+    },
+    Entry {
+        command: "/fix",
+        aliases: &[],
+        hint: "auto-fix last failure - /fix (alt+shift+f)",
+        kind: Command::Fix,
+    },
+    Entry {
+        command: "/heal",
+        aliases: &[],
+        hint: "self-heal pipeline - /heal <command> <output> (alt+shift+h)",
+        kind: Command::Heal,
     },
     Entry {
         command: "/evidence",

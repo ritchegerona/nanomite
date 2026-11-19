@@ -2048,6 +2048,8 @@ pub struct App {
     improve_tx: UnboundedSender<(u64, ImproveEvent)>,
     /// Bumped on every `/improve` open and on every decision inside it.
     improve_gen: u64,
+    /// Self-heal pipeline: debug → fix → stage → learn.
+    self_heal: crate::debug::SelfHeal,
     pub(crate) cancel: Option<Cancel>,
     /// When the last bare Esc landed: two in quick succession force-stop the
     /// running turn and kill any child process a tool is blocked on.
@@ -2285,6 +2287,7 @@ impl App {
             improve_rx,
             improve_tx,
             improve_gen: 0,
+            self_heal: crate::debug::SelfHeal::new(),
             cancel: None,
             last_esc: None,
             turn_task: None,
@@ -3577,6 +3580,9 @@ impl App {
             Command::Skills => self.show_skills(),
             Command::Evidence => self.show_evidence(args),
             Command::Wireless => self.show_wireless(args),
+            Command::Debug => self.run_debug(args),
+            Command::Fix => self.run_fix(),
+            Command::Heal => self.run_heal(args),
             Command::Reasoning => self.cycle_reasoning(),
             Command::Refresh => self.refresh(),
             Command::Copy => self.copy_selection(),
@@ -4043,7 +4049,116 @@ impl App {
         self.mark_dirty();
     }
 
-    /// `/evidence`: view stored evidence artifacts for an assessment.
+    /// `/debug`: parse command output for diagnostics and show them.
+    fn run_debug(&mut self, args: &str) {
+        let parts: Vec<&str> = args.splitn(2, char::is_whitespace).collect();
+        if parts.is_empty() {
+            self.entries.push(Entry::new(
+                EntryRole::System,
+                "Usage: /debug <command> [output] — parse compiler/test/runtime diagnostics".to_string(),
+            ));
+            let last = self.entries.last_mut().unwrap();
+            last.phase = Phase::Done;
+            self.mark_dirty();
+            return;
+        }
+        let command = parts[0];
+        let output = parts.get(1).copied().unwrap_or("");
+        let session = crate::debug::debug_output(command, output);
+        let mut text = format!("Debug — `{command}`\\n\\n");
+        if session.diagnostics.is_empty() {
+            text.push_str("No diagnostics found in output.\\n");
+        } else {
+            text.push_str(&format!("Found {} diagnostic(s):\\n\\n", session.diagnostics.len()));
+            for d in &session.diagnostics {
+                text.push_str(&format!(
+                    "  [{}] {}:{}:{} — {}\\n        {}\\n",
+                    d.kind.as_str(),
+                    d.file,
+                    d.line,
+                    d.col,
+                    d.message,
+                    d.context.first().cloned().unwrap_or_default()
+                ));
+            }
+        }
+        self.entries
+            .push(Entry::new(EntryRole::System, text.trim_end().to_string()));
+        let last = self.entries.last_mut().unwrap();
+        last.phase = Phase::Done;
+        self.mark_dirty();
+    }
+
+    /// `/fix`: generate fix proposals for the last parsed failure and stage them.
+    fn run_fix(&mut self) {
+        // No stored session yet — prompt the user to use /heal or /debug first.
+        self.entries.push(Entry::new(
+            EntryRole::System,
+            "Use /heal <command> <output> to run the full self-heal pipeline, or \
+             /debug <command> [output] to inspect diagnostics first.\nFix proposals are staged through /improve after diagnosis."
+                .to_string(),
+        ));
+        let last = self.entries.last_mut().unwrap();
+        last.phase = Phase::Done;
+        self.mark_dirty();
+    }
+
+    /// `/heal`: full self-heal pipeline — debug → fix → stage → learn.
+    fn run_heal(&mut self, args: &str) {
+        let parts: Vec<&str> = args.splitn(2, char::is_whitespace).collect();
+        if parts.is_empty() {
+            self.entries.push(Entry::new(
+                EntryRole::System,
+                "Usage: /heal <command> <output> — auto-debug, propose fixes, learn techniques".to_string(),
+            ));
+            let last = self.entries.last_mut().unwrap();
+            last.phase = Phase::Done;
+            self.mark_dirty();
+            return;
+        }
+        let command = parts[0];
+        let output = parts.get(1).copied().unwrap_or("");
+
+        let engine_opt = self.improve.as_ref().map(Arc::clone);
+        let roots_opt = self.improve_roots.clone();
+        let memory_opt = self.memory.as_ref().map(Arc::clone);
+
+        // Build a self-heal instance wired to the session's subsystems.
+        let mut healer = crate::debug::SelfHeal::new();
+        if let (Some(engine), Some(roots)) = (&engine_opt, Some(&roots_opt)) {
+            healer = healer.with_improve(Arc::clone(engine), roots.clone());
+        }
+        if let Some(memory) = memory_opt {
+            healer = healer.with_memory(memory);
+        }
+
+        let result = healer.check_output(command, output, None);
+        let mut text = format!("Self-heal — `{command}`\\n\\n");
+        text.push_str(&format!(
+            "Diagnostics: {} found, {} fixable, {} unfixable\\n",
+            result.diagnostics_found, result.fixable, result.unfixable
+        ));
+        if !result.proposals_staged.is_empty() {
+            text.push_str(&format!(
+                "Proposals staged: {} (review in /improve)\\n",
+                result.proposals_staged.len()
+            ));
+        }
+        if !result.techniques_saved.is_empty() {
+            text.push_str(&format!(
+                "Techniques saved to neural memory: {}\\n",
+                result.techniques_saved.len()
+            ));
+        }
+        if result.diagnostics_found == 0 {
+            text.push_str("\\nNo issues detected — nothing to fix.\\n");
+        }
+        self.entries
+            .push(Entry::new(EntryRole::System, text.trim_end().to_string()));
+        let last = self.entries.last_mut().unwrap();
+        last.phase = Phase::Done;
+        self.mark_dirty();
+    }
     fn show_evidence(&mut self, args: &str) {
         let assessment_id = if args.trim().is_empty() {
             "session-default".to_string()
