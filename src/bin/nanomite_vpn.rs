@@ -3,7 +3,7 @@
 //! Build with: cargo build --features vpn --bin nanomite-vpn
 //! Run with:   cargo run --features vpn --bin nanomite-vpn -- <subcommand>
 
-use nanomite::nanomite_vpn::cli::run_cli;
+use nanomite_ai::nanomite_vpn::cli::run_cli;
 use std::process;
 
 #[tokio::main]

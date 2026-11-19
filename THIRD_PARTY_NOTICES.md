@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-NANOMITE itself is licensed under the NANOMITE Proprietary License (see
+NANOMITE itself is licensed under the MIT License (see
 `LICENSE`). NANOMITE is built on the open-source Rust crates listed below.
 Each crate remains under its own license, and those licenses continue to
 apply to those components. This file is generated from `Cargo.lock` via

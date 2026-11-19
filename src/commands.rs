@@ -28,6 +28,7 @@ pub enum Command {
     Share,
     Themes,
     Thinking,
+    Activity,
     Undo,
     Unshare,
     Memory,
@@ -287,6 +288,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "show or hide the thinking indicator (alt+k)",
         kind: Command::Thinking,
+    },
+    Entry {
+        command: "/activity",
+        aliases: &[],
+        hint: "toggle left panel: thinking ↔ activity timeline (alt+a)",
+        kind: Command::Activity,
     },
     Entry {
         command: "/focus",

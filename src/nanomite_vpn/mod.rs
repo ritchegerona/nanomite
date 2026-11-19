@@ -34,8 +34,8 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use nanomite::nanomite_vpn::{VpnEngine, VpnConfig, KeyPair};
-//! use nanomite::nanomite_vpn::engine::PeerConfig;
+//! use nanomite_ai::nanomite_vpn::{VpnEngine, VpnConfig, KeyPair};
+//! use nanomite_ai::nanomite_vpn::engine::PeerConfig;
 //! use std::net::SocketAddr;
 //!
 //! # #[tokio::main]

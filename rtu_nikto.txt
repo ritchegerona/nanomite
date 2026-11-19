@@ -1,0 +1,8 @@
+- Nikto v2.6.1/
++ Target Host: www.rtu.edu.ph
++ Target Port: 443
++ SSL Info:           Subject:  /CN=rtu.edu.ph
+                      CN:       rtu.edu.ph
+                      SAN:      autoconfig.rtu.edu.ph, rtu.edu.ph, www.rtu.edu.ph
+                      Ciphers:  ECDHE-RSA-AES256-GCM-SHA384
+                      Issuer:   /C=US/O=Let's Encrypt/CN=YR1

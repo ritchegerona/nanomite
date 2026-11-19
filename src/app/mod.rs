@@ -3597,6 +3597,14 @@ impl App {
                 ));
                 self.invalidate_transcript();
             }
+            Command::Activity => {
+                self.show_activity = !self.show_activity;
+                self.toast(format!(
+                    "left panel: {}",
+                    if self.show_activity { "activity" } else { "thinking" }
+                ));
+                self.invalidate_transcript();
+            }
             Command::Undo => self.undo(),
             Command::Unshare => self.toast("nothing shared - sessions never leave this machine"),
             Command::Prev => self.prev_turn(),
