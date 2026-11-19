@@ -17,9 +17,11 @@ build-options:
 modules:
   - name: nanomite
     buildsystem: simple
-    build-commands:
+    description: Nanomite AI agent — neural intelligence without boundaries
+
+build-commands:
       - cargo build --release --offline
-      - install -Dm755 target/release/nanomite /app/bin/nanomite
+      - install -Dm755 target/release/nanomite-ai /app/bin/nanomite
       - install -Dm644 README.md /app/share/doc/nanomite/README.md
     sources:
       - type: dir

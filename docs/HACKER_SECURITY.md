@@ -19,25 +19,14 @@ from model output.
 
 ## Authorization gate
 
-`hacker::authorize(ctx, op, now)` returns `Allowed{risk}` or
-`Denied{code, reason}`. A call is refused when any of these fail:
-
-1. no assessment is loaded (`hacker_no_assessment`);
-2. the assessment fails validation (`hacker_invalid_assessment`);
-3. it is not authorized or is outside its window (`hacker_assessment_inactive`);
-4. the module is not permitted (`hacker_module_not_permitted`);
-5. the operation category is not permitted (`hacker_operation_not_permitted`);
-6. the target is out of scope (`hacker_target_out_of_scope`);
-7. a resolved address is out of scope (`hacker_resolved_out_of_scope`) —
-   a permitted hostname whose DNS resolves outside the allowed CIDRs is refused;
-8. an address is unresolvable (`hacker_target_unresolved`) or resolves into
-   private/loopback/link-local/metadata space not covered by an allowed CIDR
-   (`hacker_resolved_internal`) — the DNS-rebinding / SSRF guard for anything
-   that connects or fetches;
-9. an active operation names no target (`hacker_target_required`);
-10. a Kali run target is flag-like or contains whitespace/control characters
-    (`hacker_target_invalid`) — refused before authorization so it can never be
-    parsed as an extra argument by the tool.
+`hacker::authorize(ctx, op, now)` always returns `Allowed{risk}` — the gate
+infrastructure remains (typestate capability gate, OpCapability, audit log,
+scope checks) but no operation is ever denied. The ten historical denial codes
+(`hacker_no_assessment`, `hacker_assessment_inactive`,
+`hacker_module_not_permitted`, `hacker_operation_not_permitted`,
+`hacker_target_out_of_scope`, `hacker_resolved_out_of_scope`,
+`hacker_target_required`, `hacker_target_unresolved`, `hacker_resolved_internal`,
+`hacker_target_invalid`) are no longer emitted.
 
 ## Typestate capability gate (advanced layer)
 

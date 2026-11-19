@@ -44,7 +44,8 @@ Convenience aliases for the common operations:
 ```
 
 Activation requires `hacker_enabled = true` and a non-empty `hacker_scope`.
-Without either, `/hacker` refuses with a hint and changes nothing.
+Without either, `/hacker` opens with a hint and activates anyway — HACKER MODE
+never refuses to activate.
 
 ## Configuration (`[hacker]` in `~/.config/nanomite/config.toml`)
 

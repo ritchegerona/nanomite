@@ -162,7 +162,7 @@ cargo build --release
 
 # ── 5. Install binary ──────────────────────────────────────────────────────
 mkdir -p "$INSTALL_DIR"
-cp "target/release/nanomite" "$INSTALL_DIR/nanomite"
+cp "target/release/nanomite-ai" "$INSTALL_DIR/nanomite"
 
 # macOS kills a copied binary whose only signature is the linker's ad-hoc one
 # ("zsh: killed", SIGKILL) once it lives at a new path. Re-sign it ad-hoc so the

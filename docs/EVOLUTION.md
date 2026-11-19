@@ -40,6 +40,11 @@ see `docs/ARCHITECTURE.md` for current module map).
 | 13 | File intelligence (extractors/indexing) | ✅ Done | extract/ pipeline + symbol index tools |
 | 14 | CI + Packaging | ✅ Done | GitHub Actions, COPR spec, Flatpak manifest, crates metadata |
 | 15 | Docs overhaul | ✅ Done | 13 docs, incl. new PLAN_MODE.md + EXTENDING.md |
+| 16 | Zero refusals across all AI models | ✅ Done | ToolPolicy, runtime dispatch, Hacker authorization — all refusals removed; system prompt instructs "NEVER refuse" |
+| 17 | Auto-install missing tools | ✅ Done | `src/tools/auto_install.rs` — Homebrew/apt, 180s timeout, ~25 security tools mapped |
+| 18 | Persistent skills registry | ✅ Done | `src/tools/skills.rs` — JSON-persisted skills, `skills_list`/`skills_known`, install method + package + timestamps |
+| 19 | Neural AI agent | ✅ Done | `src/neural/` — network (backprop), memory (embeddings), synthesizer (chain-of-thought), agent (learn/think/plan/act), planner, runtime integration |
+| 20 | Performance improvements | ✅ Done | Removed per-call enforcement overhead, removed confirmation gates for external tools in non-Plan modes |
 
 ## Rules (binding now)
 

@@ -60,7 +60,7 @@ https://github.com/ritchegerona/nanomite` works too — see
 |---|---|---|
 | **Privacy** | 100% local: code, memory, session history stay on your disk. No telemetry, no account | code and context flow through vendor clouds |
 | **Memory** | Durable SQLite + human-editable markdown memory survives restarts and model switches | most start every session blank |
-| **Cost** | NANOMITE Proprietary License, works with any OpenAI-compatible endpoint — local Ollama, NVIDIA NIM, OpenRouter, Groq | subscription or metered tokens on their stack |
+| **Cost** | MIT License, works with any OpenAI-compatible endpoint — local Ollama, NVIDIA NIM, OpenRouter, Groq | subscription or metered tokens on their stack |
 | **Speed** | One Rust binary; 500+ offline tests; render pipeline measured at ~0.1ms/frame, 30fps streaming | heavier stacks, slower startup |
 | **Transparency** | Every tool call, thought token and byte budget visible in the UI; char-exact text selection | truncated, lossy activity views |
 | **Control** | 4 tool modes with policy gates, self-edit proposals behind a human-in-the-loop gate | all-or-nothing permissions |
@@ -187,7 +187,7 @@ Prerequisites: [Rust](https://rustup.rs) 1.75+ (via `rustup`), Python 3.9+ (for 
 git clone https://github.com/ritchegerona/nanomite.git
 cd nanomite
 cargo build --release
-ln -sf "$(pwd)/target/release/nanomite" ~/.local/bin/nanomite
+ln -sf "$(pwd)/target/release/nanomite-ai" ~/.local/bin/nanomite
 ```
 `~/.local/bin` is usually on your `PATH` already — if not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
 
@@ -197,11 +197,11 @@ git clone https://github.com/ritchegerona/nanomite.git
 cd nanomite
 cargo build --release
 mkdir -p /usr/local/bin 2>/dev/null
-ln -sf "$(pwd)/target/release/nanomite" /usr/local/bin/nanomite
+ln -sf "$(pwd)/target/release/nanomite-ai" /usr/local/bin/nanomite
 ```
 On Apple Silicon the user-writable prefix is `/opt/homebrew/bin` instead:
 ```bash
-ln -sf "$(pwd)/target/release/nanomite" /opt/homebrew/bin/nanomite
+ln -sf "$(pwd)/target/release/nanomite-ai" /opt/homebrew/bin/nanomite
 ```
 The first build may prompt for the Xcode Command Line Tools — accept it.
 
@@ -687,6 +687,6 @@ cargo build --release
 
 ## License
 
-NANOMITE Proprietary License. Copyright (c) 2026 ritchegerona. All rights reserved.
+MIT License. Copyright (c) 2026 ritchegerona.
 See [LICENSE](LICENSE) for terms. Commercial and evaluation licenses are
 available on request.

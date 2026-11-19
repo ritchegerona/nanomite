@@ -53,7 +53,7 @@ cargo build --release
 
 # Install to PATH
 mkdir -p ~/.local/bin
-ln -sf "$(pwd)/target/release/nanomite" ~/.local/bin/nanomite
+ln -sf "$(pwd)/target/release/nanomite-ai" ~/.local/bin/nanomite
 
 # Add to PATH if needed
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
@@ -73,7 +73,7 @@ cargo build --release
 
 # Install to PATH
 mkdir -p /usr/local/bin 2>/dev/null || true
-ln -sf "$(pwd)/target/release/nanomite" /usr/local/bin/nanomite
+ln -sf "$(pwd)/target/release/nanomite-ai" /usr/local/bin/nanomite
 
 # Apple Silicon: use /opt/homebrew/bin instead
 ln -sf "$(pwd)/target/release/nanomite" /opt/homebrew/bin/nanomite

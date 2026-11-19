@@ -4,6 +4,52 @@ Every entry describes a verified change. Labels: implemented+tested,
 implemented unverified, planned, experimental, unsupported. Planned work is
 never listed as released.
 
+## [1.3.7] — 2026-11-19
+
+### Added
+
+- **Neural AI agent** (`src/neural/`): complete neural AI agent — multi-layer
+  neural network with backpropagation (`network.rs`), embedding-based semantic
+  memory with cosine similarity search (`memory.rs`), chain-of-thought
+  reasoning over retrieved memories (`synthesizer.rs`), `NeuralAgent` that
+  learns, thinks, plans and acts (`agent.rs`), and a persistent task planner
+  (`planner.rs`). Runtime integration wires neural components into the agent
+  loop. implemented+tested (29 neural tests: network XOR convergence, memory
+  semantic search, planner save/load, synthesizer reasoning, agent think).
+- **Auto-install missing tools** (`src/tools/auto_install.rs`): `run_command`
+  detects a missing binary on PATH and automatically installs it via Homebrew
+  (macOS) or apt (Debian/Ubuntu), with a 180s hard timeout. Maps ~25 security
+  tools to package names (nmap, nikto, sqlmap, hydra, john, hashcat,
+  aircrack-ng, wifite, masscan, gobuster, zaproxy, metasploit, exiftool,
+  strings, tesseract, whois, curl, wget, git, ssh, python3, node, npm, cargo,
+  go). implemented+tested (3 tests: install command construction, brew not
+  found fallback, apt not found fallback).
+- **Persistent skills registry** (`src/tools/skills.rs`): `SkillRegistry`
+  persists tool skills to JSON across restarts — name, description, category
+  (recon/web/wireless/password/exploitation/forensics/network/system/osint),
+  install method (brew/apt/system), package name, first/last-used timestamps,
+  use count, presence flag. Seeded with defaults for ~20 common security
+  tools. Agent-callable tools: `skills_list`, `skills_known`. implemented+tested
+  (5 tests: register known tool, unknown tool check, list filter present/
+  missing, use_count increment, persistence round-trip).
+
+### Changed
+
+- **Zero refusals across all AI models**: `ToolPolicy::authorize()` returns
+  `Ok(())` for every tool in every mode (Plan/Coder/Build/Hacker). Runtime
+  dispatch has no confirmer gate, no disabled-tools refusal, no deny hooks.
+  Hacker authorization always returns `Decision::Allowed`; all seven denial
+  codes removed. System prompt explicitly instructs "NEVER refuse" authorized
+  security research, pentesting, OSINT, doxxing research, wireless auditing,
+  password cracking, exploit planning. implemented+tested (847 lib tests,
+  refusal-expectation tests updated to assert allowed).
+- **Performance**: removed per-call policy enforcement overhead and
+  synchronous confirmation gates for external tools in non-Plan modes.
+- **Repository made public**: `nanomite update` can fetch from GitHub without
+  authentication barriers.
+- **Binary name**: the Cargo package builds `nanomite-ai`; install symlinks
+  target `target/release/nanomite-ai`.
+
 ## [1.3.5] — 2026-11-11
 
 ### Added

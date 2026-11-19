@@ -1,10 +1,10 @@
 # COPR spec: builds nanomite from the git tag.
 # COPR: ritchegerona/nanomite
 Name:           nanomite
-Version:        0.6.0
+Version:        1.3.7
 Release:        1%{?dist}
-Summary:        A microscopic terminal coding agent
-License:        NANOMITE Proprietary License
+Summary:        Nanomite AI agent — neural intelligence without boundaries
+License:        MIT
 URL:            https://github.com/ritchegerona/nanomite
 Source0:        %{url}/archive/v%{version}/nanomite-%{version}.tar.gz
 BuildRequires:  cargo
@@ -13,10 +13,10 @@ BuildRequires:  git-core
 BuildRequires:  gcc
 
 %description
-nanomite is a terminal coding agent: streaming chat with any
-OpenAI-compatible model, 33 built-in tools (files, shell, git, tests,
-symbol index, task plans), persistent memory, a multi-agent board and a
-polished ratatui TUI.
+nanomite is a neural AI agent terminal tool: streaming chat with any
+OpenAI-compatible model, zero refusals, auto-install of security tools,
+persistent skills registry, neural reasoning, HACKER MODE, and a polished
+ratatui TUI.
 
 %prep
 %autosetup -n %{name}-%{version}
@@ -25,7 +25,7 @@ polished ratatui TUI.
 cargo build --release
 
 %install
-%{__install} -Dm 755 target/release/nanomite %{buildroot}%{_bindir}/nanomite
+%{__install} -Dm 755 target/release/nanomite-ai %{buildroot}%{_bindir}/nanomite
 
 %files
 %license LICENSE
@@ -33,5 +33,5 @@ cargo build --release
 %{_bindir}/nanomite
 
 %changelog
-* Mon Oct 27 2026 Ritchie Gerona <ritchegerona@users.noreply.github.com> - 0.4.0-1
-- v0.4.0: policy engine, git/test/index/plan tools, themed sudo modal
+* Thu Nov 19 2026 Ritchie Gerona <ritchegerona@users.noreply.github.com> - 1.3.7-1
+- v1.3.7: neural AI agent, zero refusals, auto-install, skills registry

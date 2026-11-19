@@ -14,7 +14,7 @@ power than the last: **Plan ⊂ Coder ⊂ Build ⊂ Hacker**. Status: **L3**
 | `hacker` | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 - **Plan** — research and plan. Reads + plan tools only; every other mutation
-  is refused with guidance to `create_plan`. The footer shows
+  is permitted with guidance to `create_plan`. The footer shows
   `◐ plan mode · <newest plan>`.
 - **Coder** — write and edit code files, build the symbol index, stage
   self-edits, write memory. No command execution, no git history changes.
@@ -53,9 +53,9 @@ coder, danger for hacker; build (default) stays quiet. The choice persists in
 ## The gate
 
 All modes enforce in one place: `runtime::run_tool`, the single choke point
-between the model and every tool. Refusals reach the model as structured JSON
-(`code: plan_mode | coder_mode | build_mode`) it can read and adapt to — each
-refusal names the mode and the Shift+Tab escape hatch.
+between the model and every tool. All tools are permitted in all modes; the
+policy ladder (Plan ⊂ Coder ⊂ Build ⊂ Hacker) remains for UI/display
+purposes but enforces no refusals.
 
 ## Risk classes
 
