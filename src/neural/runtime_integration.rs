@@ -49,18 +49,16 @@ impl NeuralAgent {
         let data_dir = data_dir.into();
         let _ = std::fs::create_dir_all(&data_dir);
 
-        let planner = LearnedPlanner::with_path(data_dir.join("planner.json"));
-        let memory = NeuralMemory::with_path(data_dir.join("neural_memory.json"));
+        let memory = NeuralMemory::open(&data_dir.join("neural_memory.db"))
+            .expect("open neural memory");
         let evolution = EvolutionEngine::with_path(data_dir.join("evolution.json"));
         let synth_dir = data_dir.join("synthesized_tools");
         let _ = std::fs::create_dir_all(&synth_dir);
         let synthesizer = ToolSynthesizer::new(synth_dir);
 
         // Load persisted state.
-        let mut planner = LearnedPlanner::with_path(data_dir.join("planner.json"));
+        let planner = LearnedPlanner::with_path(data_dir.join("planner.json"));
         // planner.load happens in initialize_planner
-        let memory = NeuralMemory::load(&data_dir.join("neural_memory.json"));
-        let evolution = EvolutionEngine::load(&data_dir.join("evolution.json"));
 
         Self {
             runtime,
@@ -109,7 +107,13 @@ impl NeuralAgent {
         let neural_context = self.format_neural_context(&predictions);
 
         // 2. Retrieve relevant neural memories.
-        let memories = self.memory.query(&user_input, 5, 0.3);
+        let memories = self
+            .memory
+            .query(&user_input, 5, 0.3)
+            .unwrap_or_else(|_| NeuralMemoryQueryResult {
+                records: vec![],
+                similarities: vec![],
+            });
         let memory_context = self.format_memory_context(&memories);
 
         // 3. Inject neural + memory context into a modified system prompt for this turn.
@@ -223,7 +227,12 @@ impl NeuralAgent {
 
     /// Query neural memory for relevant past experiences.
     pub fn recall(&mut self, query: &str, top_k: usize, threshold: f64) -> NeuralMemoryQueryResult {
-        self.memory.query(query, top_k, threshold)
+        self.memory
+            .query(query, top_k, threshold)
+            .unwrap_or_else(|_| NeuralMemoryQueryResult {
+                records: vec![],
+                similarities: vec![],
+            })
     }
 
     /// Get pending evolution proposals for the user to review.
@@ -275,7 +284,7 @@ impl NeuralAgent {
     /// Save all neural state to disk.
     pub fn save_state(&self) {
         self.planner.save();
-        self.memory.save();
+        // NeuralMemory (SQLite) persists on every store/query — no explicit save needed.
         self.evolution.save();
         // Network weights persist via planner's network if initialized.
         if let Some(net) = &self.network {
@@ -294,10 +303,13 @@ impl NeuralAgent {
         if planner_path.exists() {
             self.planner = LearnedPlanner::load(&planner_path);
         }
-        // Load memory from disk.
-        let memory_path = self.data_dir.join("neural_memory.json");
+        // Memory is SQLite-backed and already opened in `new()`;
+        // re-open to pick up any external changes.
+        let memory_path = self.data_dir.join("neural_memory.db");
         if memory_path.exists() {
-            self.memory = NeuralMemory::load(&memory_path);
+            if let Ok(mem) = NeuralMemory::open(&memory_path) {
+                self.memory = mem;
+            }
         }
         // Load evolution from disk.
         let evolution_path = self.data_dir.join("evolution.json");
@@ -334,11 +346,17 @@ mod tests {
     fn neural_agent_creates_and_initializes() {
         let runtime = AgentRuntime::new(
             std::sync::Arc::new(crate::agent::testdouble::ScriptedProvider::default()),
-            std::env::temp_dir().join(format!("nanomite-neural-test-{}", std::process::id())),
+            std::env::temp_dir().join(format!(
+                "nanomite-neural-test-{}-creates",
+                std::process::id()
+            )),
             64 * 1024,
             Some(AgentConfig::default()),
         );
-        let dir = std::env::temp_dir().join(format!("nanomite-neural-state-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "nanomite-neural-state-creates-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let mut agent = NeuralAgent::new(runtime, &dir);
         agent.initialize_planner(&["nmap".to_string(), "sqlmap".to_string()]);
@@ -351,11 +369,17 @@ mod tests {
     fn record_outcome_trains_planner() {
         let runtime = AgentRuntime::new(
             std::sync::Arc::new(crate::agent::testdouble::ScriptedProvider::default()),
-            std::env::temp_dir().join(format!("nanomite-neural-test-{}", std::process::id())),
+            std::env::temp_dir().join(format!(
+                "nanomite-neural-test-{}-record",
+                std::process::id()
+            )),
             64 * 1024,
             Some(AgentConfig::default()),
         );
-        let dir = std::env::temp_dir().join(format!("nanomite-neural-state-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "nanomite-neural-state-record-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let mut agent = NeuralAgent::new(runtime, &dir);
         agent.initialize_planner(&["nmap".to_string()]);
@@ -376,11 +400,17 @@ mod tests {
     fn synthesize_tool_creates_memory() {
         let runtime = AgentRuntime::new(
             std::sync::Arc::new(crate::agent::testdouble::ScriptedProvider::default()),
-            std::env::temp_dir().join(format!("nanomite-neural-test-{}", std::process::id())),
+            std::env::temp_dir().join(format!(
+                "nanomite-neural-test-{}-synth",
+                std::process::id()
+            )),
             64 * 1024,
             Some(AgentConfig::default()),
         );
-        let dir = std::env::temp_dir().join(format!("nanomite-neural-state-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "nanomite-neural-state-synth-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let mut agent = NeuralAgent::new(runtime, &dir);
         agent.initialize_planner(&[]);
@@ -389,7 +419,7 @@ mod tests {
         assert!(result.success);
         assert!(!result.tool.source_code.is_empty());
         // Should have stored a memory.
-        assert!(agent.memory.len() > 0);
+        assert!(agent.memory.len().unwrap_or(0) > 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -397,11 +427,17 @@ mod tests {
     fn save_and_load_state_roundtrip() {
         let runtime = AgentRuntime::new(
             std::sync::Arc::new(crate::agent::testdouble::ScriptedProvider::default()),
-            std::env::temp_dir().join(format!("nanomite-neural-test-{}", std::process::id())),
+            std::env::temp_dir().join(format!(
+                "nanomite-neural-test-{}-roundtrip",
+                std::process::id()
+            )),
             64 * 1024,
             Some(AgentConfig::default()),
         );
-        let dir = std::env::temp_dir().join(format!("nanomite-neural-state-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "nanomite-neural-state-roundtrip-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let mut agent = NeuralAgent::new(runtime, &dir);
         agent.initialize_planner(&["nmap".to_string()]);
@@ -411,7 +447,10 @@ mod tests {
         // Create a new agent loading from same dir.
         let runtime2 = AgentRuntime::new(
             std::sync::Arc::new(crate::agent::testdouble::ScriptedProvider::default()),
-            std::env::temp_dir().join(format!("nanomite-neural-test-{}", std::process::id())),
+            std::env::temp_dir().join(format!(
+                "nanomite-neural-test-{}-roundtrip2",
+                std::process::id()
+            )),
             64 * 1024,
             Some(AgentConfig::default()),
         );

@@ -623,7 +623,10 @@ mod tests {
 
     #[test]
     fn synthesize_creates_valid_rust_file() {
-        let dir = temp_dir().join(format!("nanomite-synth-{}", std::process::id()));
+        let dir = temp_dir().join(format!(
+            "nanomite-synth-{}-creates",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -663,7 +666,10 @@ mod tests {
 
     #[test]
     fn record_invocation_updates_counts() {
-        let dir = temp_dir().join(format!("nanomite-synth-{}", std::process::id()));
+        let dir = temp_dir().join(format!(
+            "nanomite-synth-record-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut synth = ToolSynthesizer::new(dir.clone());

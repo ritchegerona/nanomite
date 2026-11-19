@@ -9,12 +9,13 @@
 //! vector, averaged and L2-normalized. This is good enough for nanomite's
 //! on-device neural memory while keeping zero dependencies.
 //!
-//! Persists to JSON (vectors + metadata + tags). Query returns top-k by
-//! cosine similarity above a threshold.
+//! Persists to SQLite (vectors + metadata + tags) so learning survives
+//! restarts. Query returns top-k by cosine similarity above a threshold.
 
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// Dimension of the embedding space. Fixed so all vectors are comparable.
 pub const EMBED_DIM: usize = 128;
@@ -41,120 +42,209 @@ pub struct NeuralMemoryQueryResult {
     pub similarities: Vec<f64>,
 }
 
-/// Neural memory store: in-memory index + optional JSON persistence.
-#[derive(Debug, Clone, Default)]
+/// Neural memory store: SQLite-backed index + cosine-similarity recall.
+#[derive(Debug, Clone)]
 pub struct NeuralMemory {
-    records: HashMap<String, NeuralMemoryRecord>,
-    path: Option<PathBuf>,
+    conn: Arc<Mutex<Connection>>,
+    path: PathBuf,
 }
 
 impl NeuralMemory {
-    pub fn new() -> Self {
-        Self::default()
+    /// Open (or create) a SQLite database at `path`.
+    pub fn open(path: &PathBuf) -> rusqlite::Result<Self> {
+        let conn = Connection::open(path)?;
+        Self::init_schema(&conn)?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            path: path.clone(),
+        })
     }
 
-    pub fn with_path(path: PathBuf) -> Self {
-        Self {
-            path: Some(path),
-            ..Default::default()
-        }
+    /// Open an in-memory database (no persistence).
+    pub fn in_memory() -> rusqlite::Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        Self::init_schema(&conn)?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            path: PathBuf::new(),
+        })
     }
 
-    /// Load from JSON file, or start empty if the file doesn't exist.
-    pub fn load(path: &PathBuf) -> Self {
-        let records = match std::fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-            Err(_) => HashMap::new(),
-        };
-        Self {
-            records,
-            path: Some(path.clone()),
-        }
-    }
-
-    /// Persist to disk (atomic write). No-op when no path is set.
-    pub fn save(&self) {
-        let Some(path) = &self.path else { return };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let tmp = path.with_extension("json.tmp");
-        let body = serde_json::to_string_pretty(&self.records).unwrap_or_default();
-        if std::fs::write(&tmp, &body).is_ok() {
-            let _ = std::fs::rename(&tmp, path);
-        }
+    fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS neural_memories (
+                id           TEXT PRIMARY KEY,
+                text         TEXT NOT NULL,
+                embedding    BLOB NOT NULL,
+                tags         TEXT NOT NULL DEFAULT '[]',
+                category     TEXT NOT NULL DEFAULT '',
+                created_at   INTEGER NOT NULL,
+                last_accessed INTEGER NOT NULL,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                salience     REAL NOT NULL DEFAULT 1.0
+            );
+            CREATE INDEX IF NOT EXISTS idx_neural_memories_category ON neural_memories(category);
+            CREATE INDEX IF NOT EXISTS idx_neural_memories_created_at ON neural_memories(created_at);
+        ",
+        )?;
+        Ok(())
     }
 
     /// Store a new record, computing its embedding from the text.
-    pub fn store(&mut self, id: &str, text: &str, tags: Vec<String>, category: &str) {
+    pub fn store(&self, id: &str, text: &str, tags: Vec<String>, category: &str) -> rusqlite::Result<()> {
         let embedding = embed_text(text, EMBED_DIM);
         let now = crate::neural::now_secs();
-        self.records.insert(
-            id.to_string(),
-            NeuralMemoryRecord {
-                id: id.to_string(),
-                text: text.to_string(),
-                embedding,
-                tags,
-                category: category.to_string(),
-                created_at: now,
-                last_accessed: now,
-                access_count: 0,
-                salience: 1.0,
-            },
-        );
-        self.save();
+        let embedding_blob = serde_json::to_string(&embedding).unwrap_or_default();
+        let tags_json = serde_json::to_string(&tags).unwrap_or_default();
+
+        self.conn.lock().unwrap().execute(
+            "INSERT OR REPLACE INTO neural_memories
+             (id, text, embedding, tags, category, created_at, last_accessed, access_count, salience)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                text,
+                embedding_blob,
+                tags_json,
+                category,
+                now,
+                now,
+                0,
+                1.0f64,
+            ],
+        )?;
+        Ok(())
     }
 
     /// Query by semantic similarity: return top-k records whose cosine
     /// similarity with the query embedding exceeds `threshold`.
-    pub fn query(&mut self, query_text: &str, top_k: usize, threshold: f64) -> NeuralMemoryQueryResult {
+    pub fn query(
+        &self,
+        query_text: &str,
+        top_k: usize,
+        threshold: f64,
+    ) -> rusqlite::Result<NeuralMemoryQueryResult> {
         let query_embedding = embed_text(query_text, EMBED_DIM);
-        let mut scored: Vec<(f64, NeuralMemoryRecord)> = self
-            .records
-            .values()
-            .filter_map(|r| {
-                let sim = cosine_similarity(&query_embedding, &r.embedding);
-                if sim >= threshold {
-                    Some((sim, r.clone()))
-                } else {
-                    None
-                }
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT id, text, embedding, tags, category, created_at, last_accessed, access_count, salience
+             FROM neural_memories
+             ORDER BY created_at DESC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let text: String = row.get(1)?;
+            let embedding_blob: String = row.get(2)?;
+            let tags_json: String = row.get(3)?;
+            let category: String = row.get(4)?;
+            let created_at: u64 = row.get(5)?;
+            let last_accessed: u64 = row.get(6)?;
+            let access_count: u64 = row.get(7)?;
+            let salience: f64 = row.get(8)?;
+
+            let embedding: Vec<f64> = serde_json::from_str(&embedding_blob).unwrap_or_default();
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+
+            Ok(NeuralMemoryRecord {
+                id,
+                text,
+                embedding,
+                tags,
+                category,
+                created_at,
+                last_accessed,
+                access_count,
+                salience,
             })
-            .collect();
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let taken: Vec<(f64, NeuralMemoryRecord)> = scored.into_iter().take(top_k).collect();
-        // Update access metadata on recalled records.
-        let now = crate::neural::now_secs();
-        for (_, r) in &taken {
-            if let Some(rec) = self.records.get_mut(&r.id) {
-                rec.last_accessed = now;
-                rec.access_count = rec.access_count.saturating_add(1);
-                rec.salience = (rec.salience * 0.9 + 0.1).min(2.0);
+        })?;
+
+        let mut scored: Vec<(f64, NeuralMemoryRecord)> = Vec::new();
+        for row in rows.flatten() {
+            let sim = cosine_similarity(&query_embedding, &row.embedding);
+            if sim >= threshold {
+                scored.push((sim, row));
             }
         }
-        self.save();
-        NeuralMemoryQueryResult {
+
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let taken: Vec<(f64, NeuralMemoryRecord)> = scored.into_iter().take(top_k).collect();
+
+        // Update access metadata on recalled records.
+        drop(stmt);
+        let now = crate::neural::now_secs();
+        for (_, r) in &taken {
+            conn.execute(
+                "UPDATE neural_memories
+                 SET last_accessed = ?1, access_count = ?2, salience = ?3
+                 WHERE id = ?4",
+                params![
+                    now,
+                    r.access_count.saturating_add(1),
+                    (r.salience * 0.9 + 0.1).min(2.0),
+                    r.id,
+                ],
+            )?;
+        }
+
+        Ok(NeuralMemoryQueryResult {
             records: taken.iter().map(|(_, r)| r.clone()).collect(),
             similarities: taken.iter().map(|(s, _)| *s).collect(),
-        }
+        })
     }
 
     /// Tag-based search: return records that contain all given tags.
-    pub fn by_tags(&self, tags: &[String]) -> Vec<&NeuralMemoryRecord> {
-        self.records
-            .values()
+    pub fn by_tags(&self, tags: &[String]) -> rusqlite::Result<Vec<NeuralMemoryRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, text, embedding, tags, category, created_at, last_accessed, access_count, salience
+             FROM neural_memories",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let text: String = row.get(1)?;
+            let embedding_blob: String = row.get(2)?;
+            let tags_json: String = row.get(3)?;
+            let category: String = row.get(4)?;
+            let created_at: u64 = row.get(5)?;
+            let last_accessed: u64 = row.get(6)?;
+            let access_count: u64 = row.get(7)?;
+            let salience: f64 = row.get(8)?;
+
+            let embedding: Vec<f64> = serde_json::from_str(&embedding_blob).unwrap_or_default();
+            let tags_vec: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+
+            Ok(NeuralMemoryRecord {
+                id,
+                text,
+                embedding,
+                tags: tags_vec,
+                category,
+                created_at,
+                last_accessed,
+                access_count,
+                salience,
+            })
+        })?;
+
+        let result: Vec<NeuralMemoryRecord> = rows
+            .flatten()
             .filter(|r| tags.iter().all(|t| r.tags.contains(t)))
-            .collect()
+            .collect();
+
+        Ok(result)
     }
 
     /// Record count.
-    pub fn len(&self) -> usize {
-        self.records.len()
+    pub fn len(&self) -> rusqlite::Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let count: u64 = conn.query_row("SELECT COUNT(*) FROM neural_memories", [], |r| r.get(0))?;
+        Ok(count as usize)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.records.is_empty()
+    pub fn is_empty(&self) -> rusqlite::Result<bool> {
+        Ok(self.len()? == 0)
     }
 }
 
@@ -241,6 +331,7 @@ fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
 
     #[test]
     fn embeddings_are_deterministic_and_unit_length() {
@@ -269,62 +360,96 @@ mod tests {
 
     #[test]
     fn store_and_query_returns_top_k() {
-        let mut mem = NeuralMemory::new();
+        let path = env::temp_dir().join(format!("neural_test_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mem = NeuralMemory::open(&path).expect("open db");
         mem.store(
             "m1",
             "nmap port scanning technique",
             vec!["technique".to_string(), "recon".to_string()],
             "technique",
-        );
+        )
+        .expect("store m1");
         mem.store(
             "m2",
             "hashcat password cracking rules",
             vec!["technique".to_string(), "password".to_string()],
             "technique",
-        );
+        )
+        .expect("store m2");
         mem.store(
             "m3",
             "sqlite database backup procedure",
             vec!["procedure".to_string(), "database".to_string()],
             "procedure",
-        );
+        )
+        .expect("store m3");
 
-        let results = mem.query("nmap network reconnaissance", 5, 0.1);
+        let results = mem.query("nmap network reconnaissance", 5, 0.1).expect("query");
         assert!(!results.records.is_empty());
         // The nmap record should rank highest.
         assert_eq!(results.records[0].id, "m1");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn tag_filter_works() {
-        let mut mem = NeuralMemory::new();
-        mem.store("t1", "recon technique", vec!["technique".into(), "recon".into()], "tech");
-        mem.store("t2", "password cracking", vec!["technique".into(), "password".into()], "tech");
-        let by_tech: Vec<&NeuralMemoryRecord> = mem.by_tags(&["technique".to_string()]);
+        let path = env::temp_dir().join(format!("neural_test_tags_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mem = NeuralMemory::open(&path).expect("open db");
+        mem.store(
+            "t1",
+            "recon technique",
+            vec!["technique".into(), "recon".into()],
+            "tech",
+        )
+        .expect("store t1");
+        mem.store(
+            "t2",
+            "password cracking",
+            vec!["technique".into(), "password".into()],
+            "tech",
+        )
+        .expect("store t2");
+        let by_tech = mem.by_tags(&["technique".to_string()]).expect("by_tags");
         assert_eq!(by_tech.len(), 2);
-        let by_recon: Vec<&NeuralMemoryRecord> = mem.by_tags(&["recon".to_string()]);
+        let by_recon = mem.by_tags(&["recon".to_string()]).expect("by_tags");
         assert_eq!(by_recon.len(), 1);
         assert_eq!(by_recon[0].id, "t1");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn threshold_filters_results() {
-        let mut mem = NeuralMemory::new();
-        mem.store("x1", "completely unrelated text about cooking", vec![], "misc");
-        let results = mem.query("nmap port scan", 5, 0.9);
+        let path = env::temp_dir().join(format!("neural_test_thresh_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mem = NeuralMemory::open(&path).expect("open db");
+        mem.store(
+            "x1",
+            "completely unrelated text about cooking",
+            vec![],
+            "misc",
+        )
+        .expect("store x1");
+        let results = mem.query("nmap port scan", 5, 0.9).expect("query");
         assert!(
             results.records.is_empty(),
             "high threshold should filter out unrelated text"
         );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn serialize_roundtrip() {
-        let mut mem = NeuralMemory::new();
-        mem.store("s1", "test embedding text", vec!["tag1".into()], "cat");
-        let _json = serde_json::to_string(&mem.records).unwrap();
-        let restored: HashMap<String, NeuralMemoryRecord> = serde_json::from_str(&_json).unwrap();
-        assert_eq!(restored.len(), 1);
-        assert_eq!(restored["s1"].text, "test embedding text");
+    fn in_memory_database_works() {
+        let mem = NeuralMemory::in_memory().expect("open in-memory");
+        mem.store(
+            "s1",
+            "test embedding text",
+            vec!["tag1".into()],
+            "cat",
+        )
+        .expect("store");
+        assert_eq!(mem.len().expect("len"), 1);
+        assert!(!mem.is_empty().expect("is_empty"));
     }
 }
