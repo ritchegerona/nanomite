@@ -2,6 +2,7 @@ use crate::agent::openai::OpenAiProvider;
 use crate::agent::policy::ToolPolicy;
 use crate::agent::provider::{AgentProvider, ChatMessage, Role, Usage};
 use crate::agent::runtime::{AgentEvent, AgentRuntime, Cancel};
+use crate::neural::autonomous_planner::PlanStatus;
 use crate::agent::suggest::{self, SuggestResult};
 use crate::agent::swarm::Swarm;
 #[cfg(test)]
@@ -3569,6 +3570,7 @@ impl App {
             Command::Memory => self.open_memory_picker(),
             Command::New => self.new_session(),
             Command::Panel => self.open_board(args),
+            Command::Plan => self.run_autonomous_plan(args),
             Command::Perf => self.show_perf(),
             Command::Skills => self.show_skills(),
             Command::Reasoning => self.cycle_reasoning(),
@@ -4028,6 +4030,86 @@ impl App {
             if !s.package_name.is_empty() {
                 text.push_str(&format!("      package: {}\\n", s.package_name));
             }
+        }
+
+        self.entries
+            .push(Entry::new(EntryRole::System, text.trim_end().to_string()));
+        let last = self.entries.last_mut().unwrap();
+        last.phase = Phase::Done;
+        self.mark_dirty();
+    }
+
+    // -- /plan --------------------------------------------------------------
+
+    /// View saved autonomous plans or run a new autonomous plan from a goal.
+    fn run_autonomous_plan(&mut self, args: &str) {
+        if self.is_busy() {
+            self.toast("wait for the current turn");
+            return;
+        }
+
+        let planner_arc = self.runtime.autonomous_planner();
+        let Some(planner_arc) = planner_arc else {
+            self.entries.push(Entry::new(
+                EntryRole::System,
+                "No autonomous planner attached to this session.".to_string(),
+            ));
+            let last = self.entries.last_mut().unwrap();
+            last.phase = Phase::Done;
+            self.mark_dirty();
+            return;
+        };
+
+        // If args provided, create and execute a new plan.
+        if !args.trim().is_empty() {
+            let mut planner = (*planner_arc).clone();
+            let plan = planner.create_plan(args.trim(), None);
+            let summary = format!(
+                "Created autonomous plan {}: {} tasks for goal: {}",
+                plan.id,
+                plan.tasks.len(),
+                args.trim()
+            );
+            self.entries.push(Entry::new(
+                EntryRole::System,
+                summary,
+            ));
+            let last = self.entries.last_mut().unwrap();
+            last.phase = Phase::Done;
+            self.mark_dirty();
+
+            // Note: full async execution requires spawning a tokio task.
+            // The plan is saved to disk and can be executed via the agent
+            // using the autonomous_execute tool.
+            self.toast(&format!("Plan {} created ({} tasks)", plan.id, plan.tasks.len()));
+            return;
+        }
+
+        // Otherwise, list saved plans.
+        let plans = planner_arc.list_plans();
+        let mut text = String::new();
+        text.push_str("Autonomous plans:\\n\\n");
+
+        if plans.is_empty() {
+            text.push_str("No saved plans. Create one with /plan <goal>\\n");
+        } else {
+            for p in &plans {
+                let status = match p.status {
+                    PlanStatus::Planning => "planning",
+                    PlanStatus::Executing => "executing",
+                    PlanStatus::Completed => "completed",
+                    PlanStatus::Failed => "failed",
+                    PlanStatus::Blocked => "blocked",
+                };
+                text.push_str(&format!(
+                    "  {} · {} · {} tasks · goal: {}\\n",
+                    p.id,
+                    status,
+                    p.tasks.len(),
+                    p.goal
+                ));
+            }
+            text.push_str("\\nRun /plan <goal> to create and save a new plan.\\n");
         }
 
         self.entries

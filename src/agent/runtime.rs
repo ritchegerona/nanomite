@@ -4,6 +4,8 @@ use crate::agent::provider::{
 };
 use crate::hooks::{HookConfig, HookEvent};
 use crate::memory::{TurnObservation, TurnOutcome};
+use crate::neural::autonomous_planner::{AutonomousExecuteArgs, AutonomousPlanner};
+use std::sync::Arc;
 use crate::tools::document_tools::ReadDocumentArgs;
 use crate::tools::exec_tools::{RunCommandArgs, ScanPortsArgs, SshRunArgs};
 use crate::tools::file_tools::{
@@ -28,7 +30,6 @@ use crate::tools::ToolSet;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc::UnboundedSender, Notify};
 
@@ -254,6 +255,8 @@ pub struct AgentRuntime {
     /// session is never interrupted by the prompt. `None` runs without asking -
     /// headless and test builds, or `confirm_external = false` in the config.
     confirmer: Option<std::sync::Arc<dyn Confirmer>>,
+    /// Autonomous planner: drives goal-oriented execution loops (optional).
+    autonomous_planner: Option<Arc<AutonomousPlanner>>,
 }
 
 impl AgentRuntime {
@@ -290,6 +293,7 @@ impl AgentRuntime {
             tool_policy: ToolPolicy::default(),
             hooks: Arc::new(Vec::new()),
             confirmer: None,
+            autonomous_planner: None,
         }
     }
 
@@ -409,6 +413,12 @@ impl AgentRuntime {
         self
     }
 
+    /// Attaches an autonomous planner for goal-driven execution loops.
+    pub fn with_autonomous_planner(mut self, planner: AutonomousPlanner) -> Self {
+        self.autonomous_planner = Some(Arc::new(planner));
+        self
+    }
+
     /// Attaches user-defined lifecycle hooks. Pre-tool-call deny hooks run
     /// inline before dispatch and can refuse a call; all other events fire
     /// after the fact and never block.
@@ -458,6 +468,16 @@ impl AgentRuntime {
         &self.provider
     }
 
+    /// Returns the workspace root path.
+    pub fn workspace(&self) -> &std::path::Path {
+        &self.workspace
+    }
+
+    /// Returns the current tool authorization policy.
+    pub fn tool_policy(&self) -> ToolPolicy {
+        self.tool_policy
+    }
+
     /// Returns the current system prompt (used by neural injection).
     pub fn system_prompt(&self) -> &str {
         &self.system_prompt
@@ -474,10 +494,15 @@ impl AgentRuntime {
         std::sync::Arc::clone(&self.tools.skills)
     }
 
+    /// Returns a shared handle to the autonomous planner so the UI can view
+    /// saved plans or trigger autonomous execution (e.g. `/plan`).
+    pub fn autonomous_planner(&self) -> Option<std::sync::Arc<crate::neural::autonomous_planner::AutonomousPlanner>> {
+        self.autonomous_planner.clone()
+    }
+
     /// The live tool set, shared with the approval-path tests so they can drive
     /// a tool call exactly as the turn loop does.
-    #[cfg(test)]
-    pub(crate) fn tool_set(&self) -> std::sync::Arc<ToolSet> {
+    pub fn tool_set(&self) -> std::sync::Arc<ToolSet> {
         std::sync::Arc::clone(&self.tools)
     }
 
@@ -721,6 +746,8 @@ impl AgentRuntime {
                 let tool_name = call.name.clone();
                 let cancel_flag = cancel.force_flag();
                 let _tx_for_streaming = tx.clone(); // run_command's live-output sink
+                let tx_tool = tx.clone();
+                let autonomous_planner = self.autonomous_planner.clone();
                 let mut tool_task = tokio::task::spawn_blocking(move || {
                     // Double-Esc must reach process-spawning tools: expose the
                     // turn's force flag to the blocking worker for the whole
@@ -734,10 +761,56 @@ impl AgentRuntime {
                     } else {
                         None
                     };
-                    // run_command streams its output live: a throttled sink
-                    // batches chunks into `ToolOutput` events so the UI shows
-                    // what the command prints as it prints it.
-                    let result = if tool_name == "run_command" {
+                    // `autonomous_execute` drives an async execution loop;
+                    // run it on this blocking thread with block_in_place.
+                    let result = if tool_name == "autonomous_execute" {
+                        let parsed: AutonomousExecuteArgs =
+                            match serde_json::from_str(&call_for_task.arguments) {
+                                Ok(a) => a,
+                                Err(e) => {
+                                    return (
+                                        Err(format!("invalid autonomous_execute arguments: {e}")),
+                                        snapshot,
+                                    )
+                                }
+                            };
+                        let planner_arc = autonomous_planner.clone();
+                        let require_approval = parsed.require_approval;
+                        let event_tx = tx_tool.clone();
+                        tokio::task::block_in_place(|| {
+                            let handle = tokio::runtime::Handle::current();
+                            let plan_result = handle.block_on(async {
+                                if let Some(planner_arc) = planner_arc {
+                                    let mut planner = (*planner_arc).clone();
+                                    if require_approval {
+                                        planner = planner.with_pre_tool_gate(Arc::new(
+                                            |tool, _args| {
+                                                matches!(
+                                                    tool,
+                                                    "run_command" | "ssh_run" | "web_recon" | "scan_ports"
+                                                )
+                                            },
+                                        ));
+                                    }
+                                    let plan = planner.create_plan(&parsed.goal, parsed.scope.as_deref());
+                                    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                                    let result = planner.execute_plan(Cancel::new(), tx).await;
+                                    let _ = event_tx.send(AgentEvent::Activity {
+                                        action: format!("Autonomous plan {}: {}", plan.id, result.summary),
+                                        detail: Some(format!("{}/{} tasks completed", result.tasks_completed, result.total_tasks)),
+                                        done: true,
+                                    });
+                                    Ok((
+                                        serde_json::to_string(&result).unwrap_or_default(),
+                                        result.summary,
+                                    ))
+                                } else {
+                                    Err("autonomous planner is not attached to this session".to_string())
+                                }
+                            });
+                            plan_result
+                        })
+                    } else if tool_name == "run_command" {
                         // Apply the same policy checks as run_tool
 
                         let args: crate::tools::exec_tools::RunCommandArgs =
@@ -2502,7 +2575,7 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        let expected = 32
+        let expected = 33
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(filter_disabled_schemas(schemas, &[]).len(), expected);

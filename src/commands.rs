@@ -36,6 +36,7 @@ pub enum Command {
     ProviderMenu,
     Tools,
     Panel,
+    Plan,
     Perf,
     Improve,
     ImproveFromBoard,
@@ -233,6 +234,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "convene the agent board - /panel <topic> (alt+b)",
         kind: Command::Panel,
+    },
+    Entry {
+        command: "/plan",
+        aliases: &[],
+        hint: "view or run autonomous plans - /plan <goal> (alt+shift+p)",
+        kind: Command::Plan,
     },
     Entry {
         command: "/ab",

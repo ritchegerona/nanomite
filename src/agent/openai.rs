@@ -956,6 +956,20 @@ pub fn tool_schemas() -> Vec<Tool> {
                 "additionalProperties": false
             }),
         ),
+        Tool::new(
+            "autonomous_execute",
+            "Run an autonomous security assessment plan against a goal. Decomposes the goal into ordered tasks and executes them through the tool layer, with optional human approval before each risky command. Results are stored as neural memory techniques.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "goal": { "type": "string", "description": "High-level goal for the autonomous agent to pursue (e.g. \"assess the web app on 10.0.0.5\")" },
+                    "scope": { "type": "string", "description": "Optional target scope hint (URL, host, or network range)" },
+                    "require_approval": { "type": "boolean", "description": "Require human approval before each risky tool call (default true)" }
+                },
+                "required": ["goal"],
+                "additionalProperties": false
+            }),
+        ),
     ];
     #[cfg(any(feature = "vpn", feature = "tor"))]
     schemas.extend(crate::tools::privacy_tools::privacy_tool_schemas());

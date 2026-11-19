@@ -3553,9 +3553,9 @@ async fn safety_layer_targets_stage_after_denylist_removal() {
 async fn the_help_sheet_lists_the_improve_command() {
     let mut app = test_app().await;
     app.open_help();
-    // 43 command rows + header no longer fit in 30 rows; 32 keeps /improve
-    // (the 28th command) on screen without scrolling.
-    let text = frame_text(&mut app, 92, 32);
+    // 44 command rows + header no longer fit in 30 rows; 33 keeps /improve
+    // (the 29th command) on screen without scrolling.
+    let text = frame_text(&mut app, 92, 33);
     assert!(text.contains("/improve"), "command row missing:\n{text}");
     let help = frame_text(&mut app, 92, 44);
     assert!(

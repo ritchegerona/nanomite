@@ -14,6 +14,7 @@
 //!
 //! ## Architecture
 //!
+//! - [`autonomous_planner`] — goal-driven execution loop with pre-tool-call gates
 //! - [`network`] — feedforward neural network + backpropagation trainer
 //! - [`memory`] — embedding store + cosine-similarity recall
 //! - [`planner`] — predicts the best next tool given context + history
@@ -21,6 +22,7 @@
 //! - [`evolution`] — rewrites prompts/schemas from learned patterns
 //! - [`runtime_integration`] — hooks into every agent turn to train + predict
 
+pub mod autonomous_planner;
 pub mod evolution;
 pub mod memory;
 pub mod network;
@@ -36,6 +38,16 @@ pub(crate) fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Deterministic FNV-1a hash, shared across neural submodules.
+pub(crate) fn hash_string(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,5 +59,11 @@ mod tests {
         let b = now_secs();
         assert!(b >= a, "time should not go backwards");
         assert!(a > 1_700_000_000, "unix seconds should be 2023+");
+    }
+
+    #[test]
+    fn hash_string_is_deterministic() {
+        assert_eq!(hash_string("test"), hash_string("test"));
+        assert_ne!(hash_string("test"), hash_string("other"));
     }
 }
