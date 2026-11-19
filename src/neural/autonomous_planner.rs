@@ -456,6 +456,11 @@ impl AutonomousPlanner {
         self.active_plan.as_ref()
     }
 
+    /// Get a shared handle to the wrapped agent runtime (used by multi-agent orchestration).
+    pub fn runtime(&self) -> Arc<AgentRuntime> {
+        Arc::clone(&self.runtime)
+    }
+
     /// List all saved plans from disk.
     pub fn list_plans(&self) -> Vec<AutonomousPlan> {
         let mut plans = Vec::new();

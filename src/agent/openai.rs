@@ -1086,6 +1086,21 @@ pub fn tool_schemas() -> Vec<Tool> {
                 "additionalProperties": false
             }),
         ),
+        Tool::new(
+            "multi_agent_orchestrate",
+            "Spawn coordinated sub-agents (recon, vuln, crack, report) that work on different targets simultaneously, sharing findings through neural memory and the evidence locker. Execution is plan-only: sub-agents produce commands, parse results, and record findings — they never exploit.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "goal": { "type": "string", "description": "High-level goal for the swarm (e.g. \"assess the web app on 10.0.0.5\")" },
+                    "scope": { "type": "string", "description": "Optional target scope hint (URL, host, or network range)" },
+                    "roles": { "type": "array", "description": "Roles to spawn (recon, vuln, crack, report). Defaults to [recon, vuln, report]", "items": { "type": "string", "enum": ["recon", "vuln", "crack", "report"] } },
+                    "require_approval": { "type": "boolean", "description": "Require human approval before each risky tool call (default true)" }
+                },
+                "required": ["goal"],
+                "additionalProperties": false
+            }),
+        ),
     ];
     #[cfg(any(feature = "vpn", feature = "tor"))]
     schemas.extend(crate::tools::privacy_tools::privacy_tool_schemas());

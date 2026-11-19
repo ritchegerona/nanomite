@@ -271,6 +271,11 @@ impl ToolSet {
                 description: "Run an autonomous security assessment plan against a goal. Decomposes the goal into ordered tasks and executes them through the tool layer, with optional human approval before each risky command.",
                 category: Exec,
             },
+            ToolSpec {
+                name: "multi_agent_orchestrate",
+                description: "Spawn coordinated sub-agents (recon, vuln, crack, report) working in parallel on different targets, sharing findings through neural memory and the evidence locker.",
+                category: Exec,
+            },
             #[cfg(feature = "vpn")]
             ToolSpec {
                 name: "vpn_control",
@@ -302,7 +307,7 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate tool names in catalog");
-        let expected = 46usize
+        let expected = 47usize
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(

@@ -4,7 +4,11 @@ use crate::agent::provider::{
 };
 use crate::hooks::{HookConfig, HookEvent};
 use crate::memory::{TurnObservation, TurnOutcome};
-use crate::neural::autonomous_planner::{AutonomousExecuteArgs, AutonomousPlanner};
+use crate::neural::{
+    autonomous_planner::{AutonomousExecuteArgs, AutonomousPlanner},
+    multi_agent::{AgentOrchestrator, MultiAgentArgs},
+    now_secs,
+};
 use std::sync::Arc;
 use crate::tools::document_tools::ReadDocumentArgs;
 use crate::tools::exec_tools::{RunCommandArgs, ScanPortsArgs, SshRunArgs};
@@ -810,6 +814,67 @@ impl AgentRuntime {
                                 }
                             });
                             plan_result
+                        })
+                    } else if tool_name == "multi_agent_orchestrate" {
+                        // Spawn coordinated sub-agents (recon, vuln, crack, report)
+                        // working in parallel on different targets.
+                        let parsed: MultiAgentArgs =
+                            match serde_json::from_str(&call_for_task.arguments) {
+                                Ok(a) => a,
+                                Err(e) => {
+                                    return (
+                                        Err(format!("invalid multi_agent_orchestrate arguments: {e}")),
+                                        snapshot,
+                                    )
+                                }
+                            };
+                        let orchestrator_arc = autonomous_planner.clone();
+                        // Reuse the autonomous planner's Arc<AgentRuntime> to build
+                        // an orchestrator; the runtime is shared across all sub-agents.
+                        let require_approval = parsed.require_approval;
+                        let event_tx = tx_tool.clone();
+                        tokio::task::block_in_place(|| {
+                            let handle = tokio::runtime::Handle::current();
+                            let orch_result = handle.block_on(async {
+                                // Build an AgentOrchestrator from the runtime.
+                                let runtime_arc = match &orchestrator_arc {
+                                    Some(p) => p.runtime(),
+                                    None => {
+                                        return Err(
+                                            "multi-agent orchestrator is not attached to this session".to_string()
+                                        )
+                                    }
+                                };
+                                let mut orchestrator = AgentOrchestrator::new(
+                                    runtime_arc,
+                                    std::env::temp_dir().join(format!(
+                                        "nanomite-multi-agent-{}-{}",
+                                        std::process::id(),
+                                        now_secs()
+                                    )),
+                                );
+                                if require_approval {
+                                    orchestrator = orchestrator.with_pre_tool_gate(Arc::new(
+                                        |tool, _args| {
+                                            matches!(
+                                                tool,
+                                                "run_command" | "ssh_run" | "web_recon" | "wireless_recon" | "scan_ports"
+                                            )
+                                        },
+                                    ));
+                                }
+                                let result = orchestrator.orchestrate(parsed, Cancel::new(), event_tx.clone()).await;
+                                let _ = event_tx.send(AgentEvent::Activity {
+                                    action: format!("Multi-agent swarm {}: {}", result.swarm_id, result.summary),
+                                    detail: Some(format!("{}/{} agents completed", result.tasks_completed, result.total_tasks)),
+                                    done: true,
+                                });
+                                Ok((
+                                    serde_json::to_string(&result).unwrap_or_default(),
+                                    result.summary,
+                                ))
+                            });
+                            orch_result
                         })
                     } else if tool_name == "run_command" {
                         // Apply the same policy checks as run_tool
@@ -2735,7 +2800,7 @@ mod tests {
 
         // Empty disabled list is the identity.
         let schemas = crate::agent::openai::tool_schemas();
-        let expected = 38
+        let expected = 39
             + if cfg!(feature = "vpn") { 1 } else { 0 }
             + if cfg!(feature = "tor") { 1 } else { 0 };
         assert_eq!(filter_disabled_schemas(schemas, &[]).len(), expected);

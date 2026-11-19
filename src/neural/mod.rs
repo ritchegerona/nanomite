@@ -25,6 +25,7 @@
 pub mod autonomous_planner;
 pub mod evolution;
 pub mod memory;
+pub mod multi_agent;
 pub mod network;
 pub mod planner;
 pub mod runtime_integration;
