@@ -362,7 +362,6 @@ pub fn help_keys() -> &'static [(&'static str, &'static str)] {
         ("ctrl+j / alt+enter", "newline in the prompt"),
         ("/ or ctrl+x", "command menu"),
         ("alt+c", "connect & switch - pick from the list"),
-        ("alt+p", "open the connect menu"),
         ("esc", "interrupt · close an overlay · clear the prompt"),
         ("ctrl+t / ctrl+l", "new session · clear transcript"),
         ("ctrl+r", "cycle reasoning effort"),
@@ -899,8 +898,8 @@ pub fn command_items(app: &App) -> Vec<PickerItem> {
         .collect();
 
     items.push(PickerItem {
-        label: format!("Provider  ·  {}", app.provider_label()),
-        hint: "connect & switch - pick from the list".into(),
+        label: format!("Connect & Switch  ·  {}", app.provider_label()),
+        hint: "/connect".into(),
         value: PickerValue::Command(Command::Connect),
         current: false,
     });

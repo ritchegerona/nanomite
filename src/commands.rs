@@ -33,7 +33,6 @@ pub enum Command {
     Unshare,
     Memory,
     Copy,
-    ProviderMenu,
     Tools,
     Panel,
     Plan,
@@ -86,12 +85,6 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &["/login", "/auth"],
         hint: "connect & switch - pick from the list (alt+c)",
         kind: Command::Connect,
-    },
-    Entry {
-        command: "/provider",
-        aliases: &["/providers"],
-        hint: "open the connect menu (alt+p)",
-        kind: Command::ProviderMenu,
     },
     Entry {
         command: "/models",
