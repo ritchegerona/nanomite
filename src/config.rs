@@ -3,6 +3,10 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// Running as root (sudo) grants full authority: every tool available, no
+// confirmation prompts, Hacker policy. Explicit NANOMITE_* env vars still win.
+use libc;
+
 /// Where completions come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
@@ -1115,6 +1119,11 @@ impl Config {
         let env_one = |key: &str| if use_env { first_env_one(key) } else { None };
         let workspace = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+        // Running as root (`sudo nanomite`) grants full authority: every tool
+        // available, no confirmation prompts, Hacker policy. Explicit
+        // `NANOMITE_*` environment variables still override these defaults.
+        let is_root = unsafe { libc::geteuid() == 0 };
+
         // Fail-fast validation of HACKER MODE config: if the user enabled
         // hacker mode without a valid scope, we never silently guess. We log a
         // loud error and disable hacker mode for this invocation.
@@ -1258,39 +1267,52 @@ impl Config {
             .unwrap_or_else(|| crate::ui::theme::ThemeId::Cyberpunk.label().to_string());
 
         // Disabled tools: environment wins over the file, same as every other
-        // persisted setting.
+        // persisted setting. When running as root (`sudo nanomite`) no tool is
+        // hidden: every tool is available in the schema.
         let disabled_tools = {
-            let raw = if use_env {
-                first_env_one("NANOMITE_DISABLED_TOOLS")
-            } else {
-                None
+            let from_env = use_env
+                .then(|| first_env_one("NANOMITE_DISABLED_TOOLS"))
+                .flatten();
+            let root_clears = is_root && from_env.is_none();
+            let raw = from_env
+                .or_else(|| stored.disabled_tools.clone())
+                .unwrap_or_default();
+            let mut dt = parse_disabled_tools(&raw);
+            if root_clears {
+                dt.clear();
             }
-            .or_else(|| stored.disabled_tools.clone())
-            .unwrap_or_default();
-            parse_disabled_tools(&raw)
+            dt
         };
 
         let tool_policy = {
-            let raw = if use_env {
-                first_env_one("NANOMITE_TOOL_POLICY")
-            } else {
-                None
+            let from_env = use_env
+                .then(|| first_env_one("NANOMITE_TOOL_POLICY"))
+                .flatten();
+            let root_hacker = is_root && from_env.is_none();
+            let raw = from_env
+                .or_else(|| stored.tool_policy.clone())
+                .unwrap_or_default();
+            let mut tp = crate::agent::policy::ToolPolicy::parse(&raw).unwrap_or_default();
+            if root_hacker {
+                tp = crate::agent::policy::ToolPolicy::Hacker;
             }
-            .or_else(|| stored.tool_policy.clone())
-            .unwrap_or_default();
-            crate::agent::policy::ToolPolicy::parse(&raw).unwrap_or_default()
+            tp
         };
 
         let confirm_external = {
-            let raw = if use_env {
-                first_env_one("NANOMITE_CONFIRM_EXTERNAL")
-            } else {
-                None
-            };
-            match raw.as_deref() {
+            let from_env = use_env
+                .then(|| first_env_one("NANOMITE_CONFIRM_EXTERNAL"))
+                .flatten();
+            match from_env.as_deref() {
                 Some("0") | Some("false") | Some("off") => false,
                 Some(_) => true,
-                None => stored.confirm_external.unwrap_or(true),
+                None => {
+                    if is_root {
+                        false
+                    } else {
+                        stored.confirm_external.unwrap_or(true)
+                    }
+                }
             }
         };
 
