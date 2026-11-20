@@ -1,8 +1,8 @@
 //! Parses `cargo clippy` warnings into structured diagnostics.
 //!
 //! Clippy output looks like:
-//! ```
-//! warning: `foo` is unused
+//! ```text
+//! warning: foo is unused
 //!   --> src/lib.rs:10:5
 //!    |
 //! 10 |     let foo = 1;
@@ -12,7 +12,7 @@
 //!   --> src/main.rs:3:9
 //!    |
 //!  3 |     let x = y.unwrap();
-//!    |         ^^^^^^^^^^^^^ help: consider using `.map_err()` or `?`
+//!    |         ^^^^^^^^^^^^^ help: consider using .map_err() or ?
 //! ```
 //!
 //! Produces `DebugDiagnostic`s with `kind = Compiler` and `has_known_fix`

@@ -8,8 +8,8 @@
 //! Both locations are redirected into a private temp directory first, so the
 //! developer's real `~/.config/nanomite/memory` tree is never opened.
 
-use nanomite::app::App;
-use nanomite::config::Config;
+use nanomite_ai::app::App;
+use nanomite_ai::config::Config;
 
 /// One test function on purpose: these phases mutate process-wide environment
 /// variables, and separate `#[test]`s in one binary would race on them.

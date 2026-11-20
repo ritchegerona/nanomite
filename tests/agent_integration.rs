@@ -3,15 +3,15 @@
 //! These tests exercise the public APIs: ToolSet, session persistence,
 //! memory engine, and config loading.
 
-use nanomite::app::{Entry, EntryRole};
-use nanomite::config::Config;
-use nanomite::memory::model::{
+use nanomite_ai::app::{Entry, EntryRole};
+use nanomite_ai::config::Config;
+use nanomite_ai::memory::model::{
     MemoryCategory, MemorySource, NewMemory, SearchQuery, Sensitivity, SourceKind,
 };
-use nanomite::memory::policy::MemoryPolicy;
-use nanomite::memory::MemoryEngine;
-use nanomite::session::{self, StoredSession};
-use nanomite::tools::ToolSet;
+use nanomite_ai::memory::policy::MemoryPolicy;
+use nanomite_ai::memory::MemoryEngine;
+use nanomite_ai::session::{self, StoredSession};
+use nanomite_ai::tools::ToolSet;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -22,7 +22,7 @@ async fn tool_set_file_operations() {
     // Write file
     let result = tools
         .files
-        .write_file(nanomite::tools::file_tools::WriteFileArgs {
+        .write_file(nanomite_ai::tools::file_tools::WriteFileArgs {
             path: "test.txt".into(),
             content: "hello world".into(),
             append: false,
@@ -33,7 +33,7 @@ async fn tool_set_file_operations() {
     // Read file
     let result = tools
         .files
-        .read_file(nanomite::tools::file_tools::ReadFileArgs {
+        .read_file(nanomite_ai::tools::file_tools::ReadFileArgs {
             path: "test.txt".into(),
             offset: None,
             limit: None,
@@ -44,7 +44,7 @@ async fn tool_set_file_operations() {
     // List files
     let result = tools
         .files
-        .list_files(nanomite::tools::file_tools::ListFilesArgs {
+        .list_files(nanomite_ai::tools::file_tools::ListFilesArgs {
             path: Some(".".into()),
         })
         .unwrap();
@@ -53,7 +53,7 @@ async fn tool_set_file_operations() {
     // Search
     let result = tools
         .files
-        .search(nanomite::tools::file_tools::SearchArgs {
+        .search(nanomite_ai::tools::file_tools::SearchArgs {
             query: "world".into(),
             path: None,
         })
@@ -63,7 +63,7 @@ async fn tool_set_file_operations() {
     // Edit file
     let result = tools
         .files
-        .edit_file(nanomite::tools::file_tools::EditFileArgs {
+        .edit_file(nanomite_ai::tools::file_tools::EditFileArgs {
             path: "test.txt".into(),
             old_string: "world".into(),
             new_string: "rust".into(),
@@ -74,7 +74,7 @@ async fn tool_set_file_operations() {
 
     let result = tools
         .files
-        .read_file(nanomite::tools::file_tools::ReadFileArgs {
+        .read_file(nanomite_ai::tools::file_tools::ReadFileArgs {
             path: "test.txt".into(),
             offset: None,
             limit: None,
@@ -91,7 +91,7 @@ async fn tool_set_exec_operations() {
     // Run a simple command
     let result = tools
         .exec
-        .run_command(nanomite::tools::exec_tools::RunCommandArgs {
+        .run_command(nanomite_ai::tools::exec_tools::RunCommandArgs {
             command: "echo hello".into(),
             cwd: None,
             timeout_ms: Some(5000),
@@ -167,7 +167,7 @@ async fn memory_engine_in_memory() {
         min_importance: None,
         max_sensitivity: Sensitivity::Confidential,
         include_expired: false,
-        order: nanomite::memory::model::SearchOrder::Relevance,
+        order: nanomite_ai::memory::model::SearchOrder::Relevance,
         limit: Some(10),
         offset: 0,
     };
@@ -208,7 +208,7 @@ async fn document_extraction_text() {
     // Extract text
     let result = tools
         .documents
-        .read_document(nanomite::tools::document_tools::ReadDocumentArgs {
+        .read_document(nanomite_ai::tools::document_tools::ReadDocumentArgs {
             path: "doc.txt".into(),
         })
         .unwrap();
@@ -219,7 +219,7 @@ async fn document_extraction_text() {
 
 #[test]
 fn session_v2_roundtrip_carries_settings_and_plans() {
-    use nanomite::session::{self, StoredPlan, StoredPlanTask, StoredSession, StoredSettings};
+    use nanomite_ai::session::{self, StoredPlan, StoredPlanTask, StoredSession, StoredSettings};
 
     let dir = std::env::temp_dir().join(format!("nanomite-sess-v2-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

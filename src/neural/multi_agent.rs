@@ -550,7 +550,7 @@ mod tests {
             Arc::new(ScriptedProvider::default()),
             std::env::temp_dir().join(format!(
                 "nanomite-multi-agent-test-{}",
-                std::process::id()
+                "orchestrator_creates_swarm"
             )),
             64 * 1024,
             Some(AgentConfig::default()),
@@ -562,7 +562,7 @@ mod tests {
         let runtime = Arc::new(test_runtime());
         let dir = std::env::temp_dir().join(format!(
             "nanomite-multi-agent-state-{}",
-            std::process::id()
+            "orchestrator_creates_swarm"
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let mut orchestrator = AgentOrchestrator::new(Arc::clone(&runtime), &dir);
@@ -585,7 +585,7 @@ mod tests {
         let runtime = Arc::new(test_runtime());
         let dir = std::env::temp_dir().join(format!(
             "nanomite-multi-agent-state-{}",
-            std::process::id()
+            "sub_agent_goal_generation"
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let orchestrator = AgentOrchestrator::new(Arc::clone(&runtime), &dir);
@@ -648,7 +648,7 @@ mod tests {
         let runtime = Arc::new(test_runtime());
         let dir = std::env::temp_dir().join(format!(
             "nanomite-multi-agent-state-{}",
-            std::process::id()
+            "save_and_list_swarms"
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let mut orchestrator = AgentOrchestrator::new(Arc::clone(&runtime), &dir);
@@ -677,7 +677,7 @@ mod tests {
         let runtime = Arc::new(test_runtime());
         let dir = std::env::temp_dir().join(format!(
             "nanomite-multi-agent-state-{}",
-            std::process::id()
+            "orchestrate_with_cancel"
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let mut orchestrator = AgentOrchestrator::new(Arc::clone(&runtime), &dir);
