@@ -1122,7 +1122,12 @@ impl Config {
         // Running as root (`sudo nanomite`) grants full authority: every tool
         // available, no confirmation prompts, Hacker policy. Explicit
         // `NANOMITE_*` environment variables still override these defaults.
-        let is_root = unsafe { libc::geteuid() == 0 };
+        // `NANOMITE_FORCE_ROOT=1` forces the same full-authority defaults on
+        // hosts where sudo cannot elevate (e.g. no passwd entry for the uid).
+        let is_root = unsafe { libc::geteuid() == 0 }
+            || env_one("NANOMITE_FORCE_ROOT")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
 
         // Fail-fast validation of HACKER MODE config: if the user enabled
         // hacker mode without a valid scope, we never silently guess. We log a
