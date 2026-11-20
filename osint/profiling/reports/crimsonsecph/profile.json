@@ -21,7 +21,7 @@
     "confidence": 0.0
   },
   "evidence_count": 10,
-  "generated_at": "2026-11-19T17:29:00.081325",
+  "generated_at": "2026-11-20T01:29:53.861692",
   "evidence": [
     {
       "source": "facebook",
@@ -31,7 +31,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:59.689104",
+      "timestamp": "2026-11-20T01:29:53.500298",
       "metadata": {
         "url": "https://m.facebook.com/crimsonsecph",
         "alias": "crimsonsecph"
@@ -45,7 +45,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:59.689120",
+      "timestamp": "2026-11-20T01:29:53.500309",
       "metadata": {
         "url": "https://m.facebook.com/crimsonsecph",
         "alias": "crimsonsecph"
@@ -59,7 +59,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:00.080487",
+      "timestamp": "2026-11-20T01:29:53.861007",
       "metadata": {
         "url": "https://mbasic.facebook.com/crimsonsecph",
         "alias": "crimsonsecph"
@@ -73,7 +73,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:00.080502",
+      "timestamp": "2026-11-20T01:29:53.861016",
       "metadata": {
         "url": "https://mbasic.facebook.com/crimsonsecph",
         "alias": "crimsonsecph"
@@ -87,7 +87,7 @@
       "confidence": 0.65,
       "weight": 0.7,
       "weighted_score": 0.45499999999999996,
-      "timestamp": "2026-11-19T17:28:59.513661",
+      "timestamp": "2026-11-20T01:29:53.351847",
       "metadata": {
         "url": "https://t.me/crimsonsecph",
         "username": "crimsonsecph"
@@ -101,7 +101,7 @@
       "confidence": 0.65,
       "weight": 0.7,
       "weighted_score": 0.45499999999999996,
-      "timestamp": "2026-11-19T17:28:59.513678",
+      "timestamp": "2026-11-20T01:29:53.351859",
       "metadata": {
         "url": "https://t.me/crimsonsecph",
         "username": "crimsonsecph"
@@ -115,7 +115,7 @@
       "confidence": 0.65,
       "weight": 0.7,
       "weighted_score": 0.45499999999999996,
-      "timestamp": "2026-11-19T17:28:59.513686",
+      "timestamp": "2026-11-20T01:29:53.351863",
       "metadata": {
         "url": "https://t.me/crimsonsecph",
         "username": "crimsonsecph"
@@ -129,7 +129,7 @@
       "confidence": 0.65,
       "weight": 0.7,
       "weighted_score": 0.45499999999999996,
-      "timestamp": "2026-11-19T17:28:59.513693",
+      "timestamp": "2026-11-20T01:29:53.351868",
       "metadata": {
         "url": "https://t.me/crimsonsecph",
         "username": "crimsonsecph"
@@ -149,7 +149,7 @@
       "confidence": 0.52,
       "weight": 0.5599999999999999,
       "weighted_score": 0.29119999999999996,
-      "timestamp": "2026-11-19T17:28:59.819746",
+      "timestamp": "2026-11-20T01:29:53.760534",
       "metadata": {
         "url": "https://t.me/s/crimsonsecph",
         "username": "crimsonsecph"
@@ -163,7 +163,7 @@
       "confidence": 0.52,
       "weight": 0.5599999999999999,
       "weighted_score": 0.29119999999999996,
-      "timestamp": "2026-11-19T17:28:59.819765",
+      "timestamp": "2026-11-20T01:29:53.760544",
       "metadata": {
         "url": "https://t.me/s/crimsonsecph",
         "username": "crimsonsecph"

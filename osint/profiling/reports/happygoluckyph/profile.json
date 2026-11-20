@@ -25,7 +25,7 @@
     "confidence": 1.0
   },
   "evidence_count": 17,
-  "generated_at": "2026-11-19T17:28:57.386307",
+  "generated_at": "2026-11-20T01:29:51.410980",
   "evidence": [
     {
       "source": "facebook",
@@ -35,7 +35,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:55.698865",
+      "timestamp": "2026-11-20T01:29:50.617305",
       "metadata": {
         "url": "https://www.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -49,7 +49,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:55.698896",
+      "timestamp": "2026-11-20T01:29:50.617319",
       "metadata": {
         "url": "https://www.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -59,11 +59,11 @@
       "source": "facebook",
       "target_alias": "happygoluckyph",
       "data_type": "og:description",
-      "raw_value": "Happy Go Lucky PH, 5,042 na mga follower &#xb7; 115 ang pinag-uusapan ito, #HappyGoLuckyPH",
+      "raw_value": "Happy Go Lucky PH, 5,042 na mga follower &#xb7; 116 ang pinag-uusapan ito, #HappyGoLuckyPH",
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:55.698904",
+      "timestamp": "2026-11-20T01:29:50.617324",
       "metadata": {
         "url": "https://www.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -77,7 +77,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:55.698912",
+      "timestamp": "2026-11-20T01:29:50.617328",
       "metadata": {
         "url": "https://www.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -91,7 +91,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:55.698920",
+      "timestamp": "2026-11-20T01:29:50.617332",
       "metadata": {
         "url": "https://www.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -101,11 +101,11 @@
       "source": "facebook",
       "target_alias": "happygoluckyph",
       "data_type": "og:image",
-      "raw_value": "https://scontent.fcrk1-5.fna.fbcdn.net/v/t39.30808-1/877512578_122147347581112852_8749488695698428696_n.avif?stp=dst-jpg_tt6&amp;cstp=mx1024x1024&amp;ctp=s720x720&amp;_nc_cat=103&amp;_nc_map=urlgen_bucketless&amp;ccb=1-7&amp;_nc_sid=3ab345&amp;_nc_ohc=K1khfVed-rMQ7kNvwHmpfC1&amp;_nc_oc=Adrs8DTajmTaC0XG_XHz9BJXs71994QhctG1-K5sZfg8LGEPAAF0H-wl4FJ4_9GUaBY&amp;_nc_zt=24&amp;_nc_ht=scontent.fcrk1-5.fna&amp;_nc_gid=guD1w1gxzA-PrZVYLBDzbQ&amp;_nc_ss=7b20f&amp;oh=00_AQSklmj50XyGKCwMZNe_DYYoBu6XuJ3NFHVDHCChYoK9Lg&amp;oe=6B051AAE",
+      "raw_value": "https://scontent.fcrk1-5.fna.fbcdn.net/v/t39.30808-1/877512578_122147347581112852_8749488695698428696_n.avif?stp=dst-jpg_tt6&amp;cstp=mx1024x1024&amp;ctp=s720x720&amp;_nc_cat=103&amp;_nc_map=urlgen_bucketless&amp;ccb=1-7&amp;_nc_sid=3ab345&amp;_nc_ohc=K1khfVed-rMQ7kNvwHmpfC1&amp;_nc_oc=Adrs8DTajmTaC0XG_XHz9BJXs71994QhctG1-K5sZfg8LGEPAAF0H-wl4FJ4_9GUaBY&amp;_nc_zt=24&amp;_nc_ht=scontent.fcrk1-5.fna&amp;_nc_gid=zSopZIDuA121nP7Re0b1Cg&amp;_nc_ss=7b20f&amp;oh=00_AQRo_B6DHxY5NJ22TSQh6QWMTxRkAKqhVl0iGLwYADm8Xw&amp;oe=6B058B2E",
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:55.698927",
+      "timestamp": "2026-11-20T01:29:50.617336",
       "metadata": {
         "url": "https://www.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -119,7 +119,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:55.698935",
+      "timestamp": "2026-11-20T01:29:50.617340",
       "metadata": {
         "url": "https://www.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -133,7 +133,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:56.694635",
+      "timestamp": "2026-11-20T01:29:51.023305",
       "metadata": {
         "url": "https://m.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -147,7 +147,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:56.694653",
+      "timestamp": "2026-11-20T01:29:51.023315",
       "metadata": {
         "url": "https://m.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -161,7 +161,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:57.385085",
+      "timestamp": "2026-11-20T01:29:51.410147",
       "metadata": {
         "url": "https://mbasic.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -175,7 +175,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:57.385102",
+      "timestamp": "2026-11-20T01:29:51.410157",
       "metadata": {
         "url": "https://mbasic.facebook.com/happygoluckyph",
         "alias": "happygoluckyph"
@@ -189,7 +189,7 @@
       "confidence": 0.75,
       "weight": 0.8,
       "weighted_score": 0.6000000000000001,
-      "timestamp": "2026-11-19T17:28:55.627504",
+      "timestamp": "2026-11-20T01:29:50.502461",
       "metadata": {
         "url": "https://www.instagram.com/happygoluckyph/",
         "username": "happygoluckyph"
@@ -199,11 +199,11 @@
       "source": "instagram",
       "target_alias": "happygoluckyph",
       "data_type": "og:image",
-      "raw_value": "https://scontent.cdninstagram.com/v/t51.2885-19/19932659_1878372239152034_7033183640699797504_a.jpg?stp=dst-jpg_s150x150_tt6&amp;_nc_cat=108&amp;ig_cache_key=GPMlMAGiExKeXqwGAAAAAABC45phYUULAAAB1501500j-ccb7-5&amp;ccb=7-5&amp;_nc_sid=669407&amp;efg=eyJ2ZW5jb2RlX3RhZyI6InByb2ZpbGVfcGljLnd3dy43MjAuQzMifQ%3D%3D&amp;_nc_ohc=BEBsvzd0CkkQ7kNvwHD_PWE&amp;_nc_oc=AdrhlHxV_amZBhYEiLDnXS2OrldD6ELSPNdNk95GxQWM3Kaz-rYkO1DCLwW4aUdvtkY&amp;_nc_zt=24&amp;_nc_ht=scontent.cdninstagram.com&amp;_nc_ss=7ba02&amp;_nc_ct=RQosPBUCFQIAAAA&amp;oh=00_AQRG_pZ_q93H5R8KHyFf1U8j3o2RebB8bvRQSyYuQg0YsA&amp;oe=6B04F268",
+      "raw_value": "https://scontent.cdninstagram.com/v/t51.2885-19/19932659_1878372239152034_7033183640699797504_a.jpg?stp=dst-jpg_s150x150_tt6&amp;_nc_cat=108&amp;ig_cache_key=GPMlMAGiExKeXqwGAAAAAABC45phYUULAAAB1501500j-ccb7-5&amp;ccb=7-5&amp;_nc_sid=669407&amp;efg=eyJ2ZW5jb2RlX3RhZyI6InByb2ZpbGVfcGljLnd3dy43MjAuQzMifQ%3D%3D&amp;_nc_ohc=BEBsvzd0CkkQ7kNvwHD_PWE&amp;_nc_oc=AdrhlHxV_amZBhYEiLDnXS2OrldD6ELSPNdNk95GxQWM3Kaz-rYkO1DCLwW4aUdvtkY&amp;_nc_zt=24&amp;_nc_ht=scontent.cdninstagram.com&amp;_nc_ss=7ba02&amp;_nc_ct=RQosPBUCFQIAAAA&amp;oh=00_AQR6_mYDiLAh93mklKIrbLllqHX6UygpnTNjDF3-4hz0gQ&amp;oe=6B0562E8",
       "confidence": 0.75,
       "weight": 0.8,
       "weighted_score": 0.6000000000000001,
-      "timestamp": "2026-11-19T17:28:55.627533",
+      "timestamp": "2026-11-20T01:29:50.502475",
       "metadata": {
         "url": "https://www.instagram.com/happygoluckyph/",
         "username": "happygoluckyph"
@@ -217,7 +217,7 @@
       "confidence": 0.75,
       "weight": 0.8,
       "weighted_score": 0.6000000000000001,
-      "timestamp": "2026-11-19T17:28:55.627541",
+      "timestamp": "2026-11-20T01:29:50.502480",
       "metadata": {
         "url": "https://www.instagram.com/happygoluckyph/",
         "username": "happygoluckyph"
@@ -231,7 +231,7 @@
       "confidence": 0.75,
       "weight": 0.8,
       "weighted_score": 0.6000000000000001,
-      "timestamp": "2026-11-19T17:28:55.627547",
+      "timestamp": "2026-11-20T01:29:50.502484",
       "metadata": {
         "url": "https://www.instagram.com/happygoluckyph/",
         "username": "happygoluckyph"
@@ -245,7 +245,7 @@
       "confidence": 0.75,
       "weight": 0.8,
       "weighted_score": 0.6000000000000001,
-      "timestamp": "2026-11-19T17:28:55.627554",
+      "timestamp": "2026-11-20T01:29:50.502489",
       "metadata": {
         "url": "https://www.instagram.com/happygoluckyph/",
         "username": "happygoluckyph"
@@ -259,7 +259,7 @@
       "confidence": 0.65,
       "weight": 0.7,
       "weighted_score": 0.45499999999999996,
-      "timestamp": "2026-11-19T17:28:55.715804",
+      "timestamp": "2026-11-20T01:29:50.621863",
       "metadata": {
         "url": "https://t.me/happygoluckyph",
         "username": "happygoluckyph"

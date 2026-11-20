@@ -21,7 +21,7 @@
     "confidence": 0.0
   },
   "evidence_count": 5,
-  "generated_at": "2026-11-19T17:28:55.007453",
+  "generated_at": "2026-11-20T01:29:49.962338",
   "evidence": [
     {
       "source": "facebook",
@@ -31,7 +31,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:54.466745",
+      "timestamp": "2026-11-20T01:29:49.568560",
       "metadata": {
         "url": "https://m.facebook.com/siningangmixwithgabi",
         "alias": "siningangmixwithgabi"
@@ -45,7 +45,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:54.466763",
+      "timestamp": "2026-11-20T01:29:49.568572",
       "metadata": {
         "url": "https://m.facebook.com/siningangmixwithgabi",
         "alias": "siningangmixwithgabi"
@@ -59,7 +59,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:55.006592",
+      "timestamp": "2026-11-20T01:29:49.960272",
       "metadata": {
         "url": "https://mbasic.facebook.com/siningangmixwithgabi",
         "alias": "siningangmixwithgabi"
@@ -73,7 +73,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:55.006603",
+      "timestamp": "2026-11-20T01:29:49.960282",
       "metadata": {
         "url": "https://mbasic.facebook.com/siningangmixwithgabi",
         "alias": "siningangmixwithgabi"
@@ -87,7 +87,7 @@
       "confidence": 0.65,
       "weight": 0.7,
       "weighted_score": 0.45499999999999996,
-      "timestamp": "2026-11-19T17:28:54.062489",
+      "timestamp": "2026-11-20T01:29:49.355429",
       "metadata": {
         "url": "https://t.me/siningangmixwithgabi",
         "username": "siningangmixwithgabi"

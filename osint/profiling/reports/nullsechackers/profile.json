@@ -21,7 +21,7 @@
     "confidence": 0.0
   },
   "evidence_count": 9,
-  "generated_at": "2026-11-19T17:28:58.832076",
+  "generated_at": "2026-11-20T01:29:52.713113",
   "evidence": [
     {
       "source": "facebook",
@@ -31,7 +31,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:58.247709",
+      "timestamp": "2026-11-20T01:29:52.236571",
       "metadata": {
         "url": "https://m.facebook.com/nullsechackers",
         "alias": "nullsechackers"
@@ -45,7 +45,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:58.247724",
+      "timestamp": "2026-11-20T01:29:52.236581",
       "metadata": {
         "url": "https://m.facebook.com/nullsechackers",
         "alias": "nullsechackers"
@@ -59,7 +59,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:58.831164",
+      "timestamp": "2026-11-20T01:29:52.712317",
       "metadata": {
         "url": "https://mbasic.facebook.com/nullsechackers",
         "alias": "nullsechackers"
@@ -73,7 +73,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:28:58.831181",
+      "timestamp": "2026-11-20T01:29:52.712328",
       "metadata": {
         "url": "https://mbasic.facebook.com/nullsechackers",
         "alias": "nullsechackers"
@@ -87,7 +87,7 @@
       "confidence": 0.65,
       "weight": 0.7,
       "weighted_score": 0.45499999999999996,
-      "timestamp": "2026-11-19T17:28:58.016271",
+      "timestamp": "2026-11-20T01:29:52.086738",
       "metadata": {
         "url": "https://t.me/nullsechackers",
         "username": "nullsechackers"
@@ -101,7 +101,7 @@
       "confidence": 0.65,
       "weight": 0.7,
       "weighted_score": 0.45499999999999996,
-      "timestamp": "2026-11-19T17:28:58.016517",
+      "timestamp": "2026-11-20T01:29:52.086749",
       "metadata": {
         "url": "https://t.me/nullsechackers",
         "username": "nullsechackers"
@@ -115,7 +115,7 @@
       "confidence": 0.65,
       "weight": 0.7,
       "weighted_score": 0.45499999999999996,
-      "timestamp": "2026-11-19T17:28:58.016524",
+      "timestamp": "2026-11-20T01:29:52.086754",
       "metadata": {
         "url": "https://t.me/nullsechackers",
         "username": "nullsechackers"
@@ -135,7 +135,7 @@
       "confidence": 0.52,
       "weight": 0.5599999999999999,
       "weighted_score": 0.29119999999999996,
-      "timestamp": "2026-11-19T17:28:58.347577",
+      "timestamp": "2026-11-20T01:29:52.425130",
       "metadata": {
         "url": "https://t.me/s/nullsechackers",
         "username": "nullsechackers"
@@ -149,7 +149,7 @@
       "confidence": 0.52,
       "weight": 0.5599999999999999,
       "weighted_score": 0.29119999999999996,
-      "timestamp": "2026-11-19T17:28:58.347600",
+      "timestamp": "2026-11-20T01:29:52.425143",
       "metadata": {
         "url": "https://t.me/s/nullsechackers",
         "username": "nullsechackers"

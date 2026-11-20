@@ -24,7 +24,7 @@
     "confidence": 1.0
   },
   "evidence_count": 12,
-  "generated_at": "2026-11-19T17:29:01.787257",
+  "generated_at": "2026-11-20T01:29:55.334437",
   "evidence": [
     {
       "source": "facebook",
@@ -34,7 +34,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:00.938673",
+      "timestamp": "2026-11-20T01:29:54.436899",
       "metadata": {
         "url": "https://www.facebook.com/lei_404",
         "alias": "lei_404"
@@ -48,7 +48,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:00.938694",
+      "timestamp": "2026-11-20T01:29:54.436912",
       "metadata": {
         "url": "https://www.facebook.com/lei_404",
         "alias": "lei_404"
@@ -62,7 +62,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:00.938702",
+      "timestamp": "2026-11-20T01:29:54.436917",
       "metadata": {
         "url": "https://www.facebook.com/lei_404",
         "alias": "lei_404"
@@ -76,7 +76,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:00.938709",
+      "timestamp": "2026-11-20T01:29:54.436922",
       "metadata": {
         "url": "https://www.facebook.com/lei_404",
         "alias": "lei_404"
@@ -90,7 +90,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:00.938716",
+      "timestamp": "2026-11-20T01:29:54.436926",
       "metadata": {
         "url": "https://www.facebook.com/lei_404",
         "alias": "lei_404"
@@ -100,11 +100,11 @@
       "source": "facebook",
       "target_alias": "lei_404",
       "data_type": "og:image",
-      "raw_value": "https://scontent.fcrk1-5.fna.fbcdn.net/v/t39.30808-1/334279069_1446786295853617_7365636705718641354_n.jpg?stp=dst-jpg_tt6&amp;cstp=mx600x600&amp;ctp=s600x600&amp;_nc_cat=100&amp;_nc_map=urlgen_bucketless&amp;ccb=1-7&amp;_nc_sid=3ab345&amp;_nc_ohc=GtTDwiWZ22EQ7kNvwH2Zzo5&amp;_nc_oc=AdqYgciFsAgYX3yvmHaWK2uBvTMyy-RK0AnwwpYdcVPhyzBrZNfoOm26QHxtZdKq-So&amp;_nc_zt=24&amp;_nc_ht=scontent.fcrk1-5.fna&amp;_nc_gid=hXC_B_obCuGLypkt3IGPlg&amp;_nc_ss=7b20f&amp;oh=00_AQQH-8cIpzzYf7uPaqZOzDLjBjdY0HEPGTrQtd2rkP6Ysg&amp;oe=6B04EB06",
+      "raw_value": "https://scontent.fcrk1-5.fna.fbcdn.net/v/t39.30808-1/334279069_1446786295853617_7365636705718641354_n.jpg?stp=dst-jpg_tt6&amp;cstp=mx600x600&amp;ctp=s600x600&amp;_nc_cat=100&amp;_nc_map=urlgen_bucketless&amp;ccb=1-7&amp;_nc_sid=3ab345&amp;_nc_ohc=GtTDwiWZ22EQ7kNvwH2Zzo5&amp;_nc_oc=AdqYgciFsAgYX3yvmHaWK2uBvTMyy-RK0AnwwpYdcVPhyzBrZNfoOm26QHxtZdKq-So&amp;_nc_zt=24&amp;_nc_ht=scontent.fcrk1-5.fna&amp;_nc_gid=tQTGAIe8OMJ78EUArvzGiw&amp;_nc_ss=7b20f&amp;oh=00_AQQnL3S8kKS32ZZPo6oIDS4ITpBxoh9qS9IW2dO7VQLKAA&amp;oe=6B055B86",
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:00.938724",
+      "timestamp": "2026-11-20T01:29:54.436930",
       "metadata": {
         "url": "https://www.facebook.com/lei_404",
         "alias": "lei_404"
@@ -118,7 +118,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:00.938731",
+      "timestamp": "2026-11-20T01:29:54.436934",
       "metadata": {
         "url": "https://www.facebook.com/lei_404",
         "alias": "lei_404"
@@ -132,7 +132,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:01.394679",
+      "timestamp": "2026-11-20T01:29:54.849738",
       "metadata": {
         "url": "https://m.facebook.com/lei_404",
         "alias": "lei_404"
@@ -146,7 +146,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:01.394700",
+      "timestamp": "2026-11-20T01:29:54.849749",
       "metadata": {
         "url": "https://m.facebook.com/lei_404",
         "alias": "lei_404"
@@ -160,7 +160,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:01.786378",
+      "timestamp": "2026-11-20T01:29:55.333695",
       "metadata": {
         "url": "https://mbasic.facebook.com/lei_404",
         "alias": "lei_404"
@@ -174,7 +174,7 @@
       "confidence": 0.85,
       "weight": 0.9,
       "weighted_score": 0.765,
-      "timestamp": "2026-11-19T17:29:01.786395",
+      "timestamp": "2026-11-20T01:29:55.333706",
       "metadata": {
         "url": "https://mbasic.facebook.com/lei_404",
         "alias": "lei_404"
@@ -188,7 +188,7 @@
       "confidence": 0.65,
       "weight": 0.7,
       "weighted_score": 0.45499999999999996,
-      "timestamp": "2026-11-19T17:29:00.752853",
+      "timestamp": "2026-11-20T01:29:54.595269",
       "metadata": {
         "url": "https://t.me/lei_404",
         "username": "lei_404"

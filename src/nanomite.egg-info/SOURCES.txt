@@ -20,6 +20,17 @@ src/nanomite/cracking/engine.py
 src/nanomite/cracking/errors.py
 src/nanomite/cracking/report.py
 src/nanomite/cracking/wordlist.py
+src/nanomite/osint/__init__.py
+src/nanomite/osint/agent_integration.py
+src/nanomite/osint/correlator.py
+src/nanomite/osint/email_harvest.py
+src/nanomite/osint/identity_mapper.py
+src/nanomite/osint/metadata_extractor.py
+src/nanomite/osint/osint_cli.py
+src/nanomite/osint/osint_orchestrator.py
+src/nanomite/osint/osint_trigger.py
+src/nanomite/osint/report_generator.py
+src/nanomite/osint/social_enum.py
 tests/test_audit_tool.py
 tests/test_core_typestate.py
 tests/test_cracking_cli.py
@@ -28,3 +39,4 @@ tests/test_cracking_engine.py
 tests/test_cracking_properties.py
 tests/test_cracking_report.py
 tests/test_cracking_wordlist.py
+tests/test_profiling.py

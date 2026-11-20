@@ -53,6 +53,7 @@ pub struct DatabaseConfig {
     pub migrations_path: String,
     pub enable_pgvector: bool,
     pub ssl_mode: String,
+    pub use_sqlite: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
