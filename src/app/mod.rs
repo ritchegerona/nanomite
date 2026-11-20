@@ -366,7 +366,7 @@ impl PickerItem {
     }
 }
 
-/// Overlay list with a filter box. Commands, `/provider` and `/model` all use it.
+/// Overlay list with a filter box. Commands, `/connect` and `/model` all use it.
 #[derive(Debug, Clone)]
 pub struct Picker {
     pub mode: PickerMode,
@@ -3423,7 +3423,7 @@ impl App {
     // -- actions ------------------------------------------------------------
 
     pub fn submit(&mut self) {
-        // `/provider`, `/model`, ... are handled locally and never reach the model.
+        // `/connect`, `/model`, ... are handled locally and never reach the model.
         if let Some((command, canonical)) = commands::parse(self.composer.value()) {
             // Everything after the command word is its argument (`/panel <topic>`).
             let args = self
@@ -3574,7 +3574,6 @@ impl App {
     pub fn run_command(&mut self, command: Command, args: &str) {
         match command {
             Command::Connect => self.open_provider_menu(),
-            Command::ProviderMenu => self.open_provider_menu(),
             Command::Compact => self.run_compact(),
             Command::Details => self.toggle_tool_details(),
             Command::Hud => self.toggle_hud(),
@@ -5721,17 +5720,27 @@ impl App {
                 });
             }
         }
-        if !items.iter().any(|i| i.current) {
-            items.push(PickerItem::header(&self.cfg.provider_label()));
-            items.push(PickerItem {
-                current: true,
-                label: self.cfg.model.clone(),
-                hint: "current".into(),
-                value: PickerValue::ProviderModel {
-                    provider: self.cfg.preset.clone(),
-                    model: self.cfg.model.clone(),
+        // The current model leads the list: move the marked current row to the
+        // very top so the session's active model is the first thing you see,
+        // ahead of the providers' existing models. When no provider lists the
+        // current model (custom id, offline endpoint), put it at the top
+        // anyway so the list always includes it.
+        if let Some(pos) = items.iter().position(|i| i.current) {
+            let cur = items.remove(pos);
+            items.insert(0, cur);
+        } else if !self.cfg.model.is_empty() {
+            items.insert(
+                0,
+                PickerItem {
+                    current: true,
+                    label: self.cfg.model.clone(),
+                    hint: format!("current · {}", self.cfg.provider_label()),
+                    value: PickerValue::ProviderModel {
+                        provider: self.cfg.preset.clone(),
+                        model: self.cfg.model.clone(),
+                    },
                 },
-            });
+            );
         }
         items
     }
@@ -5832,13 +5841,6 @@ impl App {
             self.overlay = Some(Overlay::Picker(picker.clone()));
         }
         self.mark_dirty();
-    }
-
-    /// `ctrl+a` in the `/model` picker: jump straight to the provider menu,
-    /// the same surface `/connect` opens.
-    fn open_provider_menu_from_picker(&mut self) {
-        self.close_overlay();
-        self.open_provider_menu();
     }
 
     // -- /panel -------------------------------------------------------------
@@ -8865,7 +8867,8 @@ impl App {
                     }
                     KeyCode::Char('a') if ctrl && picker.mode == PickerMode::Model => {
                         drop(picker);
-                        self.open_provider_menu_from_picker();
+                        self.close_overlay();
+                        self.open_provider_menu();
                         return;
                     }
                     KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -11093,14 +11096,16 @@ mod tests {
         ];
         let items = app.grouped_model_items(groups);
         assert_eq!(items.len(), 5); // 2 headers + 3 models
-        assert!(items[0].is_header());
+                                    // The current model leads the list, ahead of the provider groups.
+        assert!(items[0].current, "the current model must be pinned first");
         assert!(
-            items[1].value
+            items[0].value
                 == PickerValue::ProviderModel {
                     provider: "openai".into(),
                     model: "gpt-4o".into()
                 }
         );
+        assert!(items[1].is_header());
         assert!(
             items[2].value
                 == PickerValue::ProviderModel {
