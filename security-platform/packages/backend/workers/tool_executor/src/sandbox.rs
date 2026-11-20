@@ -19,7 +19,7 @@ pub struct SandboxConfig {
 impl Default for SandboxConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             runtime: "podman".to_string(),
             network_enabled: false,
             filesystem_read_only: true,
