@@ -4,7 +4,10 @@
 //! point — tools, the public API and the agent runtime — funnels through
 //! [`MemoryPolicy::authorize`]. That is the memory subsystem's trust boundary,
 //! and it is deliberately boring: no path in this module can grant a tool
-//! permission or change how another tool behaves.
+//! permission or change how another tool behaves. The one exception: when
+//! running as root (`sudo nanomite`), [`crate::config::is_root_session`] makes
+//! `authorize` always succeed — full authority means the memory policy never
+//! refuses.
 
 use super::model::{MemoryError, Sensitivity};
 use std::env;
@@ -143,6 +146,10 @@ impl MemoryPolicy {
         ceiling: Sensitivity,
         confirmed: bool,
     ) -> Result<(), MemoryError> {
+        // Full authority (sudo): the memory policy never refuses.
+        if crate::config::is_root_session() {
+            return Ok(());
+        }
         if !self.enabled {
             return Err(MemoryError::policy(
                 "memory is disabled (set NANOMITE_MEMORY=1 to enable it)",

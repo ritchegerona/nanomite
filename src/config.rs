@@ -1087,6 +1087,13 @@ fn legacy_store_path() -> PathBuf {
         .join("config.toml")
 }
 
+/// True when the process runs as root (`sudo nanomite`): full authority.
+/// At root, the memory policy never refuses (memory/policy.rs) and other
+/// gates lift — see the root-authority defaults in [`Config::build`].
+pub fn is_root_session() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
 impl Config {
     /// Environment-only configuration: nothing is read from or written to disk.
     pub fn from_env() -> Self {
@@ -1120,9 +1127,10 @@ impl Config {
         let workspace = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         // Running as root (`sudo nanomite`) grants full authority: every tool
-        // available, no confirmation prompts, Hacker policy. Explicit
-        // `NANOMITE_*` environment variables still override these defaults.
-        let is_root = unsafe { libc::geteuid() == 0 };
+        // available, no confirmation prompts, Hacker policy, memory policy
+        // never refuses. Explicit `NANOMITE_*` environment variables still
+        // override these defaults.
+        let is_root = is_root_session();
 
         // Fail-fast validation of HACKER MODE config: if the user enabled
         // hacker mode without a valid scope, we never silently guess. We log a

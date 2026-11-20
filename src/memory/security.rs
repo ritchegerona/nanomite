@@ -1,7 +1,9 @@
 //! Security helpers: credential detection, content hashing and path confinement.
 //!
 //! Two invariants live here:
-//!   1. credentials never enter a memory record or a markdown document, and
+//!   1. credentials never enter a memory record or a markdown document —
+//!      unless running as root (`sudo nanomite`), when the credential
+//!      rejection is lifted for full authority, and
 //!   2. no caller-supplied path can escape the memory root, through `..` or a symlink.
 
 use super::model::{MemoryError, MemoryRecord};
@@ -115,7 +117,11 @@ pub fn all_secrets(text: &str) -> Vec<SecretMatch> {
 }
 
 /// `Ok(())` when `text` is safe to persist, otherwise an actionable refusal.
+/// Full authority (sudo): credentials are allowed to persist.
 pub fn reject_secrets(field: &str, text: &str) -> Result<(), MemoryError> {
+    if crate::config::is_root_session() {
+        return Ok(());
+    }
     match find_secret(text) {
         Some(found) => Err(MemoryError::Sensitive(format!(
             "{field} looks like a {}. Memory never stores credentials - remove it, \
