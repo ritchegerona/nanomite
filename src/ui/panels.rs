@@ -361,6 +361,8 @@ pub fn help_keys() -> &'static [(&'static str, &'static str)] {
         ),
         ("ctrl+j / alt+enter", "newline in the prompt"),
         ("/ or ctrl+x", "command menu"),
+        ("alt+c", "connect & switch - pick from the list"),
+        ("alt+p", "open the connect menu"),
         ("esc", "interrupt · close an overlay · clear the prompt"),
         ("ctrl+t / ctrl+l", "new session · clear transcript"),
         ("ctrl+r", "cycle reasoning effort"),
@@ -782,14 +784,15 @@ pub fn connect(frame: &mut Frame, area: Rect, app: &App) {
 
     let mut lines = Vec::with_capacity(CONNECT_FIELDS.len() + 2);
 
-    // Who we are talking to: the active provider's name, never editable.
+    // Who we are talking to: the provider selected from the connect menu
+    // (or the active provider when opened directly), never editable.
     lines.push(Line::from(vec![
         Span::styled(
             format!("   {:<label_w$}", "provider"),
             Style::default().fg(theme.faint()),
         ),
         Span::styled(
-            text::truncate(&app.provider_label(), field_w),
+            text::truncate(&form.provider_label, field_w),
             Style::default().fg(theme.strong()),
         ),
     ]));
@@ -897,7 +900,7 @@ pub fn command_items(app: &App) -> Vec<PickerItem> {
 
     items.push(PickerItem {
         label: format!("Provider  ·  {}", app.provider_label()),
-        hint: "/connect".into(),
+        hint: "connect & switch - pick from the list".into(),
         value: PickerValue::Command(Command::Connect),
         current: false,
     });
@@ -1086,7 +1089,7 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
             .title_bottom(
                 Line::from(Span::styled(
                     format!(
-                        " {}{} move {} enter apply {} esc close ",
+                        " {}{} move {} enter open {} esc close ",
                         glyph::ARROW_UP,
                         glyph::ARROW_DOWN,
                         glyph::DOT,
@@ -1139,7 +1142,7 @@ pub fn providers(frame: &mut Frame, area: Rect, app: &App) {
         .title_bottom(
             Line::from(Span::styled(
                 format!(
-                    " {}{} move {} enter apply {} esc close ",
+                    " {}{} move {} enter open {} esc close ",
                     glyph::ARROW_UP,
                     glyph::ARROW_DOWN,
                     glyph::DOT,
@@ -1367,7 +1370,7 @@ pub fn settings(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
-        "  nanomite configuration · enter toggles / cycles · esc closes",
+        "  settings · enter toggles · esc closes",
         theme.faint_style(),
     ))];
 
@@ -1466,7 +1469,7 @@ pub fn settings(frame: &mut Frame, area: Rect, app: &App) {
         .title_bottom(
             Line::from(Span::styled(
                 format!(
-                    " {}{} move {} enter toggle {} esc close ",
+                    " {} {} move {} enter toggle {} esc close ",
                     glyph::ARROW_UP,
                     glyph::ARROW_DOWN,
                     glyph::DOT,

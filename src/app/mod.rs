@@ -2,9 +2,6 @@ use crate::agent::openai::OpenAiProvider;
 use crate::agent::policy::ToolPolicy;
 use crate::agent::provider::{AgentProvider, ChatMessage, Role, Usage};
 use crate::agent::runtime::{AgentEvent, AgentRuntime, Cancel};
-use crate::evidence::EvidenceFilter;
-use crate::neural::autonomous_planner::PlanStatus;
-use crate::tools::wireless_tools::WirelessReconArgs;
 use crate::agent::suggest::{self, SuggestResult};
 use crate::agent::swarm::Swarm;
 #[cfg(test)]
@@ -15,13 +12,16 @@ use crate::commands::{self, Command};
 use crate::config::{
     find_preset, host_of, Config, ProviderKind, ProviderPreset, Reasoning, PRESETS,
 };
+use crate::evidence::EvidenceFilter;
 use crate::improve::{
     Actor, ApplyOutcome, CargoTestRunner, ImproveEngine, RegressionRunner, Roots, Status, Target,
 };
 use crate::memory::policy::MemoryPolicy;
 use crate::memory::MemoryEngine;
+use crate::neural::autonomous_planner::PlanStatus;
 use crate::session::{self, StoredSession};
 use crate::telemetry::TelemetryHandle;
+use crate::tools::wireless_tools::WirelessReconArgs;
 use crate::ui::chat;
 use crate::ui::composer::Composer;
 use crate::ui::theme::Theme;
@@ -395,7 +395,7 @@ impl Picker {
     pub fn title(&self) -> &'static str {
         match self.mode {
             PickerMode::Commands => "commands",
-            PickerMode::Model => "model",
+            PickerMode::Model => "models",
             PickerMode::Sessions => "sessions",
             PickerMode::SessionsSearch => "history search",
             PickerMode::Themes => "themes",
@@ -407,7 +407,7 @@ impl Picker {
     pub fn placeholder(&self) -> &'static str {
         match self.mode {
             PickerMode::Commands => "type to filter",
-            PickerMode::Model => "filter, or type a custom model id",
+            PickerMode::Model => "search",
             PickerMode::Sessions => "pick a session to resume",
             PickerMode::SessionsSearch => "matches across saved sessions",
             PickerMode::Themes => "pick a colour theme",
@@ -563,9 +563,12 @@ impl Suggestion {
     }
 }
 
-/// `/connect` form: shows the active provider, edits base URL and API key.
+/// `/connect` form: the provider being connected (read-only), its base URL
+/// and API key. The provider is what the `/connect` menu selected; when
+/// `/connect` is opened directly, the active provider is shown.
 #[derive(Debug, Clone)]
 pub struct ConnectForm {
+    pub provider_label: String,
     pub base_url: Composer,
     pub api_key: Composer,
     pub focus: usize,
@@ -576,9 +579,18 @@ pub const CONNECT_FIELDS: [&str; 2] = ["base url", "api key"];
 
 impl ConnectForm {
     pub fn from_config(cfg: &Config) -> Self {
+        Self::for_provider(
+            cfg.provider_label(),
+            cfg.base_url.clone(),
+            cfg.api_key.clone(),
+        )
+    }
+
+    pub fn for_provider(label: String, base_url: String, api_key: Option<String>) -> Self {
         Self {
-            base_url: Composer::filled(cfg.base_url.clone()),
-            api_key: Composer::filled(cfg.api_key.clone().unwrap_or_default()),
+            provider_label: label,
+            base_url: Composer::filled(base_url),
+            api_key: Composer::filled(api_key.unwrap_or_default()),
             focus: 0,
         }
     }
@@ -3561,7 +3573,7 @@ impl App {
     /// the command came from the picker).
     pub fn run_command(&mut self, command: Command, args: &str) {
         match command {
-            Command::Connect => self.open_connect(),
+            Command::Connect => self.open_provider_menu(),
             Command::ProviderMenu => self.open_provider_menu(),
             Command::Compact => self.run_compact(),
             Command::Details => self.toggle_tool_details(),
@@ -3625,7 +3637,11 @@ impl App {
                 self.show_activity = !self.show_activity;
                 self.toast(format!(
                     "left panel: {}",
-                    if self.show_activity { "activity" } else { "thinking" }
+                    if self.show_activity {
+                        "activity"
+                    } else {
+                        "thinking"
+                    }
                 ));
                 self.invalidate_transcript();
             }
@@ -4128,11 +4144,7 @@ impl App {
             let status = if s.present { "●" } else { "○" };
             text.push_str(&format!(
                 "  {} {} · {} · {} · {} uses\\n",
-                status,
-                s.name,
-                s.category,
-                s.installed_via,
-                s.use_count
+                status, s.name, s.category, s.installed_via, s.use_count
             ));
             if !s.package_name.is_empty() {
                 text.push_str(&format!("      package: {}\\n", s.package_name));
@@ -4152,7 +4164,8 @@ impl App {
         if parts.is_empty() {
             self.entries.push(Entry::new(
                 EntryRole::System,
-                "Usage: /debug <command> [output] — parse compiler/test/runtime diagnostics".to_string(),
+                "Usage: /debug <command> [output] — parse compiler/test/runtime diagnostics"
+                    .to_string(),
             ));
             let last = self.entries.last_mut().unwrap();
             last.phase = Phase::Done;
@@ -4166,7 +4179,10 @@ impl App {
         if session.diagnostics.is_empty() {
             text.push_str("No diagnostics found in output.\\n");
         } else {
-            text.push_str(&format!("Found {} diagnostic(s):\\n\\n", session.diagnostics.len()));
+            text.push_str(&format!(
+                "Found {} diagnostic(s):\\n\\n",
+                session.diagnostics.len()
+            ));
             for d in &session.diagnostics {
                 text.push_str(&format!(
                     "  [{}] {}:{}:{} — {}\\n        {}\\n",
@@ -4206,7 +4222,8 @@ impl App {
         if parts.is_empty() {
             self.entries.push(Entry::new(
                 EntryRole::System,
-                "Usage: /heal <command> <output> — auto-debug, propose fixes, learn techniques".to_string(),
+                "Usage: /heal <command> <output> — auto-debug, propose fixes, learn techniques"
+                    .to_string(),
             ));
             let last = self.entries.last_mut().unwrap();
             last.phase = Phase::Done;
@@ -4436,7 +4453,11 @@ impl App {
                 "wireless_recon",
                 &format!("wireless_recon: {}", &result.interface),
                 payload.as_bytes(),
-                vec!["tool_output".into(), "wireless_recon".into(), "wireless".into()],
+                vec![
+                    "tool_output".into(),
+                    "wireless_recon".into(),
+                    "wireless".into(),
+                ],
                 "application/json",
             );
         }
@@ -4507,10 +4528,7 @@ impl App {
                 plan.tasks.len(),
                 args.trim()
             );
-            self.entries.push(Entry::new(
-                EntryRole::System,
-                summary,
-            ));
+            self.entries.push(Entry::new(EntryRole::System, summary));
             let last = self.entries.last_mut().unwrap();
             last.phase = Phase::Done;
             self.mark_dirty();
@@ -4518,7 +4536,11 @@ impl App {
             // Note: full async execution requires spawning a tokio task.
             // The plan is saved to disk and can be executed via the agent
             // using the autonomous_execute tool.
-            self.toast(&format!("Plan {} created ({} tasks)", plan.id, plan.tasks.len()));
+            self.toast(&format!(
+                "Plan {} created ({} tasks)",
+                plan.id,
+                plan.tasks.len()
+            ));
             return;
         }
 
@@ -5423,37 +5445,46 @@ impl App {
 
     /// Applies a provider from the menu. Providers that need a key chain into the
     /// `/connect` form so the whole setup (URL + key) is one flow.
+    /// The combined connect flow (opencode-style): `/connect` lists the
+    /// providers; Enter on one opens the connect form for it. The preset is
+    /// applied when the form saves, not on selection, so the user first
+    /// chooses how to reach that provider.
     fn apply_provider(&mut self, id: &str, label: &str) {
         if id == self.cfg.preset {
-            self.toast(format!("provider: {}", self.cfg.provider_label()));
+            self.open_connect();
+            self.toast(format!("{label} - enter any changes and save"));
             self.mark_dirty();
             return;
         }
-        if !self.cfg.apply_preset(id) {
+        if find_preset(id).is_none() {
             self.toast(format!("unknown provider preset: {id}"));
             self.mark_dirty();
             return;
         }
-        if let Err(err) = self.rebuild_runtime() {
-            self.toast(format!("provider switch failed: {err}"));
-            self.mark_dirty();
-            return;
-        }
-        let needs_key = find_preset(id).is_some_and(|p| !p.offline && p.key_env.is_some());
-        if needs_key && self.cfg.api_key.is_none() {
-            self.open_connect();
-            if let Some(Overlay::Connect(form)) = self.overlay.as_mut() {
-                form.focus = 1;
-            }
-            self.toast(format!("{label}: enter an API key - saved to disk"));
-            self.mark_dirty();
-            return;
-        }
-        let note = match self.cfg.notice.as_deref() {
-            Some(n) => format!(" · {n}"),
-            None => String::new(),
+        let p = find_preset(id).expect("preset checked above");
+        self.open_connect_for(id, label, p.base_url, p.key_env.is_some() && !p.offline);
+    }
+
+    fn open_connect_for(&mut self, id: &str, label: &str, base_url: &str, needs_key: bool) {
+        let key = if needs_key {
+            self.cfg.provider_key(id).or_else(|| {
+                find_preset(id)
+                    .and_then(|p| p.key_env)
+                    .and_then(|env| std::env::var(env).ok())
+                    .filter(|k| !k.trim().is_empty())
+            })
+        } else {
+            None
         };
-        self.toast(format!("provider: {}{note}", self.cfg.provider_label()));
+        let form = ConnectForm::for_provider(label.to_string(), base_url.to_string(), key.clone());
+        self.overlay = Some(Overlay::Connect(form));
+        self.mark_dirty();
+        if needs_key && key.is_none() {
+            self.toast(format!("{label}: set the API key - save to connect"));
+        } else {
+            self.toast(format!("{label}: endpoint + key ready - save to connect"));
+        }
+        self.mark_dirty();
     }
 
     pub fn open_connect(&mut self) {
@@ -5482,14 +5513,20 @@ impl App {
         self.cfg.base_url = base_url.clone();
         let key = form.api_key.value().trim().to_string();
 
-        // The model is not edited here; `/model` owns it.
-
         // Land on a built-in preset when the endpoint matches one, otherwise stay custom.
-        self.cfg.preset = crate::config::PRESETS
+        let detected = crate::config::PRESETS
             .iter()
             .find(|p| p.base_url.trim_end_matches('/') == self.cfg.base_url)
             .map(|p| p.id.to_string())
             .unwrap_or_else(|| "custom".to_string());
+        // Switching the preset moves the default model with it (the model is
+        // owned by `/model`; the preset default is the starting point for a new
+        // switch).
+        if find_preset(&detected).is_some() {
+            self.cfg.apply_preset(&detected);
+        } else {
+            self.cfg.preset = detected;
+        }
         // Keep this provider's key so it survives switching to another provider
         // and back: the active key is mirrored, all others are retained.
         let preset_id = self.cfg.preset.clone();
@@ -9999,7 +10036,10 @@ mod tests {
         )
         .target("8.8.8.8");
         let decision = crate::hacker::authorize(Some(ctx), &op, SystemTime::now());
-        assert!(decision.is_allowed(), "no refusals: out-of-scope targets are allowed");
+        assert!(
+            decision.is_allowed(),
+            "no refusals: out-of-scope targets are allowed"
+        );
     }
 
     #[test]

@@ -1916,11 +1916,12 @@ async fn slash_opens_the_command_menu() {
         "unmatched rows must drop:\n{text}"
     );
 
-    // Enter runs the highlighted command and closes the menu.
+    // Enter runs the highlighted command: `/connect` opens the combined
+    // provider menu (search + Popular/Providers).
     press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
     assert!(matches!(
         app.overlay.as_ref().map(Overlay::kind),
-        Some(OverlayKind::Connect)
+        Some(OverlayKind::Providers)
     ));
     assert_eq!(app.composer.value(), "");
 
@@ -2006,13 +2007,24 @@ async fn provider_menu_switches_and_filters() {
         scrolled.contains("Ollama"),
         "filtered menu should show Ollama:\n{scrolled}"
     );
-    // Selecting Ollama applies it.
+    // Selecting Ollama opens the connect form; the preset applies on save.
+    press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    let Some(Overlay::Connect(form)) = app.overlay.as_ref() else {
+        panic!("expected the connect form after selecting a provider");
+    };
+    assert_eq!(form.provider_label, "Ollama");
+    assert_ne!(
+        app.cfg.preset, "ollama",
+        "the preset applies on save, not select"
+    );
+
+    // Saving the form applies the switch.
     press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(app.cfg.preset, "ollama");
     assert_eq!(app.cfg.base_url, "http://localhost:11434/v1");
     assert_eq!(app.model_label(), "llama3.2");
     assert_eq!(app.provider_label(), "Ollama");
-    assert!(app.overlay.is_none(), "menu should close after applying");
+    assert!(app.overlay.is_none(), "the form closes after saving");
     assert!(app.toast.is_some(), "switching should report back");
 }
 
@@ -2140,6 +2152,12 @@ async fn connect_saves_base_url_and_key() {
     type_text(&mut app, "/connect");
     press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
 
+    // `/connect` opens the combined menu; select the first row to open the form.
+    assert!(matches!(
+        app.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Providers)
+    ));
+    press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
     assert!(matches!(
         app.overlay.as_ref().map(Overlay::kind),
         Some(OverlayKind::Connect)
@@ -2147,7 +2165,13 @@ async fn connect_saves_base_url_and_key() {
     let Some(Overlay::Connect(form)) = app.overlay.clone() else {
         panic!("expected the connect form");
     };
-    assert_eq!(form.base_url.value(), app.cfg.base_url);
+    // The form shows the selected provider (the menu's first row), not the
+    // active config.
+    assert_eq!(form.provider_label, "OpenCode");
+    assert_eq!(
+        form.base_url.value(),
+        "https://opencode.ai/inference/openai/v1"
+    );
 
     // Rewrite the base URL, then walk down to the key.
     for _ in 0..80 {

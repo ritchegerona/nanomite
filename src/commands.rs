@@ -84,13 +84,13 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/connect",
         aliases: &["/login", "/auth"],
-        hint: "edit the endpoint url and api key (alt+c)",
+        hint: "connect & switch - pick from the list (alt+c)",
         kind: Command::Connect,
     },
     Entry {
         command: "/provider",
         aliases: &["/providers"],
-        hint: "switch the provider - pick from the list (alt+p)",
+        hint: "open the connect menu (alt+p)",
         kind: Command::ProviderMenu,
     },
     Entry {
