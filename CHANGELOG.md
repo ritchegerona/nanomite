@@ -2,6 +2,18 @@
 
 Every entry describes a verified change. Labels: implemented+tested, implemented unverified, planned, experimental, unsupported. Planned work is never listed as released.
 
+## [2.0.1] — 2026-11-20
+
+### Changed
+
+- **OSINT profile sync**: refreshed profiling reports and `targets.json` across all tracked targets (crimsonsecph, happygolucky, happygoluckyph, lei_404, nullsechackers, siningangmixwithgabi) plus `pipeline_summary`. implemented unverified.
+- **Security-platform backend**: updated `docker-compose.yml`, `prometheus.yml`, `Cargo.toml`, `config.rs`, and `db/mod.rs` for the v2.0.0 backend. implemented unverified.
+- **Package metadata**: synced `nanomite.egg-info` (PKG-INFO, SOURCES.txt, top_level.txt). implemented unverified.
+
+### Fixed
+
+- **Clippy doc-test backticks** and multi-agent temp-dir collisions (carried from v2.0.0 fix release). implemented+tested.
+
 ## [1.5.0] — 2026-11-20
 
 ### Added
