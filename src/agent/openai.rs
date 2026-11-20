@@ -6,7 +6,44 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::net::SocketAddr;
 use std::time::Duration;
+
+/// DNS overrides for hostnames the system resolver cannot reach
+/// (`/etc/hosts` equivalent for nanomite). Parse `NANOMITE_DNS_OVERRIDE`:
+/// comma-separated `host=ip` pairs, e.g.
+/// `integrate.api.nvidia.com=99.83.136.103`. Applied to both `OpenAiProvider`
+/// constructors via `reqwest::ClientBuilder::resolve`, bypassing system
+/// `getaddrinfo` entirely — useful when system DNS is misconfigured.
+fn dns_overrides() -> Vec<(String, SocketAddr)> {
+    let raw = match std::env::var("NANOMITE_DNS_OVERRIDE") {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    raw.split(',')
+        .map(|pair| {
+            let (host, ip) = pair
+                .split_once('=')
+                .unwrap_or((pair.trim(), ""));
+            let host = host.trim().to_string();
+            let ip = ip.trim();
+            (host, ip.parse::<SocketAddr>().unwrap_or_else(|_| {
+                // Treat a bare IPv4/IPv6 literal as SocketAddr with port 443.
+                format!("{ip}:443").parse::<SocketAddr>().unwrap()
+            }))
+        })
+        .filter(|(host, _)| !host.is_empty())
+        .collect()
+}
+
+/// Applies `NANOMITE_DNS_OVERRIDE` host→IP mappings to a reqwest client
+/// builder so nanomite reaches providers even when system DNS is broken.
+fn with_dns_overrides(mut builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    for (host, addr) in dns_overrides() {
+        builder = builder.resolve(&host, addr);
+    }
+    builder
+}
 
 /// Client for any OpenAI-compatible `/chat/completions` endpoint with SSE streaming.
 pub struct OpenAiProvider {
@@ -38,15 +75,17 @@ impl OpenAiProvider {
         } else {
             format!("{trimmed}/chat/completions")
         };
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            // Never wait forever for the next body read: a provider that
-            // accepts the TCP connection then goes silent would otherwise
-            // leave the turn spinning with no completion event.
-            .read_timeout(Duration::from_secs(60))
-            .pool_idle_timeout(Duration::from_secs(90))
-            .user_agent(concat!("nanomite/", env!("CARGO_PKG_VERSION")))
-            .build()?;
+        let client = with_dns_overrides(
+            reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                // Never wait forever for the next body read: a provider that
+                // accepts the TCP connection then goes silent would otherwise
+                // leave the turn spinning with no completion event.
+                .read_timeout(Duration::from_secs(60))
+                .pool_idle_timeout(Duration::from_secs(90))
+                .user_agent(concat!("nanomite/", env!("CARGO_PKG_VERSION"))),
+        )
+        .build()?;
         Ok(Self {
             client,
             endpoint,
@@ -108,21 +147,28 @@ impl OpenAiProvider {
             req = req.bearer_auth(key);
         }
         let resp = req.send().await.map_err(|e| {
-            DynError::from(format!("request to {} failed: {e} (is the base URL correct?)", self.endpoint))
+            DynError::from(format!(
+                "request to {} failed: {e} (is the base URL correct?)",
+                self.endpoint
+            ))
         })?;
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(describe_http_error(status.as_u16(), &body).into());
         }
-        let value: Value = resp.json().await.map_err(|e| format!("malformed response: {e}"))?;
+        let value: Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("malformed response: {e}"))?;
         let choice = value
             .get("choices")
             .and_then(Value::as_array)
             .and_then(|c| c.first())
             .ok_or("no choices in response")?;
         let message = choice.get("message").ok_or("no message in choice")?;
-        let content = message.get("content")
+        let content = message
+            .get("content")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();

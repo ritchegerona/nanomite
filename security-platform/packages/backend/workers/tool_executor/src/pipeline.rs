@@ -24,9 +24,9 @@ pub struct PipelineExecutor {
 }
 
 impl PipelineExecutor {
-    pub fn new(sandbox_enabled: bool) -> Self {
+    pub fn new() -> Self {
         Self {
-            executor: super::executor::ToolExecutor::new(sandbox_enabled),
+            executor: super::executor::ToolExecutor::new(),
         }
     }
 

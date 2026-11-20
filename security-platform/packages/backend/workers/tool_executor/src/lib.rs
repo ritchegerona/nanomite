@@ -1,7 +1,6 @@
-//! Tool Orchestration Engine - Sandboxed tool execution with resource limits.
+//! Tool Orchestration Engine - tool execution.
 
 pub mod executor;
-pub mod sandbox;
 pub mod pipeline;
 
 use tracing::info;
