@@ -16,13 +16,21 @@
 //! must pass before any fix is kept, and a human approval gate sits above
 //! that. No code is ever auto-applied without explicit user action.
 
+mod auto_apply;
+mod clippy;
 mod diagnostics;
 mod fix;
+mod fix_ext;
+mod history;
 mod parser;
 mod self_heal;
 
+pub use auto_apply::{AutoApplyConfig, AutoApplyGate, AutoApplyPolicy, AutoApplyResult};
+pub use clippy::ClippyParser;
 pub use diagnostics::{DebugDiagnostic, DiagnosticKind, Severity};
 pub use fix::{stage_fixes, FixGenerator, FixResult};
+pub use fix_ext::{stage_ext_fixes, FixExtGenerator, FixExtResult};
+pub use history::{FixDecision, FixHistory, FixHistoryRecord};
 pub use self_heal::SelfHeal;
 pub use parser::DiagnosticsParser;
 

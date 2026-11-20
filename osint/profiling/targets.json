@@ -1,0 +1,68 @@
+{
+  "nullsecphilippines": {
+    "aliases": ["Nullsec Philippines", "NullsecPH", "nullsec_philippines"],
+    "telegram_usernames": ["@nullsechackers"],
+    "facebook_ids": ["100093265137862"],
+    "instagram_usernames": [],
+    "emails": ["lei_404@protonmail.com"],
+    "domains": [],
+    "real_name_candidates": [],
+    "location_indicators": ["Philippines"],
+    "metadata": {"group_type": "hacktivist", "attribution": "Lei"}
+  },
+  "crimsonsecphilippines": {
+    "aliases": ["CrimsonSec Philippines", "CrimsonSecPH", "CrimsonSec"],
+    "telegram_usernames": ["@CrimsonSecPH"],
+    "facebook_ids": [],
+    "instagram_usernames": [],
+    "emails": [],
+    "domains": [],
+    "real_name_candidates": ["Mark Jhurneil Morales"],
+    "location_indicators": ["Philippines"],
+    "metadata": {"group_type": "hacktivist", "attribution": "Mark Jhurneil Morales", "facebook_page": "markjhurneil.morales"}
+  },
+  "deathnotehackers": {
+    "aliases": ["DeathNote Hackers", "DNH", "DNH Klammer"],
+    "telegram_usernames": [],
+    "facebook_ids": [],
+    "instagram_usernames": [],
+    "emails": [],
+    "domains": [],
+    "real_name_candidates": ["Rodel Lablab"],
+    "location_indicators": ["Philippines"],
+    "metadata": {"group_type": "hacktivist", "attribution": "Rodel Lablab (DNH Klammer)"}
+  },
+  "ahmdosa": {
+    "aliases": ["AHMDOSA", "ahmdosa"],
+    "telegram_usernames": ["@AHMDOSA"],
+    "facebook_ids": [],
+    "instagram_usernames": ["ahmdosa"],
+    "emails": [],
+    "domains": [],
+    "real_name_candidates": ["Ahmed Salar", "ahmd osam"],
+    "location_indicators": [],
+    "metadata": {"group_type": "individual", "attribution": "Ahmed Salar"}
+  },
+  "siningangmixwithgabi": {
+    "aliases": ["siningangmixwithgabi", "sining_mix_with_gabi"],
+    "telegram_usernames": ["@siningangmixwithgabi"],
+    "facebook_ids": [],
+    "instagram_usernames": [],
+    "emails": [],
+    "domains": [],
+    "real_name_candidates": [],
+    "location_indicators": [],
+    "metadata": {"group_type": "unknown"}
+  },
+  "happygoluckyph": {
+    "aliases": ["Happy Go Lucky PH", "HappyGoLuckyPH", "happygoluckyph", "happygolucky.ph"],
+    "telegram_usernames": ["@HappyGoLuckyPH", "@happygoluckyph"],
+    "facebook_ids": ["61583385585538"],
+    "instagram_usernames": ["happygoluckyph"],
+    "emails": [],
+    "domains": ["happygolucky.ph"],
+    "real_name_candidates": [],
+    "location_indicators": ["Philippines"],
+    "metadata": {"group_type": "unknown", "facebook_vanity": "happygolucky.ph", "followers": 5042}
+  }
+}

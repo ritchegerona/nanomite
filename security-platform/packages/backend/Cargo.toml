@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "api",
+    "agent",
+    "orchestrator",
+    "modules/osint",
+    "modules/socmed",
+    "modules/siem",
+    "modules/pentest",
+    "modules/vulnscan",
+    "modules/redteam",
+    "modules/ir",
+    "modules/cloud",
+    "modules/supplychain",
+    "modules/aiml",
+    "modules/detection",
+    "modules/simulation",
+    "workers/tool_executor",
+    "workers/agent_processor",
+    "workers/report_generator",
+    "workers/evidence_processor",
+    "workers/compliance_checker",
+    "workers/scheduled_tasks",
+]
+
+[workspace.dependencies]
+tokio = { version = "1.38", features = ["full"] }
+axum = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
+redis = { version = "0.24", features = ["tokio-comp"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.7", features = ["serde", "v4", "v7"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0"
+thiserror = "1.0"
+validator = { version = "0.16", features = ["derive"] }
+reqwest = { version = "0.11", features = ["json"] }
+futures-util = "0.3"
+tokio-stream = "0.1"
+axum-extra = { version = "0.7", features = ["typed-header", "cookie"] }
+jsonwebtoken = "8.4"
+argon2 = "0.5"
+rand = "0.8"
+schemars = "0.8"
+utoipa = "0.8"
+utoipa-swagger-ui = "0.7"
+minio = "0.7"
+serde_with = "3.2"
+hex = "0.4"
+sha2 = "0.10"
+hmac = "0.12"
+pbkdf2 = "0.12"
+bs58 = "0.4"

@@ -1,0 +1,97 @@
+{
+  "target": {
+    "alias": "siningangmixwithgabi",
+    "aliases": [
+      "siningangmixwithgabi"
+    ],
+    "telegram_usernames": [],
+    "facebook_ids": [],
+    "instagram_usernames": [],
+    "emails": [],
+    "domains": [],
+    "real_name_candidates": [],
+    "location_indicators": []
+  },
+  "aggregate_confidence": 0.9933,
+  "tier": "confirmed",
+  "real_name_candidates": [
+    "Mag-log In o Mag-sign Up para Tingnan"
+  ],
+  "location_profile": {
+    "confidence": 0.0
+  },
+  "evidence_count": 5,
+  "generated_at": "2026-11-19T17:28:55.007453",
+  "evidence": [
+    {
+      "source": "facebook",
+      "target_alias": "siningangmixwithgabi",
+      "data_type": "og:title",
+      "raw_value": "Mag-log In o Mag-sign Up para Tingnan",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:28:54.466745",
+      "metadata": {
+        "url": "https://m.facebook.com/siningangmixwithgabi",
+        "alias": "siningangmixwithgabi"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "siningangmixwithgabi",
+      "data_type": "og:description",
+      "raw_value": "Makakita ng mga post, litrato at marami pa sa Facebook.",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:28:54.466763",
+      "metadata": {
+        "url": "https://m.facebook.com/siningangmixwithgabi",
+        "alias": "siningangmixwithgabi"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "siningangmixwithgabi",
+      "data_type": "og:title",
+      "raw_value": "Mag-log In o Mag-sign Up para Tingnan",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:28:55.006592",
+      "metadata": {
+        "url": "https://mbasic.facebook.com/siningangmixwithgabi",
+        "alias": "siningangmixwithgabi"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "siningangmixwithgabi",
+      "data_type": "og:description",
+      "raw_value": "Makakita ng mga post, litrato at marami pa sa Facebook.",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:28:55.006603",
+      "metadata": {
+        "url": "https://mbasic.facebook.com/siningangmixwithgabi",
+        "alias": "siningangmixwithgabi"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "siningangmixwithgabi",
+      "data_type": "contact:description",
+      "raw_value": "If you have",
+      "confidence": 0.65,
+      "weight": 0.7,
+      "weighted_score": 0.45499999999999996,
+      "timestamp": "2026-11-19T17:28:54.062489",
+      "metadata": {
+        "url": "https://t.me/siningangmixwithgabi",
+        "username": "siningangmixwithgabi"
+      }
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+{
+  "target": {
+    "alias": "crimsonsecph",
+    "aliases": [
+      "crimsonsecph"
+    ],
+    "telegram_usernames": [],
+    "facebook_ids": [],
+    "instagram_usernames": [],
+    "emails": [],
+    "domains": [],
+    "real_name_candidates": [],
+    "location_indicators": []
+  },
+  "aggregate_confidence": 0.9972,
+  "tier": "confirmed",
+  "real_name_candidates": [
+    "Mag-log In o Mag-sign Up para Tingnan"
+  ],
+  "location_profile": {
+    "confidence": 0.0
+  },
+  "evidence_count": 10,
+  "generated_at": "2026-11-19T17:29:00.081325",
+  "evidence": [
+    {
+      "source": "facebook",
+      "target_alias": "crimsonsecph",
+      "data_type": "og:title",
+      "raw_value": "Mag-log In o Mag-sign Up para Tingnan",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:28:59.689104",
+      "metadata": {
+        "url": "https://m.facebook.com/crimsonsecph",
+        "alias": "crimsonsecph"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "crimsonsecph",
+      "data_type": "og:description",
+      "raw_value": "Makakita ng mga post, litrato at marami pa sa Facebook.",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:28:59.689120",
+      "metadata": {
+        "url": "https://m.facebook.com/crimsonsecph",
+        "alias": "crimsonsecph"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "crimsonsecph",
+      "data_type": "og:title",
+      "raw_value": "Mag-log In o Mag-sign Up para Tingnan",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:00.080487",
+      "metadata": {
+        "url": "https://mbasic.facebook.com/crimsonsecph",
+        "alias": "crimsonsecph"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "crimsonsecph",
+      "data_type": "og:description",
+      "raw_value": "Makakita ng mga post, litrato at marami pa sa Facebook.",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:00.080502",
+      "metadata": {
+        "url": "https://mbasic.facebook.com/crimsonsecph",
+        "alias": "crimsonsecph"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "crimsonsecph",
+      "data_type": "contact:title",
+      "raw_value": "",
+      "confidence": 0.65,
+      "weight": 0.7,
+      "weighted_score": 0.45499999999999996,
+      "timestamp": "2026-11-19T17:28:59.513661",
+      "metadata": {
+        "url": "https://t.me/crimsonsecph",
+        "username": "crimsonsecph"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "crimsonsecph",
+      "data_type": "contact:description",
+      "raw_value": "SYSTEM SEIZED&#33;&#33;&#33;",
+      "confidence": 0.65,
+      "weight": 0.7,
+      "weighted_score": 0.45499999999999996,
+      "timestamp": "2026-11-19T17:28:59.513678",
+      "metadata": {
+        "url": "https://t.me/crimsonsecph",
+        "username": "crimsonsecph"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "crimsonsecph",
+      "data_type": "contact:extra",
+      "raw_value": "21 subscribers",
+      "confidence": 0.65,
+      "weight": 0.7,
+      "weighted_score": 0.45499999999999996,
+      "timestamp": "2026-11-19T17:28:59.513686",
+      "metadata": {
+        "url": "https://t.me/crimsonsecph",
+        "username": "crimsonsecph"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "crimsonsecph",
+      "data_type": "contact:status",
+      "raw_value": "channel_or_group",
+      "confidence": 0.65,
+      "weight": 0.7,
+      "weighted_score": 0.45499999999999996,
+      "timestamp": "2026-11-19T17:28:59.513693",
+      "metadata": {
+        "url": "https://t.me/crimsonsecph",
+        "username": "crimsonsecph"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "crimsonsecph",
+      "data_type": "widget:recent_messages",
+      "raw_value": [
+        "Channel created",
+        "Channel photo updated",
+        "REMEMBER REMEMBER REMEMBER THE 5TH OF NOVEMBER THE GUN POWDER TRISON AND PLOT I KNOW YOU HAVE NO REASON WHY THE GUNT POWDER TRISON SHOULD NEVER BE FORGOT",
+        "WHO THE FUCK IS THAT???",
+        "To those in positions of power in the Philippine government: we have witnessed countless cases of crime, yet it seems that little to no action is being taken. We want to make it clear that students and the safety of the people should be your top priority\u2014not the distractions and self-serving activities that take your focus away from the nation\u2019s real problems."
+      ],
+      "confidence": 0.52,
+      "weight": 0.5599999999999999,
+      "weighted_score": 0.29119999999999996,
+      "timestamp": "2026-11-19T17:28:59.819746",
+      "metadata": {
+        "url": "https://t.me/s/crimsonsecph",
+        "username": "crimsonsecph"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "crimsonsecph",
+      "data_type": "widget:channel_title",
+      "raw_value": "",
+      "confidence": 0.52,
+      "weight": 0.5599999999999999,
+      "weighted_score": 0.29119999999999996,
+      "timestamp": "2026-11-19T17:28:59.819765",
+      "metadata": {
+        "url": "https://t.me/s/crimsonsecph",
+        "username": "crimsonsecph"
+      }
+    }
+  ]
+}

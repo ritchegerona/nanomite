@@ -1,0 +1,198 @@
+{
+  "target": {
+    "alias": "lei_404",
+    "aliases": [
+      "lei_404"
+    ],
+    "telegram_usernames": [],
+    "facebook_ids": [],
+    "instagram_usernames": [],
+    "emails": [],
+    "domains": [],
+    "real_name_candidates": [],
+    "location_indicators": []
+  },
+  "aggregate_confidence": 1.0,
+  "tier": "confirmed",
+  "real_name_candidates": [
+    "Kevin C. Heaps",
+    "Mag-log In o Mag-sign Up para Tingnan"
+  ],
+  "location_profile": {
+    "language": "en",
+    "country_code": "US",
+    "confidence": 1.0
+  },
+  "evidence_count": 12,
+  "generated_at": "2026-11-19T17:29:01.787257",
+  "evidence": [
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:type",
+      "raw_value": "video.other",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:00.938673",
+      "metadata": {
+        "url": "https://www.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:title",
+      "raw_value": "Kevin C. Heaps",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:00.938694",
+      "metadata": {
+        "url": "https://www.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:description",
+      "raw_value": "Si Kevin C. Heaps ay nasa Facebook. Sumali sa Facebook para kumonekta kay Kevin C. Heaps at sa iba pang maaaring kilala mo. Ibinibigay ng Facebook sa mga tao ang kapangyarihang magbahagi at ginagawa...",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:00.938702",
+      "metadata": {
+        "url": "https://www.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:url",
+      "raw_value": "https://www.facebook.com/kheaps",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:00.938709",
+      "metadata": {
+        "url": "https://www.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:image:alt",
+      "raw_value": "Kevin C. Heaps",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:00.938716",
+      "metadata": {
+        "url": "https://www.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:image",
+      "raw_value": "https://scontent.fcrk1-5.fna.fbcdn.net/v/t39.30808-1/334279069_1446786295853617_7365636705718641354_n.jpg?stp=dst-jpg_tt6&amp;cstp=mx600x600&amp;ctp=s600x600&amp;_nc_cat=100&amp;_nc_map=urlgen_bucketless&amp;ccb=1-7&amp;_nc_sid=3ab345&amp;_nc_ohc=GtTDwiWZ22EQ7kNvwH2Zzo5&amp;_nc_oc=AdqYgciFsAgYX3yvmHaWK2uBvTMyy-RK0AnwwpYdcVPhyzBrZNfoOm26QHxtZdKq-So&amp;_nc_zt=24&amp;_nc_ht=scontent.fcrk1-5.fna&amp;_nc_gid=hXC_B_obCuGLypkt3IGPlg&amp;_nc_ss=7b20f&amp;oh=00_AQQH-8cIpzzYf7uPaqZOzDLjBjdY0HEPGTrQtd2rkP6Ysg&amp;oe=6B04EB06",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:00.938724",
+      "metadata": {
+        "url": "https://www.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:locale",
+      "raw_value": "en_US",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:00.938731",
+      "metadata": {
+        "url": "https://www.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:title",
+      "raw_value": "Mag-log In o Mag-sign Up para Tingnan",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:01.394679",
+      "metadata": {
+        "url": "https://m.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:description",
+      "raw_value": "Makakita ng mga post, litrato at marami pa sa Facebook.",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:01.394700",
+      "metadata": {
+        "url": "https://m.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:title",
+      "raw_value": "Mag-log In o Mag-sign Up para Tingnan",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:01.786378",
+      "metadata": {
+        "url": "https://mbasic.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "lei_404",
+      "data_type": "og:description",
+      "raw_value": "Makakita ng mga post, litrato at marami pa sa Facebook.",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:01.786395",
+      "metadata": {
+        "url": "https://mbasic.facebook.com/lei_404",
+        "alias": "lei_404"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "lei_404",
+      "data_type": "contact:description",
+      "raw_value": "If you have",
+      "confidence": 0.65,
+      "weight": 0.7,
+      "weighted_score": 0.45499999999999996,
+      "timestamp": "2026-11-19T17:29:00.752853",
+      "metadata": {
+        "url": "https://t.me/lei_404",
+        "username": "lei_404"
+      }
+    }
+  ]
+}

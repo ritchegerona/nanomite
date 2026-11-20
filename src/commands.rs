@@ -64,6 +64,7 @@ pub enum Command {
     Vpn,
     Tor,
     Debug,
+    DebugFile,
     Fix,
     Heal,
 }
@@ -293,6 +294,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "debug last failure - /debug <command> | output (alt+shift+d)",
         kind: Command::Debug,
+    },
+    Entry {
+        command: "/debug-file",
+        aliases: &[],
+        hint: "debug a source file - /debug-file <path> (alt+shift+d)",
+        kind: Command::DebugFile,
     },
     Entry {
         command: "/fix",

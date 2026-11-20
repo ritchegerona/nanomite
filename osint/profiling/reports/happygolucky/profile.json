@@ -1,0 +1,168 @@
+{
+  "target": {
+    "alias": "happygolucky",
+    "aliases": [
+      "happygolucky"
+    ],
+    "telegram_usernames": [],
+    "facebook_ids": [],
+    "instagram_usernames": [],
+    "emails": [],
+    "domains": [],
+    "real_name_candidates": [],
+    "location_indicators": []
+  },
+  "aggregate_confidence": 0.9995,
+  "tier": "confirmed",
+  "real_name_candidates": [
+    "Mag-log In o Mag-sign Up para Tingnan",
+    "happy go lucky (&#064;happygolucky) &#x2022; Instagram photos and videos"
+  ],
+  "location_profile": {
+    "confidence": 1.0
+  },
+  "evidence_count": 10,
+  "generated_at": "2026-11-19T17:29:03.219278",
+  "evidence": [
+    {
+      "source": "facebook",
+      "target_alias": "happygolucky",
+      "data_type": "og:title",
+      "raw_value": "Mag-log In o Mag-sign Up para Tingnan",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:02.854792",
+      "metadata": {
+        "url": "https://m.facebook.com/happygolucky",
+        "alias": "happygolucky"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "happygolucky",
+      "data_type": "og:description",
+      "raw_value": "Makakita ng mga post, litrato at marami pa sa Facebook.",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:02.854806",
+      "metadata": {
+        "url": "https://m.facebook.com/happygolucky",
+        "alias": "happygolucky"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "happygolucky",
+      "data_type": "og:title",
+      "raw_value": "Mag-log In o Mag-sign Up para Tingnan",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:03.218365",
+      "metadata": {
+        "url": "https://mbasic.facebook.com/happygolucky",
+        "alias": "happygolucky"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "happygolucky",
+      "data_type": "og:description",
+      "raw_value": "Makakita ng mga post, litrato at marami pa sa Facebook.",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:29:03.218383",
+      "metadata": {
+        "url": "https://mbasic.facebook.com/happygolucky",
+        "alias": "happygolucky"
+      }
+    },
+    {
+      "source": "instagram",
+      "target_alias": "happygolucky",
+      "data_type": "og:type",
+      "raw_value": "profile",
+      "confidence": 0.75,
+      "weight": 0.8,
+      "weighted_score": 0.6000000000000001,
+      "timestamp": "2026-11-19T17:29:02.265382",
+      "metadata": {
+        "url": "https://www.instagram.com/happygolucky/",
+        "username": "happygolucky"
+      }
+    },
+    {
+      "source": "instagram",
+      "target_alias": "happygolucky",
+      "data_type": "og:image",
+      "raw_value": "https://scontent.cdninstagram.com/v/t51.2885-19/299813444_187150817087591_717042827141076993_n.jpg?stp=dst-jpg_s150x150_tt6&amp;_nc_cat=101&amp;ig_cache_key=GETK3hFn0PhxNqoAAAFYfPimcvMJbkULAAAB1501500j-ccb7-5&amp;ccb=7-5&amp;_nc_sid=669407&amp;efg=eyJ2ZW5jb2RlX3RhZyI6InByb2ZpbGVfcGljLnd3dy4xMDgwLkMzIn0%3D&amp;_nc_ohc=TCoZAawkvS8Q7kNvwEq_tix&amp;_nc_oc=AdrqASQonXi22CT4jEQK3e3pysWWLwRj6A7QS__3M6RclcI_Mez_0gbRHIx1EhwLt_A&amp;_nc_zt=24&amp;_nc_ht=scontent.cdninstagram.com&amp;_nc_ss=7ba02&amp;_nc_ct=RQosPBUCFQIAAAA&amp;oh=00_AQTWwWOLVbZ0pbrFc_CiPmSt8mkx4sU25nYAU4ifWbRP0g&amp;oe=6B0515C5",
+      "confidence": 0.75,
+      "weight": 0.8,
+      "weighted_score": 0.6000000000000001,
+      "timestamp": "2026-11-19T17:29:02.265403",
+      "metadata": {
+        "url": "https://www.instagram.com/happygolucky/",
+        "username": "happygolucky"
+      }
+    },
+    {
+      "source": "instagram",
+      "target_alias": "happygolucky",
+      "data_type": "og:title",
+      "raw_value": "happy go lucky (&#064;happygolucky) &#x2022; Instagram photos and videos",
+      "confidence": 0.75,
+      "weight": 0.8,
+      "weighted_score": 0.6000000000000001,
+      "timestamp": "2026-11-19T17:29:02.265410",
+      "metadata": {
+        "url": "https://www.instagram.com/happygolucky/",
+        "username": "happygolucky"
+      }
+    },
+    {
+      "source": "instagram",
+      "target_alias": "happygolucky",
+      "data_type": "og:url",
+      "raw_value": "https://www.instagram.com/happygolucky/",
+      "confidence": 0.75,
+      "weight": 0.8,
+      "weighted_score": 0.6000000000000001,
+      "timestamp": "2026-11-19T17:29:02.265416",
+      "metadata": {
+        "url": "https://www.instagram.com/happygolucky/",
+        "username": "happygolucky"
+      }
+    },
+    {
+      "source": "instagram",
+      "target_alias": "happygolucky",
+      "data_type": "og:description",
+      "raw_value": "175 Followers, 1 Following, 33 Posts - See Instagram photos and videos from happy go lucky (&#064;happygolucky)",
+      "confidence": 0.75,
+      "weight": 0.8,
+      "weighted_score": 0.6000000000000001,
+      "timestamp": "2026-11-19T17:29:02.265422",
+      "metadata": {
+        "url": "https://www.instagram.com/happygolucky/",
+        "username": "happygolucky"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "happygolucky",
+      "data_type": "contact:description",
+      "raw_value": "If you have",
+      "confidence": 0.65,
+      "weight": 0.7,
+      "weighted_score": 0.45499999999999996,
+      "timestamp": "2026-11-19T17:29:02.443050",
+      "metadata": {
+        "url": "https://t.me/happygolucky",
+        "username": "happygolucky"
+      }
+    }
+  ]
+}

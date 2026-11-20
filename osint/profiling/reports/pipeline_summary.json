@@ -1,0 +1,91 @@
+{
+  "generated_at": "2026-11-19T17:29:03.225355",
+  "total_targets": 6,
+  "targets": {
+    "siningangmixwithgabi": {
+      "alias": "siningangmixwithgabi",
+      "tier": "confirmed",
+      "confidence": 0.9933,
+      "real_name_candidates": [
+        "Mag-log In o Mag-sign Up para Tingnan"
+      ],
+      "evidence_count": 5,
+      "location_profile": {
+        "confidence": 0.0
+      }
+    },
+    "happygoluckyph": {
+      "alias": "happygoluckyph",
+      "tier": "confirmed",
+      "confidence": 1.0,
+      "real_name_candidates": [
+        "Happy Go Lucky PH",
+        "Mag-log In o Mag-sign Up para Tingnan",
+        "FB: happygolucky PH (&#064;happygoluckyph) &#x2022; Instagram photos and videos"
+      ],
+      "evidence_count": 17,
+      "location_profile": {
+        "language": "en",
+        "country_code": "US",
+        "confidence": 1.0
+      }
+    },
+    "nullsechackers": {
+      "alias": "nullsechackers",
+      "tier": "confirmed",
+      "confidence": 0.9965,
+      "real_name_candidates": [
+        "Mag-log In o Mag-sign Up para Tingnan"
+      ],
+      "evidence_count": 9,
+      "location_profile": {
+        "confidence": 0.0
+      }
+    },
+    "crimsonsecph": {
+      "alias": "crimsonsecph",
+      "tier": "confirmed",
+      "confidence": 0.9972,
+      "real_name_candidates": [
+        "Mag-log In o Mag-sign Up para Tingnan"
+      ],
+      "evidence_count": 10,
+      "location_profile": {
+        "confidence": 0.0
+      }
+    },
+    "lei_404": {
+      "alias": "lei_404",
+      "tier": "confirmed",
+      "confidence": 1.0,
+      "real_name_candidates": [
+        "Kevin C. Heaps",
+        "Mag-log In o Mag-sign Up para Tingnan"
+      ],
+      "evidence_count": 12,
+      "location_profile": {
+        "language": "en",
+        "country_code": "US",
+        "confidence": 1.0
+      }
+    },
+    "happygolucky": {
+      "alias": "happygolucky",
+      "tier": "confirmed",
+      "confidence": 0.9995,
+      "real_name_candidates": [
+        "Mag-log In o Mag-sign Up para Tingnan",
+        "happy go lucky (&#064;happygolucky) &#x2022; Instagram photos and videos"
+      ],
+      "evidence_count": 10,
+      "location_profile": {
+        "confidence": 1.0
+      }
+    }
+  },
+  "tier_distribution": {
+    "confirmed": 6
+  },
+  "unresolved_count": 0,
+  "confirmed_count": 6
+}

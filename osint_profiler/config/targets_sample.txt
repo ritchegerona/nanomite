@@ -1,0 +1,14 @@
+# Target aliases for osint_profiler batch processing
+# One alias per line. Lines starting with # are comments.
+
+# Confirmed targets (for validation)
+crimsonsec_philippines
+deathnote_hackers
+
+# Candidate target
+ahmdosa
+
+# Unresolved targets
+nullsec_philippines
+siningangmixwithgabi
+happygoluckyph

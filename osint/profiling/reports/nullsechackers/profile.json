@@ -1,0 +1,159 @@
+{
+  "target": {
+    "alias": "nullsechackers",
+    "aliases": [
+      "nullsechackers"
+    ],
+    "telegram_usernames": [],
+    "facebook_ids": [],
+    "instagram_usernames": [],
+    "emails": [],
+    "domains": [],
+    "real_name_candidates": [],
+    "location_indicators": []
+  },
+  "aggregate_confidence": 0.9965,
+  "tier": "confirmed",
+  "real_name_candidates": [
+    "Mag-log In o Mag-sign Up para Tingnan"
+  ],
+  "location_profile": {
+    "confidence": 0.0
+  },
+  "evidence_count": 9,
+  "generated_at": "2026-11-19T17:28:58.832076",
+  "evidence": [
+    {
+      "source": "facebook",
+      "target_alias": "nullsechackers",
+      "data_type": "og:title",
+      "raw_value": "Mag-log In o Mag-sign Up para Tingnan",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:28:58.247709",
+      "metadata": {
+        "url": "https://m.facebook.com/nullsechackers",
+        "alias": "nullsechackers"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "nullsechackers",
+      "data_type": "og:description",
+      "raw_value": "Makakita ng mga post, litrato at marami pa sa Facebook.",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:28:58.247724",
+      "metadata": {
+        "url": "https://m.facebook.com/nullsechackers",
+        "alias": "nullsechackers"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "nullsechackers",
+      "data_type": "og:title",
+      "raw_value": "Mag-log In o Mag-sign Up para Tingnan",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:28:58.831164",
+      "metadata": {
+        "url": "https://mbasic.facebook.com/nullsechackers",
+        "alias": "nullsechackers"
+      }
+    },
+    {
+      "source": "facebook",
+      "target_alias": "nullsechackers",
+      "data_type": "og:description",
+      "raw_value": "Makakita ng mga post, litrato at marami pa sa Facebook.",
+      "confidence": 0.85,
+      "weight": 0.9,
+      "weighted_score": 0.765,
+      "timestamp": "2026-11-19T17:28:58.831181",
+      "metadata": {
+        "url": "https://mbasic.facebook.com/nullsechackers",
+        "alias": "nullsechackers"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "nullsechackers",
+      "data_type": "contact:title",
+      "raw_value": "",
+      "confidence": 0.65,
+      "weight": 0.7,
+      "weighted_score": 0.45499999999999996,
+      "timestamp": "2026-11-19T17:28:58.016271",
+      "metadata": {
+        "url": "https://t.me/nullsechackers",
+        "username": "nullsechackers"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "nullsechackers",
+      "data_type": "contact:extra",
+      "raw_value": "2 778 subscribers",
+      "confidence": 0.65,
+      "weight": 0.7,
+      "weighted_score": 0.45499999999999996,
+      "timestamp": "2026-11-19T17:28:58.016517",
+      "metadata": {
+        "url": "https://t.me/nullsechackers",
+        "username": "nullsechackers"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "nullsechackers",
+      "data_type": "contact:status",
+      "raw_value": "channel_or_group",
+      "confidence": 0.65,
+      "weight": 0.7,
+      "weighted_score": 0.45499999999999996,
+      "timestamp": "2026-11-19T17:28:58.016524",
+      "metadata": {
+        "url": "https://t.me/nullsechackers",
+        "username": "nullsechackers"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "nullsechackers",
+      "data_type": "widget:recent_messages",
+      "raw_value": [
+        "wts webshellz (high da pa)",
+        "wts webshellz (high da pa) dm: @rcwfa",
+        "scammer&#33;&#33; ",
+        "these fucking chingchongs spamming the channel bro i swear",
+        "Now they are here. You really think you can throw a little money around and expect me to sell out my own country? F#ck your country and your own countrymen, you dog-slaughtering b*tch."
+      ],
+      "confidence": 0.52,
+      "weight": 0.5599999999999999,
+      "weighted_score": 0.29119999999999996,
+      "timestamp": "2026-11-19T17:28:58.347577",
+      "metadata": {
+        "url": "https://t.me/s/nullsechackers",
+        "username": "nullsechackers"
+      }
+    },
+    {
+      "source": "telegram",
+      "target_alias": "nullsechackers",
+      "data_type": "widget:channel_title",
+      "raw_value": "",
+      "confidence": 0.52,
+      "weight": 0.5599999999999999,
+      "weighted_score": 0.29119999999999996,
+      "timestamp": "2026-11-19T17:28:58.347600",
+      "metadata": {
+        "url": "https://t.me/s/nullsechackers",
+        "username": "nullsechackers"
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[package]
+name = "security-platform-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+security-platform-core = { path = "../core" }
+tokio = { version = "1.38", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tokio-stream = "0.1"
+uuid = { version = "1.7", features = ["v4"] }
+futures-util = "0.3"
+chrono = "0.4"
+anyhow = "1.0"

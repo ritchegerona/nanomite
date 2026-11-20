@@ -2050,6 +2050,8 @@ pub struct App {
     improve_gen: u64,
     /// Self-heal pipeline: debug → fix → stage → learn.
     self_heal: crate::debug::SelfHeal,
+    /// Fix history: records every fix decision across sessions.
+    fix_history: Option<crate::debug::FixHistory>,
     pub(crate) cancel: Option<Cancel>,
     /// When the last bare Esc landed: two in quick succession force-stop the
     /// running turn and kill any child process a tool is blocked on.
@@ -2288,6 +2290,7 @@ impl App {
             improve_tx,
             improve_gen: 0,
             self_heal: crate::debug::SelfHeal::new(),
+            fix_history: Some(crate::debug::FixHistory::open(Self::fix_history_dir())),
             cancel: None,
             last_esc: None,
             turn_task: None,
@@ -2404,6 +2407,13 @@ impl App {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("nanomite")
             .join("improve")
+    }
+
+    fn fix_history_dir() -> PathBuf {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("nanomite")
+            .join("debug")
     }
 
     /// Anchor paths for the engine. `config`/`prompt` self-edits must name these
@@ -3581,6 +3591,7 @@ impl App {
             Command::Evidence => self.show_evidence(args),
             Command::Wireless => self.show_wireless(args),
             Command::Debug => self.run_debug(args),
+            Command::DebugFile => self.run_debug_file(args),
             Command::Fix => self.run_fix(),
             Command::Heal => self.run_heal(args),
             Command::Reasoning => self.cycle_reasoning(),
@@ -4011,6 +4022,92 @@ impl App {
         self.mark_dirty();
     }
 
+    /// `/debug-file <path>`: read a source file and run `cargo clippy` + `cargo build`
+    /// against it, then surface diagnostics for auto-fix proposals.
+    fn run_debug_file(&mut self, args: &str) {
+        let path = args.trim();
+        if path.is_empty() {
+            self.entries.push(Entry::new(
+                EntryRole::System,
+                "Usage: /debug-file <path> — run clippy/build diagnostics on a source file"
+                    .to_string(),
+            ));
+            let last = self.entries.last_mut().unwrap();
+            last.phase = Phase::Done;
+            self.mark_dirty();
+            return;
+        }
+
+        let full = if std::path::Path::new(path).is_absolute() {
+            std::path::PathBuf::from(path)
+        } else {
+            self.cwd.join(path)
+        };
+
+        if !full.is_file() {
+            self.entries.push(Entry::new(
+                EntryRole::System,
+                format!("file not found: {}", full.display()),
+            ));
+            let last = self.entries.last_mut().unwrap();
+            last.phase = Phase::Done;
+            self.mark_dirty();
+            return;
+        }
+
+        // Run cargo clippy on the workspace (captures warnings for all files including this one).
+        let clippy_output = std::process::Command::new("cargo")
+            .args(["clippy", "--all-targets"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+            .unwrap_or_else(|e| format!("cargo clippy failed to run: {e}"));
+
+        let clippy_diags = crate::debug::ClippyParser::new().parse(&clippy_output);
+
+        // Also run cargo build to catch compiler errors clippy might miss.
+        let build_output = std::process::Command::new("cargo")
+            .args(["build"])
+            .output()
+            .map(|o| {
+                let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+                format!("{stdout}\n{stderr}")
+            })
+            .unwrap_or_else(|e| format!("cargo build failed to run: {e}"));
+
+        let build_diags = crate::debug::DiagnosticsParser::new().parse(&build_output);
+
+        let mut all_diags: Vec<_> = clippy_diags.into_iter().chain(build_diags).collect();
+        // Filter to diagnostics referencing this file, or global/test failures.
+        let path_str = full.to_string_lossy().to_string();
+        all_diags.retain(|d| d.file.is_empty() || d.file.contains(&path_str));
+
+        let mut text = format!("Debug file — `{}`\n\n", path);
+        if all_diags.is_empty() {
+            text.push_str("No clippy or compiler diagnostics found for this file.\n");
+        } else {
+            text.push_str(&format!("Found {} diagnostic(s):\n\n", all_diags.len()));
+            for d in &all_diags {
+                text.push_str(&format!(
+                    "  [{}] {}:{}:{} — {}\n        {}\n",
+                    d.kind.as_str(),
+                    d.file,
+                    d.line,
+                    d.col,
+                    d.message,
+                    d.context.first().cloned().unwrap_or_default()
+                ));
+            }
+            text.push_str("\nUse /heal <command> <output> to propose auto-fixes, or /improve to review staged proposals.\n");
+        }
+
+        self.entries
+            .push(Entry::new(EntryRole::System, text.trim_end().to_string()));
+        let last = self.entries.last_mut().unwrap();
+        last.phase = Phase::Done;
+        self.mark_dirty();
+    }
+
     /// `/skills`: list tracked skills (tools nanomite knows how to use).
     fn show_skills(&mut self) {
         let skills_registry = self.runtime.skills();
@@ -4133,6 +4230,53 @@ impl App {
         }
 
         let result = healer.check_output(command, output, None);
+
+        // --- Extended fix patterns (lifetime, clippy, dead code, unused imports) ---
+        let mut ext_proposals_staged = Vec::new();
+        if let (Some(engine), Some(roots)) = (&engine_opt, Some(&roots_opt)) {
+            let session = crate::debug::debug_output(command, output);
+            let ext_gen = crate::debug::FixExtGenerator::new();
+            let ext_result = ext_gen.generate(&session);
+            let staged = crate::debug::stage_ext_fixes(engine, roots, &ext_result);
+            for (id, res) in staged {
+                if res.is_ok() {
+                    ext_proposals_staged.push(id);
+                }
+            }
+        }
+
+        // --- Fix history: record every diagnostic decision ---
+        let mut history_records = Vec::new();
+        if let Some(ref mut hist) = self.fix_history {
+            let session = crate::debug::debug_output(command, output);
+            for d in &session.diagnostics {
+                let confidence = match d.kind {
+                    crate::debug::DiagnosticKind::UnresolvedImport
+                    | crate::debug::DiagnosticKind::MissingDependency => {
+                        crate::debug::FixConfidence::High
+                    }
+                    crate::debug::DiagnosticKind::TypeMismatch => {
+                        crate::debug::FixConfidence::Medium
+                    }
+                    _ => crate::debug::FixConfidence::Low,
+                };
+                let decision = if d.has_known_fix {
+                    crate::debug::FixDecision::Staged
+                } else {
+                    crate::debug::FixDecision::Error
+                };
+                let id = hist.record(
+                    &d.id,
+                    &d.file,
+                    confidence.as_str(),
+                    decision,
+                    &d.message,
+                    "",
+                );
+                history_records.push(id);
+            }
+        }
+
         let mut text = format!("Self-heal — `{command}`\\n\\n");
         text.push_str(&format!(
             "Diagnostics: {} found, {} fixable, {} unfixable\\n",
@@ -4140,14 +4284,26 @@ impl App {
         ));
         if !result.proposals_staged.is_empty() {
             text.push_str(&format!(
-                "Proposals staged: {} (review in /improve)\\n",
+                "Base proposals staged: {} (review in /improve)\\n",
                 result.proposals_staged.len()
+            ));
+        }
+        if !ext_proposals_staged.is_empty() {
+            text.push_str(&format!(
+                "Extended proposals staged: {} (review in /improve)\\n",
+                ext_proposals_staged.len()
             ));
         }
         if !result.techniques_saved.is_empty() {
             text.push_str(&format!(
                 "Techniques saved to neural memory: {}\\n",
                 result.techniques_saved.len()
+            ));
+        }
+        if !history_records.is_empty() {
+            text.push_str(&format!(
+                "Fix history records: {} (review in /improve)\\n",
+                history_records.len()
             ));
         }
         if result.diagnostics_found == 0 {
