@@ -100,8 +100,7 @@ impl TestTools {
                 } else {
                     self.root.join(p)
                 };
-                crate::tools::file_tools::resolve_within(&self.root, &joined)
-                    .ok_or_else(|| "refused: cwd escapes the workspace".to_string())
+                Ok(crate::tools::file_tools::resolve_within(&joined))
             }
         }
     }
@@ -711,10 +710,12 @@ mod tests {
     }
 
     #[test]
-    fn path_escape_is_refused() {
+    fn path_escape_is_no_longer_refused() {
         let dir = crate::improve::testing::temp_dir("test-tools-escape");
         let tools = TestTools::new(&dir.path);
-        let err = tools
+        // Full access: `../..` resolves; cargo then reports its own error
+        // (no manifest there) in the result output — never a workspace refusal.
+        let outcome = tools
             .run_tests(RunTestsArgs {
                 runner: "cargo".into(),
                 args: vec![],
@@ -722,8 +723,12 @@ mod tests {
                 timeout_ms: None,
                 command: None,
             })
-            .unwrap_err();
-        assert!(err.contains("escapes the workspace"));
+            .expect("full access: outside cwd resolves");
+        assert!(
+            !outcome.output.contains("escapes the workspace"),
+            "{}",
+            outcome.output
+        );
     }
 
     #[test]

@@ -150,8 +150,7 @@ impl GitTools {
                 } else {
                     self.root.join(p)
                 };
-                crate::tools::file_tools::resolve_within(&self.root, &joined)
-                    .ok_or_else(|| "refused: path escapes the workspace".to_string())
+                Ok(crate::tools::file_tools::resolve_within(&joined))
             }
         }
     }
@@ -659,14 +658,15 @@ mod tests {
     }
 
     #[test]
-    fn path_escape_is_refused() {
+    fn path_escape_is_no_longer_refused() {
         let (dir, git) = init_repo();
-        let err = git
-            .status(GitStatusArgs {
-                path: Some("../..".into()),
-            })
-            .unwrap_err();
-        assert!(err.contains("escapes the workspace"));
+        // Full access: `../..` resolves; the call may succeed or fail at the
+        // git level, but never with a workspace refusal.
+        if let Err(err) = git.status(GitStatusArgs {
+            path: Some("../..".into()),
+        }) {
+            assert!(!err.contains("escapes the workspace"), "{err}");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -43,42 +43,42 @@ impl ToolSet {
         vec![
             ToolSpec {
                 name: "list_files",
-                description: "List files and directories at a path inside the workspace.",
+                description: "List files and directories at a path (any path on the machine; relative paths resolve against the workspace).",
                 category: Files,
             },
             ToolSpec {
                 name: "read_file",
-                description: "Read a bounded window of a UTF-8 text file from the workspace.",
+                description: "Read a bounded window of a UTF-8 text file (any path on the machine).",
                 category: Files,
             },
             ToolSpec {
                 name: "search",
-                description: "Case-insensitive substring search over workspace text files, returning path and line for each hit.",
+                description: "Case-insensitive substring search over text files at any path, returning path and line for each hit.",
                 category: Files,
             },
             ToolSpec {
                 name: "write_file",
-                description: "Write (or append) UTF-8 content to a file inside the workspace.",
+                description: "Write (or append) UTF-8 content to a file at any path on the machine.",
                 category: Files,
             },
             ToolSpec {
                 name: "edit_file",
-                description: "Replace occurrences of an exact string in a workspace file.",
+                description: "Replace occurrences of an exact string in a file at any path.",
                 category: Files,
             },
             ToolSpec {
                 name: "read_document",
-                description: "Extract bounded text and structure from a workspace document (pdf, docx, xlsx, ods, odt, rtf, csv and the text family). Image paths (png, jpg, tif, bmp, webp) are recognized with OCR via tesseract.",
+                description: "Extract bounded text and structure from a document at any path (pdf, docx, xlsx, ods, odt, rtf, csv and the text family). Image paths (png, jpg, tif, bmp, webp) are recognized with OCR via tesseract.",
                 category: Document,
             },
             ToolSpec {
                 name: "ocr_image",
-                description: "Recognize text in a workspace image (png, jpg, tif, bmp, webp) with tesseract OCR and return the bounded text.",
+                description: "Recognize text in an image at any path (png, jpg, tif, bmp, webp) with tesseract OCR and return the bounded text.",
                 category: Document,
             },
             ToolSpec {
                 name: "run_command",
-                description: "Run a shell command inside the workspace (sh -c) with a hard timeout.",
+                description: "Run a shell command (sh -c) in any working directory with a hard timeout.",
                 category: Exec,
             },
             ToolSpec {
@@ -113,7 +113,7 @@ impl ToolSet {
             },
             ToolSpec {
                 name: "browse_screenshot",
-                description: "Open a URL in a headless browser and save a full-page screenshot PNG in the workspace.",
+                description: "Open a URL in a headless browser and save a full-page screenshot PNG at any path.",
                 category: Web,
             },
             ToolSpec {

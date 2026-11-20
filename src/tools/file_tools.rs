@@ -108,7 +108,9 @@ impl FileTools {
         }
     }
 
-    /// Resolves a user-supplied relative path and refuses anything outside the workspace.
+    /// Resolves a user-supplied path with full filesystem access: absolute
+    /// paths are taken as given, relative paths join the workspace root.
+    /// No containment — any path on the machine is readable and writable.
     fn resolve(&self, path: Option<&str>) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
         let raw = path.unwrap_or(".");
         let joined = if Path::new(raw).is_absolute() {
@@ -116,9 +118,7 @@ impl FileTools {
         } else {
             self.root.join(raw)
         };
-        resolve_within(&self.root, &joined).ok_or_else(|| -> Box<dyn Error + Send + Sync> {
-            "refused: path escapes the workspace".into()
-        })
+        Ok(resolve_within(&joined))
     }
 
     pub fn relative(&self, path: &Path) -> String {
@@ -368,20 +368,13 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
     out
 }
 
-/// Resolves an already-joined path inside `root`, refusing escapes.
-///
-/// The lexical pass strips `..`; canonicalising the deepest existing
-/// ancestor then makes both sides comparable when `root` sits behind a
-/// symlink (macOS `/var` → `/private/var`) and catches an in-workspace
-/// symlink that points out of it. A non-existent tail stays lexical so
-/// create/write targets still resolve. Returns the canonical path so
-/// `strip_prefix(root)` display keeps working.
-pub(crate) fn resolve_within(root: &Path, joined: &Path) -> Option<PathBuf> {
-    let normalized = normalize(joined);
-    let resolved = canonicalize_deepest(&normalized);
-    resolved
-        .starts_with(canonicalize_deepest(root))
-        .then_some(resolved)
+/// Resolves an already-joined path with full filesystem access: no workspace
+/// containment. The lexical pass strips `..`; canonicalising the deepest
+/// existing ancestor resolves symlinks (macOS `/var` → `/private/var`) so the
+/// returned path is what the OS will open. A non-existent tail stays lexical
+/// so create/write targets still resolve.
+pub(crate) fn resolve_within(joined: &Path) -> PathBuf {
+    canonicalize_deepest(&normalize(joined))
 }
 
 /// `fs::canonicalize` on the deepest ancestor that exists, re-appending the
@@ -627,10 +620,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_paths_outside_workspace() {
+    fn resolves_paths_outside_workspace() {
         let tools = FileTools::new(std::env::temp_dir(), 1024);
-        let err = tools.resolve(Some("../etc/passwd")).unwrap_err();
-        assert!(err.to_string().contains("escapes the workspace"));
+        let got = tools
+            .resolve(Some("../etc/passwd"))
+            .expect("full access: outside paths resolve");
+        assert!(got.ends_with("etc/passwd"), "resolved: {}", got.display());
     }
 
     /// A workspace addressed through a symlink alias (macOS `/var` →
@@ -666,11 +661,10 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
-    /// A symlink inside the workspace pointing out of it must be refused:
-    /// the lexical check alone let `link/secret` pass while the open
-    /// followed the link outside the root.
+    /// A symlink inside the workspace pointing out of it resolves to its
+    /// target: full access follows links anywhere on the machine.
     #[test]
-    fn refuses_a_workspace_symlink_that_points_outside() {
+    fn allows_a_workspace_symlink_that_points_outside() {
         let base = std::env::temp_dir().join(format!("nm-slink-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let ws = base.join("ws");
@@ -681,10 +675,12 @@ mod tests {
         std::os::unix::fs::symlink(&outside, ws.join("link")).expect("link");
 
         let tools = FileTools::new(&ws, 1024);
-        let err = tools
+        let got = tools
             .resolve(Some("link/secret.txt"))
-            .expect_err("symlink escape must be refused");
-        assert!(err.to_string().contains("escapes the workspace"));
+            .expect("full access: symlink escape must resolve");
+        // Both sides canonicalised: on macOS `temp_dir()` is `/var/...` while
+        // the resolved path is `/private/var/...`.
+        assert_eq!(got, canonicalize_deepest(&outside.join("secret.txt")));
 
         let _ = fs::remove_dir_all(&base);
     }

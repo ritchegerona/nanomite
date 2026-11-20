@@ -109,21 +109,15 @@ impl ImageTools {
         Self { root }
     }
 
-    /// Resolves a user-supplied path and refuses anything outside the
-    /// workspace. Mirrors `DocumentTools::resolve` (absolute paths are taken
-    /// as given, relative paths join the root, then [`resolve_within`] must
-    /// land inside the canonicalised root).
+    /// Resolves a user-supplied path with full filesystem access: absolute
+    /// paths are taken as given, relative paths join the root.
     fn resolve(&self, path: &str) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
         let joined = if Path::new(path).is_absolute() {
             PathBuf::from(path)
         } else {
             self.root.join(path)
         };
-        resolve_within(&self.root, &joined).ok_or_else(
-            || -> Box<dyn std::error::Error + Send + Sync> {
-                "refused: path escapes the workspace".into()
-            },
-        )
+        Ok(resolve_within(&joined))
     }
 
     /// Recognizes text in one workspace image with tesseract.
@@ -297,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn ocr_refuses_non_images_and_workspace_escapes() {
+    fn ocr_refuses_non_images_and_resolves_escapes() {
         let ws = temp_workspace("refuse");
         std::fs::write(ws.join("doc.pdf"), b"%PDF").expect("write pdf");
         let binary = fake_tesseract(&ws);
@@ -314,27 +308,19 @@ mod tests {
             .expect_err("non-image refused");
         assert!(err.to_string().contains("not an image path"));
 
-        let err = tools
-            .ocr_with(
+        // Full access: outside paths resolve; whatever fails next is the OCR
+        // itself (missing file), never a workspace refusal.
+        for outside in ["../outside.png", "/etc/hosts.png"] {
+            if let Err(err) = tools.ocr_with(
                 &binary,
                 OcrImageArgs {
-                    path: "../outside.png".into(),
+                    path: outside.into(),
                     lang: None,
                 },
-            )
-            .expect_err("relative escape refused");
-        assert!(err.to_string().contains("escapes the workspace"));
-
-        let err = tools
-            .ocr_with(
-                &binary,
-                OcrImageArgs {
-                    path: "/etc/hosts.png".into(),
-                    lang: None,
-                },
-            )
-            .expect_err("absolute path outside the workspace refused");
-        assert!(err.to_string().contains("escapes the workspace"));
+            ) {
+                assert!(!err.to_string().contains("escapes the workspace"), "{err}");
+            }
+        }
         let _ = std::fs::remove_dir_all(&ws);
     }
 

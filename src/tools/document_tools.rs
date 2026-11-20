@@ -1,10 +1,12 @@
-//! `read_document`: bounded text extraction from workspace documents.
+//! `read_document`: bounded text extraction from documents anywhere on the
+//! filesystem (full access; the workspace root is only the default for
+//! relative paths).
 //!
 //! Backed by the [`crate::extract`] registry, so the tool understands every
 //! format the index understands (pdf, docx, xlsx, ods, odt, rtf, csv and the
 //! text family) without carrying any parsing of its own. Confinement is
 //! identical to [`crate::tools::file_tools`]: a workspace-relative path is
-//! resolved against the workspace root and anything that escapes is refused.
+//! resolved against the workspace root; absolute paths are taken as given.
 
 use crate::extract::{ExtractionLimits, ExtractorRegistry};
 use crate::tools::file_tools::resolve_within;
@@ -55,19 +57,15 @@ impl DocumentTools {
         }
     }
 
-    /// Resolves a user-supplied path and refuses anything outside the
-    /// workspace. Mirrors `FileTools::resolve`: absolute paths are taken as
-    /// given, relative paths join the root, then [`resolve_within`] must land
-    /// inside the root (canonicalised, so a symlinked root alias still matches).
+    /// Resolves a user-supplied path with full filesystem access: absolute
+    /// paths are taken as given, relative paths join the root.
     fn resolve(&self, path: &str) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
         let joined = if Path::new(path).is_absolute() {
             PathBuf::from(path)
         } else {
             self.root.join(path)
         };
-        resolve_within(&self.root, &joined).ok_or_else(|| -> Box<dyn Error + Send + Sync> {
-            "refused: path escapes the workspace".into()
-        })
+        Ok(resolve_within(&joined))
     }
 
     /// Detects the format and extracts bounded text from one document.
@@ -167,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_paths_that_escape_the_workspace() {
+    fn reads_paths_outside_the_workspace() {
         let ws = temp_workspace("escape");
         let outside =
             std::env::temp_dir().join(format!("nanomite-doc-outside-{}.txt", std::process::id()));
@@ -175,19 +173,22 @@ mod tests {
 
         let tools = DocumentTools::new(ws.clone(), 200_000);
 
+        // Full access: an absolute path outside the workspace reads normally.
+        let doc = tools
+            .read_document(ReadDocumentArgs {
+                path: outside.display().to_string(),
+            })
+            .expect("full access: outside document reads");
+        assert!(doc.text.contains("secret"), "doc text: {}", doc.text);
+
+        // A relative escape still resolves (to a missing file → clean
+        // not-found error), never a workspace refusal.
         let err = tools
             .read_document(ReadDocumentArgs {
                 path: "../elsewhere.txt".into(),
             })
-            .expect_err("relative escape refused");
-        assert!(err.to_string().contains("escapes the workspace"));
-
-        let err = tools
-            .read_document(ReadDocumentArgs {
-                path: outside.display().to_string(),
-            })
-            .expect_err("absolute path outside the workspace refused");
-        assert!(err.to_string().contains("escapes the workspace"));
+            .expect_err("missing file still fails");
+        assert!(!err.to_string().contains("escapes the workspace"), "{err}");
 
         let _ = fs::remove_dir_all(&ws);
         let _ = fs::remove_file(&outside);

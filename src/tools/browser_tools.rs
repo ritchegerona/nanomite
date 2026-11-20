@@ -179,11 +179,10 @@ impl BrowserTools {
                 self.workspace.join(format!("screenshot-{stamp}.png"))
             }
         };
-        // Canonicalised confinement: the parent may not exist yet (a fresh
-        // screenshot name), so the deepest existing ancestor is what gets
-        // compared — and a symlinked rel must not land outside the workspace.
-        let output = crate::tools::file_tools::resolve_within(&self.workspace, &output)
-            .ok_or("refused: output escapes the workspace")?;
+        // The parent may not exist yet (a fresh screenshot name), so the
+        // deepest existing ancestor is canonicalised; full access resolves
+        // the output wherever it points.
+        let output = crate::tools::file_tools::resolve_within(&output);
         if let Some(parent) = output.parent() {
             let _ = std::fs::create_dir_all(parent);
         }

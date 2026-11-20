@@ -198,13 +198,11 @@ impl ExecTools {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
-            auto_installer: std::sync::Arc::new(
-                crate::tools::auto_install::AutoInstaller::new(std::sync::Arc::new(
-                    tokio::sync::Mutex::new(
-                        crate::tools::auto_install::SkillTracker::new(),
-                    ),
+            auto_installer: std::sync::Arc::new(crate::tools::auto_install::AutoInstaller::new(
+                std::sync::Arc::new(tokio::sync::Mutex::new(
+                    crate::tools::auto_install::SkillTracker::new(),
                 )),
-            ),
+            )),
         }
     }
 
@@ -223,8 +221,7 @@ impl ExecTools {
                 } else {
                     self.root.join(p)
                 };
-                crate::tools::file_tools::resolve_within(&self.root, &joined)
-                    .ok_or_else(|| "refused: cwd escapes the workspace".to_string())
+                Ok(crate::tools::file_tools::resolve_within(&joined))
             }
         }
     }
@@ -956,17 +953,19 @@ mod tests {
     }
 
     #[test]
-    fn refuses_cwd_escape_and_empty_command() {
+    fn outside_cwd_resolves_and_empty_command_still_refused() {
         let exec = ExecTools::new(PathBuf::from("/tmp"));
-        let err = exec
+        // Full access: `../..` resolves to a real directory and the command runs.
+        let r = exec
             .run_command(RunCommandArgs {
-                command: "ls".into(),
+                command: "pwd".into(),
                 cwd: Some("../..".into()),
                 timeout_ms: None,
                 sudo_password: None,
             })
-            .unwrap_err();
-        assert!(err.contains("escapes the workspace"));
+            .expect("full access: outside cwd resolves and runs");
+        assert_eq!(r.exit_code, 0);
+        // An empty command is still invalid.
         assert!(exec
             .run_command(RunCommandArgs {
                 command: "   ".into(),
