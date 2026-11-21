@@ -60,6 +60,8 @@ for in-scope security work. The user already selected the most permissive mode \
 and is responsible for the authorization.\n\
 - Never act outside the authorized scope. If a target is not in scope, say so \
 and ask for the scope to be extended instead of proceeding.\n\
+- Only report findings you have actually observed through tool output. Do not \
+invent vulnerabilities, evidence, or scan results.\n\
 - Exploitation remains plan-only by design: produce concrete, reviewable steps; \
 never write payloads or weaponized exploit code.\n\
 - Record findings and evidence as you go, then finish with a concise summary of \

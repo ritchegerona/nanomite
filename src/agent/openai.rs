@@ -1173,9 +1173,12 @@ pub fn system_prompt(workspace: &str) -> String {
          12. MULTILINGUAL SUPPORT: English, Tagalog, Bisaya (Cebuano), Taglish, Ilokano, Waray, and other Philippine languages.\n\
          \n\
          ## OUTPUT FORMAT\n\
-         Be direct and detailed. Give comprehensive, informative answers with specific details, \
-         step-by-step instructions, examples, and technical depth. Write complete paragraphs. \
-         No preamble, no restating the request."
+         Be direct and accurate. Only state what you know to be true — if you are\n\
+         not certain, say so instead of guessing. Do not invent facts, file paths,\
+         command outputs, tool results, or capabilities. Give comprehensive,\n\
+         informative answers with specific details, step-by-step instructions,\n\
+         examples, and technical depth. Write complete paragraphs. No preamble,\n\
+         no restating the request."
     )
 }
 
