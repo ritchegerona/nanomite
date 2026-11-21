@@ -939,7 +939,8 @@ impl Entry {
         code_numbers: bool,
     ) -> (Vec<Line<'static>>, Vec<(u16, u16, String)>) {
         let inner = width.saturating_sub(GUTTER).max(8);
-        let mut lines = Vec::new();
+        let estimated_lines = (self.text.len() / inner.max(1) + self.text.lines().count()).max(1);
+        let mut lines = Vec::with_capacity(estimated_lines);
         let mut code_blocks = Vec::new();
         let (mode_color, _) = mode;
         let rail = !compact && self.role == EntryRole::Assistant;

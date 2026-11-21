@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 const MAX_BODY: usize = 512 * 1024;
 const MAX_CONTENT: usize = 24 * 1024;
@@ -73,12 +74,21 @@ pub struct IpLookupResult {
     pub source: String,
 }
 
+/// Shared HTTP client: connection pooling means repeated `web_fetch` /
+/// `web_search` / `ip_lookup` calls reuse TCP/TLS connections instead of
+/// paying a new handshake every time.
+static HTTP_CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+
 fn client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .user_agent(UA)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("http client: {e}"))
+    Ok(HTTP_CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .user_agent(UA)
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("http client build")
+        })
+        .clone())
 }
 
 /// Entity names are assembled from parts so nothing strips them in transit.

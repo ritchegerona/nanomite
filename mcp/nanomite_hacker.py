@@ -125,8 +125,10 @@ async def _call_tool_handler(ctx, params: CallToolRequestParams):
         conn = _open_readonly()
         try:
             rows = conn.execute(
-                "SELECT id, name, status, cidrs, domains, start, expiry "
-                "FROM assessments ORDER BY start DESC"
+                "SELECT a.id, a.name, a.status, a.started_at, a.expiry_at, "
+                "s.cidrs, s.domains FROM assessments a "
+                "LEFT JOIN assessment_scopes s ON s.assessment_id = a.id "
+                "ORDER BY a.started_at DESC"
             ).fetchall()
         finally:
             conn.close()
@@ -134,7 +136,8 @@ async def _call_tool_handler(ctx, params: CallToolRequestParams):
             return {"content": [{"type": "text", "text": "(no assessments)"}]}
         lines = [
             f"{r['id']} | {r['name']} | {r['status']} | "
-            f"start={r['start']} | expiry={r['expiry']}"
+            f"start={r['started_at']} | expiry={r['expiry_at']} | "
+            f"cidrs={r['cidrs'] or '-'} | domains={r['domains'] or '-'}"
             for r in rows
         ]
         return {"content": [{"type": "text", "text": "\n".join(lines)}]}

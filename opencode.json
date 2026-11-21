@@ -1,0 +1,41 @@
+{
+  "mcp": {
+    "servers": {
+      "nanomite-filesystem": {
+        "type": "local",
+        "command": [
+          "/Users/ritchegerona/nanomite/.venv/mcp/bin/python3",
+          "/Users/ritchegerona/nanomite/mcp/nanomite_filesystem.py"
+        ]
+      },
+      "nanomite-build": {
+        "type": "local",
+        "command": [
+          "/Users/ritchegerona/nanomite/.venv/mcp/bin/python3",
+          "/Users/ritchegerona/nanomite/mcp/nanomite_build.py"
+        ]
+      },
+      "nanomite-memory": {
+        "type": "local",
+        "command": [
+          "/Users/ritchegerona/nanomite/.venv/mcp/bin/python3",
+          "/Users/ritchegerona/nanomite/mcp/nanomite_memory.py"
+        ]
+      },
+      "nanomite-hacker": {
+        "type": "local",
+        "command": [
+          "/Users/ritchegerona/nanomite/.venv/mcp/bin/python3",
+          "/Users/ritchegerona/nanomite/mcp/nanomite_hacker.py"
+        ]
+      },
+      "nanomite-catalog": {
+        "type": "local",
+        "command": [
+          "/Users/ritchegerona/nanomite/.venv/mcp/bin/python3",
+          "/Users/ritchegerona/nanomite/mcp/nanomite_catalog.py"
+        ]
+      }
+    }
+  }
+}

@@ -134,8 +134,8 @@ impl FileTools {
     ) -> Result<ListFilesResult, Box<dyn Error + Send + Sync>> {
         let full_path = self.resolve(args.path.as_deref())?;
 
-        let mut files = Vec::new();
-        let mut directories = Vec::new();
+        let mut files = Vec::with_capacity(64);
+        let mut directories = Vec::with_capacity(16);
         let mut truncated = false;
 
         for entry in fs::read_dir(&full_path)? {
@@ -196,7 +196,18 @@ impl FileTools {
         let trimmed = offset + bytes.len() < file_len;
 
         let content = String::from_utf8_lossy(&bytes).into_owned();
-        let lines = content.lines().count();
+        // Count lines from raw bytes in one pass instead of iterating the
+        // decoded string again. `\r\n` and `\n` both contain exactly one `\n`.
+        let lines = if bytes.is_empty() {
+            0
+        } else {
+            let nl = bytes.iter().filter(|b| **b == b'\n').count();
+            if bytes[bytes.len() - 1] == b'\n' {
+                nl
+            } else {
+                nl + 1
+            }
+        };
 
         Ok(ReadFileResult {
             content,
@@ -329,24 +340,40 @@ impl FileTools {
         args: EditFileArgs,
     ) -> Result<EditFileResult, Box<dyn Error + Send + Sync>> {
         let full_path = self.resolve(Some(&args.path))?;
-        let mut content = fs::read_to_string(&full_path)?;
+        let content = fs::read_to_string(&full_path)?;
 
         let mut replacements_made = 0;
-        if args.replace_all {
-            // Replace all occurrences
-            while let Some(pos) = content.find(&args.old_string) {
-                content.replace_range(pos..pos + args.old_string.len(), &args.new_string);
-                replacements_made += 1;
-            }
-        } else {
-            // Replace only first occurrence
-            if let Some(pos) = content.find(&args.old_string) {
-                content.replace_range(pos..pos + args.old_string.len(), &args.new_string);
-                replacements_made = 1;
-            }
-        }
+        let old = args.old_string.as_bytes();
+        let new = args.new_string.as_bytes();
 
-        fs::write(&full_path, content)?;
+        if args.replace_all {
+            // Single pass: walk the content once, copying unchanged runs and
+            // inserting replacements. Avoids O(n*m) shifting from repeated
+            // `replace_range` calls.
+            let mut out: Vec<u8> = Vec::with_capacity(content.len());
+            let mut start = 0usize;
+            let mut pos = 0usize;
+            while pos + old.len() <= content.len() {
+                if content.as_bytes()[pos..pos + old.len()] == *old {
+                    out.extend_from_slice(&content.as_bytes()[start..pos]);
+                    out.extend_from_slice(new);
+                    replacements_made += 1;
+                    pos += old.len();
+                    start = pos;
+                } else {
+                    pos += 1;
+                }
+            }
+            out.extend_from_slice(&content.as_bytes()[start..]);
+            fs::write(&full_path, &out)?;
+        } else if let Some(pos) = content.find(&args.old_string) {
+            let mut out: Vec<u8> = Vec::with_capacity(content.len());
+            out.extend_from_slice(&content.as_bytes()[..pos]);
+            out.extend_from_slice(new);
+            out.extend_from_slice(&content.as_bytes()[pos + old.len()..]);
+            fs::write(&full_path, &out)?;
+            replacements_made = 1;
+        }
 
         Ok(EditFileResult { replacements_made })
     }

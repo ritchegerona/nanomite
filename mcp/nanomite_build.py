@@ -85,12 +85,12 @@ async def _call_tool_handler(ctx, params: CallToolRequestParams):
         )
     except subprocess.TimeoutExpired:
         return {
-            "content": [{"type": "text", "text": f"command timed out: {' '.join(cmd)"}],
+            "content": [{"type": "text", "text": "command timed out: " + " ".join(cmd)}],
             "isError": True,
         }
     except FileNotFoundError:
         return {
-            "content": [{"type": "text", "text": f"binary not found: {cmd[0]}"}],
+            "content": [{"type": "text", "text": "binary not found: " + cmd[0]}],
             "isError": True,
         }
 

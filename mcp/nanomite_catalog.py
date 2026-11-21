@@ -21,8 +21,8 @@ from mcp.types import (
 CATALOG_PATH = Path("/Users/ritchegerona/nanomite/src/tools/catalog.rs")
 
 _TOOL_RE = re.compile(
-    r'ToolSpec\s*\{\s*name:\s*"([^"]+)",\s*description:\s*"([^"]+)",\s*category:\s*(\w+)::(\w+),',
-    re.MULTILINE,
+    r'name:\s*"([^"]+)",\s*description:\s*"([^"]+)",\s*category:\s*(\w+)',
+    re.MULTILINE | re.DOTALL,
 )
 
 _CATEGORY_MAP = {
@@ -45,7 +45,7 @@ def _load_catalog():
     for m in _TOOL_RE.finditer(text):
         name = m.group(1)
         description = m.group(2)
-        category = _CATEGORY_MAP.get(m.group(4), "other")
+        category = _CATEGORY_MAP.get(m.group(3), "other")
         tools.append(
             {
                 "name": name,
