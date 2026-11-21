@@ -2764,16 +2764,6 @@ impl App {
         confirmer: Option<Arc<dyn crate::agent::policy::Confirmer>>,
         tool_policy: crate::agent::policy::ToolPolicy,
     ) -> AgentRuntime {
-        // Auto-enable HACKER MODE when using Brent 1.0 (local security model):
-        // the user selected the brent preset for authorized security research,
-        // so the model must not refuse penetration testing, vuln scanning,
-        // wireless auditing, or password cracking tasks.
-        let tool_policy = if cfg.preset == "brent" {
-            crate::agent::policy::ToolPolicy::Hacker
-        } else {
-            tool_policy
-        };
-
         let mut runtime = AgentRuntime::new(
             provider,
             cwd.to_path_buf(),

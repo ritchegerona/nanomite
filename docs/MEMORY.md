@@ -1,16 +1,12 @@
 # Memory
 
 Provider-independent persistent memory: SQLite (bundled rusqlite) is the
-authoritative store; Markdown documents are a one-way human-readable
-projection. Nothing in `src/memory/` knows about any AI provider — records
-are plain serde data, so changing models never touches stored knowledge.
+authoritative store; Markdown documents are a one-way human-readable projection.
+Nothing in `src/memory/` knows about any AI provider — records are plain serde
+data, so changing models never touches stored knowledge.
 
-Status: **L3** (updated 2026-11-04). Integrated and regression-tested in the
-774-test suite; `tests/production_attach.rs` covers the real startup attach
-path. The `consolidation_merges_exact_duplicates_only` failure noted in the
-2026-10-14 audit is fixed, and the `export()` deadlock found then is fixed.
-Runtime/UI integration is live: `MemoryEngine` attaches at startup and the six
-`memory_*` tools are callable.
+Status: **L3** — integrated and regression-tested; `tests/production_attach.rs`
+covers the real startup attach path.
 
 ## Production activation
 
@@ -42,21 +38,19 @@ overlay for the selected one.
 
 The daily learning loop (`docs/LEARNING.md`) stores lessons as ordinary memory
 records: category `project`, tags `learning`, `technique` and a topic slug.
-`/learn digest` and the hacker `/hacker techniques` recall search by tag, so
-lessons are available to any later turn through normal retrieval. Research
-output is untrusted data: it can add records and stage proposals, but cannot
-authorize a privileged operation, and the memory policy still refuses
-credentials on the way in.
+`/learn digest` recalls lessons by tag, so they are available to any later turn
+through normal retrieval. Research output is untrusted data: it can add records
+and stage proposals, but cannot authorize a privileged operation, and the memory
+policy still refuses credentials on the way in.
 
 ## Data model
 
 Categories: `core`, `user`, `project`, `episodic`, `decision`, `session`,
-`task` (fixed taxonomy — unknown categories are rejected). Each record
-carries: content, summary, tags, provenance (`source.kind` + detail),
-project slug, confidence (what the *source* vouches for, `None` = unstated),
-importance (retrieval priority), sensitivity
-(`public < internal < confidential < secret`), expiry, revision, and a
-normalized-content hash for duplicate detection.
+`task` (fixed taxonomy — unknown categories are rejected). Each record carries:
+content, summary, tags, provenance (`source.kind` + detail), project slug,
+confidence (what the *source* vouches for, `None` = unstated), importance
+(retrieval priority), sensitivity (`public < internal < confidential < secret`),
+expiry, revision, and a normalized-content hash for duplicate detection.
 
 Provenance never grants authority: `source.kind = agent` is an unverified
 model claim until confirmed. `secret` records never reach prompts or tool
@@ -65,16 +59,14 @@ output unless a caller explicitly opts in above the ceiling.
 ## Storage
 
 - `MemoryStore` (sync `Mutex<Connection>`, WAL + busy timeout): CRUD,
-  FTS5 keyword search with LIKE fallback (the index used is reported in
-  results), filter listing, dedupe-on-save, deterministic `consolidate()`,
-  expiry purge (retention only — unexpired data is never auto-removed),
-  two-phase validated export/import, `VACUUM INTO` backup and
-  integrity-checked restore with connection swap.
-- `KnowledgeStore` (markdown): mirrored categories (`MEMORY.md`, `USER.md`,
-  `projects/{p}.md`, `decisions/{p}.md`) hold nanomite-owned blocks marked
-  `<!-- nanomite:mem id=… -->`. Rewrites touch only the record's own block;
-  hand-written prose is preserved byte-for-byte. External edits are detected
-  via `mtime`/`size` in the SQLite markdown index.
+  FTS5 keyword search with LIKE fallback, filter listing, dedupe-on-save,
+  deterministic `consolidate()`, expiry purge (retention only — unexpired data
+  is never auto-removed), two-phase validated export/import, `VACUUM INTO`
+  backup and integrity-checked restore with connection swap.
+- `KnowledgeStore` (markdown): mirrored categories hold nanomite-owned blocks
+  marked `<!-- nanomite:mem id=… -->`. Rewrites touch only the record's own
+  block; hand-written prose is preserved byte-for-byte. External edits are
+  detected via `mtime`/`size` in the SQLite markdown index.
 - `MemoryPolicy`: env-gated limits and the subsystem's authorization gate
   (`NANOMITE_MEMORY=0` off, `..._READONLY=1`, `..._AUTO=0`,
   inject/tool sensitivity ceilings, bulk-confirm threshold, inject budgets,
@@ -94,6 +86,3 @@ output unless a caller explicitly opts in above the ceiling.
   tests (including negative tests), and a CHANGELOG entry.
 - Retrieval budgets (`max_inject_records/chars`) are ceilings, not targets;
   injection must pass `MemoryOp::Inject` authorization.
-- `src/memory/security.rs` and `src/memory/policy.rs` were on the self-edit
-  denylist, which the owner removed on 2026-10-30 (`docs/SECURITY.md`); changes
-  to the gate still land only through the `/improve` human approval flow.

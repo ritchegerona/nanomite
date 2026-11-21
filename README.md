@@ -1,10 +1,20 @@
 # ⬡ nanomite
 
-**Nanomite is a general purpose tool.** Intelligence Without Boundaries. Runs in your terminal, talks to any
-OpenAI-compatible model, and works your workspace with real tools: files,
-shell, SSH and the web.
+**Nanomite is a general-purpose terminal AI coding agent.** Intelligence Without Boundaries. Runs in your terminal, talks to any OpenAI-compatible model, and works your workspace with real tools: files, shell, SSH, and the web.
 
-Built with `ratatui` + `crossterm` + `tokio` in pure Rust.
+Built with `ratatui` + `crossterm` + `tokio` in pure Rust. Single crate, edition 2021.
+
+## Purpose
+
+A private, local-first coding agent that lives in your terminal and operates directly on your workspace. No vendor cloud, no telemetry, no account — your code, memory, and session history stay on your disk, and every tool call is visible and under your control.
+
+## Mission
+
+Give you a single Rust binary that can talk to any OpenAI-compatible model, execute real tools against your files, and remain fully transparent: every thought token, tool call, and byte budget is visible in the UI, and nothing is applied to your source without your explicit approval.
+
+## Vision
+
+"Intelligence Without Boundaries" — local AI that scales from a single-file fix to a multi-session refactor, with persistent memory, a human-in-the-loop self-improvement gate, and offline-first operation so you are never locked into a provider or a platform.
 
 ```
  ⬡ NANOMITE [umbrella] › ~/dev/nanomite        medium ›  🧠 [██░░░░░░] 42.3k/200.0k · 21%
@@ -103,15 +113,14 @@ pages, and `nanomite update` to move to the next version in one command.
 - **Agent board** — `/panel <topic>` convenes four personas in parallel
   (Architect, Engineer, Scientist, Critic) plus a chair that synthesizes their
   answers, streamed live into an overlay
-- **HACKER MODE** (`/hacker`, off by default) — an authorized cybersecurity
-  operations environment, separate from the tool-permission ladder: a typed
+- **HACKER MODE** (`/hacker`, off by default) — an authorized security
+  operations environment, separate from the tool-permission ladder: an
   assessment scope, an independent authorization gate, and a secret-scrubbed
   audit log. Bounded recon/network/web/vuln operations run through one
-  coordinator, installed Kali assessment tools (`nmap`, `nikto`, `nuclei`, …)
-  run from fixed argv templates, findings persist to SQLite with hashed
-  evidence and triage, named assessments can be listed/resumed/completed,
-  evidence digests re-verified, and a `reporting` module summarizes or exports
-  (markdown/JSON/SARIF). Exploitation is authorized-only — the crate plans, and
+  coordinator, installed assessment tools run from fixed argv templates,
+  findings persist to SQLite with hashed evidence and triage, named assessments
+  can be listed/resumed/completed, evidence digests re-verified, and a
+  `reporting` module summarizes or exports (markdown/JSON/SARIF).
   curated non-destructive proof execution is gated by scope + password in the
   operator tools (no payloads, shells, persistence or destructive actions)
 - **Follow-up suggestions** — when a turn finishes, a tiny side-call asks the
@@ -172,7 +181,7 @@ pages, and `nanomite update` to move to the next version in one command.
 | **Linux / macOS** | `curl -fsSL https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.sh \| bash` |
 | **Windows (PowerShell)** | `irm https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.ps1 \| iex` |
 
-These scripts install Rust (via rustup), system build dependencies (gcc, pkg-config, openssl, Chromium/Edge), Python toolkit dependencies for the cracking engine, build the release binary from `master`, and place it in `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.cargo\bin` (Windows).
+These scripts install Rust (via rustup), system build dependencies (gcc, pkg-config, openssl, Chromium/Edge), build the release binary from `master`, and place it in `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.cargo\bin` (Windows).
 
 See [docs/INSTALLATION.md](docs/INSTALLATION.md) for the full platform-specific guide.
 
@@ -180,7 +189,7 @@ See [docs/INSTALLATION.md](docs/INSTALLATION.md) for the full platform-specific 
 
 ### Manual build from source
 
-Prerequisites: [Rust](https://rustup.rs) 1.75+ (via `rustup`), Python 3.9+ (for the cracking toolkit), plus platform build tools.
+Prerequisites: [Rust](https://rustup.rs) 1.75+ (via `rustup`), plus platform build tools.
 
 **Linux:**
 ```bash
@@ -228,45 +237,14 @@ Notes for Windows:
 - Windows support is functional but newer than Linux — report anything that
   misbehaves
 
-### Python toolkit (cracking engine)
-
-The Python cracking toolkit lives under `src/nanomite/cracking/` and requires:
-
-```bash
-pip install numpy scikit-learn onnxruntime llama-cpp-python pytest mypy ruff
-```
-
-It is optional — nanomite runs without it — but HACKER MODE password-audit
-operations need it.
-
 ### Operator tools (tools/)
 
 Standalone Python tools used alongside nanomite live under
-`tools/custom/<category>/` — `inventory`, `recon`, `web`, `cracking`,
-`exploitation`, `wireless`, `reporting`. They are not part of the agent tool
-catalog and are invoked through `run_command`/`ssh_run` or directly. See
+`tools/custom/<category>/` — `inventory`, `recon`, `web`, `wireless`,
+`reporting`. They are not part of the agent tool catalog and are invoked
+through `run_command`/`ssh_run` or directly. See
 [`tools/README.md`](tools/README.md) for the catalog and
 [`tools/manifest.json`](tools/manifest.json) for the machine-readable index.
-The `exploitation/` tools are authorized-only and require an explicit scope file
-plus the local authorization password (set once with
-`python3 tools/custom/exploitation/authorize.py set`). Execution is limited to
-curated, non-destructive proof checks; no payloads, shells or persistence.
-
-### One-line install (recommended)
-
-**Linux / macOS:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.sh | bash
-```
-
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/ritchegerona/nanomite/master/install.ps1 | iex
-```
-
-These scripts install everything: Rust toolchain, system build dependencies (gcc/pkg-config/openssl/Chromium), build the release binary from source, and place it in `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.cargo\bin` (Windows).
-
----
 
 ### Alternative: cargo install
 

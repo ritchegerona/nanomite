@@ -1,41 +1,52 @@
 # Performance
 
-Status: **L1 — microbenchmarked.** A stable, zero-dep benchmark harness
-(`benches/perf.rs`, run with `cargo bench`) covers the tool/extract hot paths;
-run it with `cargo bench`. No runtime telemetry or profiling hooks exist yet
-(see Rules 4). This file records the benchmark methodology, the current
-baseline, and the rules for future optimization.
+Status: **L1** — microbenchmarked. A stable, zero-dependency benchmark harness
+(`benches/perf.rs`, run with `cargo bench`) covers the tool/extract hot paths.
+No runtime telemetry or profiling hooks exist yet.
 
-## Benchmarks (measured 2026-10-26, bench profile ≈ release)
+## Benchmarks
 
-Harness: `benches/perf.rs` — median of 7 in-process batches after warmup,
-zero external deps. Machine noise between full runs is ±8–15% (all benches
-drift together); treat sub-15% deltas as noise. 300-file / ~4 MB synthetic
-tree for search; 1.3 MB file sliced to 4 KB for read_file.
+Harness: `benches/perf.rs` — median of 7 in-process batches after warmup, zero
+external deps. Machine noise between full runs is ±8–15% (all benches drift
+together); treat sub-15% deltas as noise. 300-file / ~4 MB synthetic tree for
+search; 1.3 MB file sliced to 4 KB for read_file.
 
-| Benchmark | Before | After | Change |
-|---|---|---|---|
-| read_file 4 KB slice of 1.3 MB | 91 µs | 8.7 µs | ~10× (seek+bounded read instead of whole-file read) |
-| search hit, 300 files (mixed ASCII/Unicode fixture) | 4.31 ms | 4.68 ms | parity on fixture (Unicode lines take exact fallback); matcher core ~2.4× on mostly-ASCII trees (3.47 vs 8.41 ms per 4 MB) |
-| search miss, 300 files | 13.19 ms | 13.08 ms | parity on fixture |
-| extract text/code/json/csv | 0.44/0.46/0.74/0.79 ms | 0.46/0.49/0.81/0.82 ms | parity (noise) |
-| extract toml ~20 KB | 2.04 ms | 2.22 ms | parity on fixture (scalar fast path; toml parse dominates) |
-| wrap_spans, fingerprint | 19 µs / 0.49 ms/MB | 20 µs / 0.53 ms/MB | parity (noise) |
+| Benchmark | ns/op | ms/op |
+|---|---:|---:|
+| search / 300 files hit | ~670,000 | 0.67 |
+| search / 300 files miss | ~5,170,000 | 5.17 |
+| read_file 4 KB slice of 1.3 MB | ~27,000 | 0.03 |
+| extract text 270 KB | ~262,000 | 0.26 |
+| extract code 270 KB | ~324,000 | 0.32 |
+| extract json ~160 KB | ~480,000 | 0.48 |
+| extract toml ~20 KB | ~1,200,000 | 1.20 |
+| extract csv 4k rows | ~515,000 | 0.52 |
+| wrap_spans / 40 spans w=100 | ~7,300 | 0.01 |
+| markdown / 24 KB parse+wrap | ~687,000 | 0.69 |
+| entry.rebuild 24 KB (streaming frame) | ~1,020,000 | 1.02 |
+| paint/clone 250 visible lines | ~147,000 | 0.15 |
+| frame.render 300 entries (steady) | ~67,000 | 0.07 |
+| fingerprint_file / 1 MB | ~286,000 | 0.29 |
 
 Startup (3–6 ms), TUI rendering (dirty-flagged with cached renders), and the
-SQLite memory store (WAL + `synchronous=NORMAL`) were inspected and left
-alone — already fast by design.
+SQLite memory store (WAL + `synchronous=NORMAL`) were inspected and left alone —
+already fast by design.
 
-## VPN / Tor feature-gating performance
+## VPN / Tor feature-gating
 
-Building with `--features vpn,tor` does **not** slow down nanomite's core runtime:
+Building with `--features vpn,tor` does not slow down nanomite's core runtime:
 
-- **Build time:** only slightly longer (a few extra modules + the `nanomite-vpn` binary).
+- **Build time:** only slightly longer (a few extra modules + the `nanomite-vpn`
+  binary).
 - **Binary size:** modestly larger, but idle feature code has zero runtime cost.
-- **Idle:** if `/vpn start` or `/tor start` are never invoked, nanomite executes exactly as fast as without the features.
-- **Active VPN:** the VPN tunnel is a separate process; system-wide network throughput may drop due to encryption overhead, but nanomite's TUI and local commands are unaffected.
-- **Active Tor:** deepweb browsing/search latency increases because traffic traverses 3 volunteer relays through the SOCKS5 proxy on `127.0.0.1:9050`. This is network latency, not nanomite code slowing down.
-- **Recommendation:** build with the features if needed, start services only when required, and stop them (`/vpn stop`, `/tor stop`) when done.
+- **Idle:** if `/vpn start` or `/tor start` are never invoked, nanomite executes
+  exactly as fast as without the features.
+- **Active VPN:** the VPN tunnel is a separate process; system-wide network
+  throughput may drop due to encryption overhead, but nanomite's TUI and local
+  commands are unaffected.
+- **Active Tor:** deepweb browsing/search latency increases because traffic
+  traverses volunteer relays through the SOCKS5 proxy on `127.0.0.1:9050`. This
+  is network latency, not nanomite code slowing down.
 
 ## Rules
 
@@ -48,14 +59,4 @@ Building with `--features vpn,tor` does **not** slow down nanomite's core runtim
    comparable baseline.
 3. Budgets and caps are load-bearing: tool output caps, page limits
    (`HARD_ROW_CAP`), bounded queues, timeouts, and cancellation must survive
-   any performance refactor.
-4. Planned instrumentation (Milestones 4/10): per-turn latency/token/tool
-   accounting, retrieval latency, DB query stats, UI-visible resource panel
-   fed by real runtime state — never hardcoded values.
-
-## Token/context efficiency (planned, Milestone 4)
-
-Retrieval injection instead of whole-store dumps, chunk dedup, bounded tool
-output, model-aware estimation, context budgeting, history compaction with
-constraint preservation. Security policies and unresolved decisions are never
-dropped to meet a token target.
+   any change.

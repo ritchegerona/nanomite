@@ -1,9 +1,9 @@
 # Extending nanomite
 
-Three extension points, all human-configured, none model-authorizable: hooks,
-external tools, and the built-in tool library. Status: **L3**.
+Three extension points, all human-configured and none model-authorizable:
+hooks, external tools, and the built-in tool library. Status: **L3**.
 
-## Hooks (`src/hooks.rs`)
+## Hooks
 
 Lifecycle scripts run at fixed points. Everything is advisory except
 deny-hooks, which are the one guardrail with teeth.
@@ -28,7 +28,7 @@ allowing everything else.
 Hooks never block the turn except a deny gate; post hooks run detached, and a
 failing hook is advisory — the tool call still happened.
 
-## External tools (`src/tools/external_tools.rs`)
+## External tools
 
 User-defined tools from TOML manifests.
 
@@ -38,26 +38,18 @@ User-defined tools from TOML manifests.
   (OpenAI function schema; optional), `timeout_ms` (default 60s, max 120s).
 - **Contract**: arguments arrive as JSON on **stdin** — no `$arg` interpolation
   exists, so argument values can never become shell syntax. stdout returns to
-  the model (16k cap); the process runs in its own group and is killed whole
-  on timeout.
-- **Validation at load**: bad manifests are skipped with recorded errors and
-  never break the other tools. Required/unknown argument keys are checked
-  against the schema at call time.
-- **Risk**: classified `Safe` — the schema and `/tools` gate apply like any
-  built-in; the command itself runs with your permissions (same boundary as
-  `run_command`, `docs/SECURITY.md`).
+  the model as the tool result.
+- **Validation**: schema validation at load time; required/unknown arg keys
+  checked at call time.
+- **Dispatch**: through the same gate as built-ins (disabled filter, policy,
+  hooks). Listed in `/tools` under "external", toggleable.
 
-Schemas are appended to what the model sees; `/tools` lists them under
-`external` and they honor the enable/disable toggle.
+## Tool library
 
-## Built-in tool library
+`src/tools/catalog.rs` holds the built-in inventory as
+`ToolSpec { name, description, category }`. Tests pin it to the exposed schema
+list exactly. To add a built-in tool, add it to `catalog.rs` and the schema
+list, implement its dispatch arm in `runtime.rs::run_tool`, and add tests.
 
-`/tools` toggles any of the 33 built-ins; disabled tools vanish from the
-schema list *and* are refused at dispatch (`docs/TOOLS.md`). External tools
-honor the same list.
-
-## What extension points deliberately do NOT exist
-
-Model-authorizable tool creation, network-loaded manifests, auto-updating
-hooks — all refused by design: the model must never be able to grow its own
-permissions (`docs/SECURITY.md`).
+Never add an agent-callable apply path for self-modification — the `/improve`
+human-approval gate is the only route.

@@ -29,8 +29,11 @@ use crate::tools::auto_install::{AutoInstaller, SkillTracker};
 /// Default port for the local llama-server endpoint.
 pub const DEFAULT_LLAMA_PORT: u16 = 8080;
 
-/// Shared async HTTP client for model downloads and health checks.
+/// Shared async HTTP client for model downloads (long timeout for large GGUF files).
 static ASYNC_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// Shared async HTTP client for health checks (short timeout, fast poll loop).
+static ASYNC_HTTP_CLIENT_HEALTH: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// A locally loaded GGUF model served by a llama-server instance.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -298,7 +301,7 @@ impl LocalModelManager {
 
         // Health-check: poll /health until the server responds.
         let deadline = Instant::now() + Duration::from_secs(120);
-        let client = ASYNC_HTTP_CLIENT
+        let client = ASYNC_HTTP_CLIENT_HEALTH
             .get_or_init(|| {
                 reqwest::Client::builder()
                     .timeout(Duration::from_secs(5))

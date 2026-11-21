@@ -16,13 +16,10 @@ exclude = [
     "pack/",
     "report/",
     "src/nanomite.egg-info/",
-    "brute_pin.py",
     "comparison_report.json",
     "inventory.json",
     "inventory_nonroot.json",
     "msr_hash.txt",
-    "custom_wordlist.txt",
-    "extensive_wordlist.txt",
 ]
 
 [dependencies]

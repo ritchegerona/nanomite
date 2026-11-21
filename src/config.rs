@@ -237,10 +237,10 @@ pub const PRESETS: &[ProviderPreset] = &[
         offline: true,
     },
     ProviderPreset {
-        id: "brent",
-        label: "Brent 1.0 (nanomite-ai)",
+        id: "local",
+        label: "Nanomite Local",
         base_url: "http://localhost:8080/v1",
-        default_model: "/Users/ritchegerona/nanomite-ai/artifacts/brent-1-0-4b-base",
+        default_model: "",
         key_env: None,
         offline: true,
     },
@@ -469,11 +469,6 @@ pub fn model_context_limit(model: &str) -> usize {
     // recursive/flint open-weight model, distinct from OpenCode's `flint-40b`.
     if m.contains("flint-v1.0") || m.contains("xing4.0") || m.contains("lfm-2.5") {
         return 262_144;
-    }
-    // Brent 1.0 (LFM2.5-1.2B fine-tune). The mlx_lm server exposes the model as
-    // its full filesystem path, so match on the path component.
-    if m.contains("brent-1-0") || m.contains("lfm2") {
-        return 128_000; // max_position_embeddings in brent-1-0-4b-base/config.json
     }
     // Test/scripted models
     if m.contains("scripted-model") {

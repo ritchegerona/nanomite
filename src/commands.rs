@@ -95,8 +95,9 @@ impl Command {
             }
             Memory | Favorites => "memory & knowledge",
             Tools | Image | Ocr => "tools & files",
-            Themes | Hud | Settings | Density | CodeNumbers | Details | Thinking
-            | Focus => "appearance & view",
+            Themes | Hud | Settings | Density | CodeNumbers | Details | Thinking | Focus => {
+                "appearance & view"
+            }
             Worktrees | Update => "other",
             _ => "agent & automation",
         }

@@ -1734,6 +1734,10 @@ fn strip_markers(s: &str) -> String {
 }
 
 /// Greedy word wrap that also hard-splits tokens wider than the viewport.
+///
+/// Tracks `word_width` incrementally via `WidthState` instead of calling
+/// `width(&word)` on every character — the old version recomputed the whole
+/// word's display width from scratch per char, making wrapping O(n²).
 pub fn wrap_spans(spans: Vec<Span<'static>>, max_width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut current: Vec<Span<'static>> = Vec::new();
@@ -1748,16 +1752,19 @@ pub fn wrap_spans(spans: Vec<Span<'static>>, max_width: usize) -> Vec<Line<'stat
     for span in spans {
         let style = span.style;
         let mut word = String::new();
+        let mut word_width = 0usize;
+        let mut wstate = WidthState::default();
         for ch in span.content.chars() {
             if ch == ' ' {
-                let w = width(&word);
-                if w > 0 {
-                    if used + w > max_width && used > 0 {
+                if word_width > 0 {
+                    if used + word_width > max_width && used > 0 {
                         push_line(&mut lines, std::mem::take(&mut current));
                         used = 0;
                     }
                     current.push(Span::styled(std::mem::take(&mut word), style));
-                    used += w;
+                    used += word_width;
+                    word_width = 0;
+                    wstate = WidthState::default();
                 }
                 if used < max_width {
                     current.push(Span::styled(" ", style));
@@ -1768,8 +1775,10 @@ pub fn wrap_spans(spans: Vec<Span<'static>>, max_width: usize) -> Vec<Line<'stat
                 }
                 continue;
             }
+            let step = wstate.feed(ch);
             word.push(ch);
-            if width(&word) >= max_width {
+            word_width += step.cells;
+            if word_width >= max_width {
                 let chunk = std::mem::take(&mut word);
                 if !current.is_empty() {
                     push_line(&mut lines, std::mem::take(&mut current));
@@ -1777,16 +1786,17 @@ pub fn wrap_spans(spans: Vec<Span<'static>>, max_width: usize) -> Vec<Line<'stat
                 // Oversized tokens get their own row so nothing is hidden.
                 push_line(&mut lines, vec![Span::styled(chunk, style)]);
                 used = 0;
+                word_width = 0;
+                wstate = WidthState::default();
             }
         }
         if !word.is_empty() {
-            let w = width(&word);
-            if used + w > max_width && used > 0 {
+            if used + word_width > max_width && used > 0 {
                 push_line(&mut lines, std::mem::take(&mut current));
                 used = 0;
             }
             current.push(Span::styled(word, style));
-            used += w;
+            used += word_width;
         }
     }
     push_line(&mut lines, current);

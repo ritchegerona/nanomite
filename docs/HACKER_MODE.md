@@ -1,51 +1,31 @@
 # HACKER MODE
 
-> Status: **Phase 4+ — advanced capability layer.** HACKER MODE is a
-> cybersecurity operations *environment*, separate from `ToolPolicy::Hacker`.
-> It adds a **typestate capability-session** (`Discovered → Authorized →
-> Active → Closed`), an unforgeable `OpCapability` token, an independent
-> authorization gate, an assessment scope, an append-only audit trail, and a
-> module registry on top of the existing nanomite agent runtime.
->
-> Exploitation is **authorized-only**: the crate plans validation, and proof
-> execution is available only through the password+scope-gated operator runner
-> (`tools/custom/exploitation/exploit_runner.py`). No payloads, shells,
-> persistence or destructive actions are part of the crate.
-> HACKER MODE is **disabled by default**.
+Status: **Phase 4+ — advanced capability layer.** HACKER MODE is a cybersecurity
+operations environment, separate from `ToolPolicy::Hacker`. It adds a typestate
+capability-session state machine, an assessment scope, an independent
+authorization gate, an append-only audit trail, and a module registry on top of
+the nanomite agent runtime. Disabled by default.
 
 ## Entering it
 
 ```
-/hacker            # activate and open the workspace (also alt+shift+h)
-/hacker status     # one-line status
-/hacker modules    # module catalogue (also the workspace overlay)
-/hacker scope      # configured authorized scope
-/hacker audit      # audit log status
-/hacker help       # list executable operations
+/hacker              # activate and open the workspace overlay
+/hacker status       # one-line status
+/hacker modules      # module catalogue
+/hacker scope        # configured authorized scope
+/hacker audit        # audit log status
 /hacker run <module> <op> [target] [arg]
-/hacker kali list  # installed Kali assessment tools
-/hacker kali <tool> <target>
-/hacker findings   # persisted findings (also: show <id>, verify <id>)
-/hacker report [md|json|sarif]   # export to the hacker dir
+/hacker kali <tool> <target>   # curated Kali assessment tools (fixed argv)
+/hacker findings     # persisted findings (list / show / verify / triage)
+/hacker report [md\|json\|sarif]   # export to the hacker data directory
 /hacker assessment list          # persisted assessments
 /hacker assessment use <id>      # resume one (stored scope + window)
 /hacker assessment complete [<id>]
 /hacker exit       # leave, restore the configured tool policy
 ```
 
-Convenience aliases for the common operations:
-
-```
-/hacker recon <host>                 # recon/dns
-/hacker ports <host>                 # network/ports
-/hacker web <url|host>               # web/headers
-/hacker vuln <component> <version>   # vuln/correlate
-/hacker plan <target> <weakness>     # exploitation/plan (guidance only)
-```
-
-Activation requires `hacker_enabled = true` and a non-empty `hacker_scope`.
-Without either, `/hacker` opens with a hint and activates anyway — HACKER MODE
-never refuses to activate.
+Activation requires `hacker_enabled = true` and a non-empty `hacker_scope`. Both
+must be configured before any operation can run.
 
 ## Configuration (`[hacker]` in `~/.config/nanomite/config.toml`)
 
@@ -69,232 +49,68 @@ Environment overrides (win over the file, per nanomite convention):
 - `NANOMITE_HACKER_AUTO_APPROVE=0`
 - `NANOMITE_HACKER_AUDIT=0`
 - `NANOMITE_HACKER_STORE=0` — disable findings persistence
-- `NANOMITE_HACKER_DIR=/path` — audit + `findings.db` + `vulndb.json` location
+- `NANOMITE_HACKER_DIR=/path` — audit + findings store location
 - `NANOMITE_HACKER_VULNDB=/path/db.json` — vulnerability database for `vuln/correlate`
 
-Existing config files load unchanged: the section is optional and every key
-has a default.
+Existing config files load unchanged: the section is optional and every key has
+a default.
 
-## Advanced capability layer (typestate)
+## Separation from `ToolPolicy`
 
-HACKER MODE sessions use a **typestate capability gate**. Invalid operations
-are unrepresentable at compile time (Rust) or runtime-guarded (Python):
+`ToolPolicy` (`src/agent/policy.rs`) is the general agent permission ladder
+(Plan ⊂ Coder ⊂ Build ⊂ Hacker). It is unchanged.
 
-```
-Discovered  ── authorize() ───▶  Authorized  ── activate() ───▶  Active  ── run_module() ───▶ ...
-                                                                    │
-                                                                    └──── close() ────────────▶  Closed
-```
+`HackerSession` / `CapabilitySession` (`src/hacker/`) is a separate environment
+with its own `HackerAuthorization` gate and typestate capability gate. Every
+security operation must pass **both**.
 
-- **`Discovered`** — session created, no authority yet. Only `authorize()`
-  is available.
-- **`Authorized`** — capability token validated. Only `activate()` is
-  available.
-- **`Active`** — operations may run. `run_module()` exists *only* on this
-  state. `close()` transitions to `Closed`.
-- **`Closed`** — read-only audit/report access only.
+An AI-generated instruction can never authorize an operation, and an
+AI-generated scope can never serve as proof of authorization. The assessment is
+built only from `hacker_scope` configuration or the env override — never from
+model output.
 
-### `OpCapability` (unforgeable authority token)
+## Authorization gate
 
-```
-OpCapability {
-    token: String,          // unforgeable, issued at authorization
-    scope_id: String,       // must match the assessment scope
-    max_risk: RiskLevel,    // risk ceiling — operations above it are refused
-    allowed_modules: Vec<String>,  // module whitelist
-    expires_at: SystemTime, // capability expires; session must re-authorize
-}
-```
+`hacker::authorize(ctx, op, now)` gates every operation against the assessment
+scope before any I/O. The gate infrastructure remains (typestate capability
+gate, `OpCapability`, audit log, scope checks). Scope + risk ceiling checks run
+on every operation, so a session cannot exceed its authorized module set or risk
+ceiling even if the code path is reached.
 
-Every `authorize_operation()` call on an `Active` session:
+## Typestate capability gate
 
-1. Checks the capability is present and not expired.
-2. Checks the requested module is in `allowed_modules`.
-3. Checks the operation risk is at or below `max_risk`.
-4. Records a `CapEvent` (granted or denied) in the append-only audit log.
+`CapabilitySession<State>` (`src/hacker/capability.rs`) adds a second, typed
+gate on top of `HackerAuthorization`:
 
-This means a session cannot be used for a module or risk level it was not
-explicitly authorized for — even if the code path is reached.
+- `authorize_operation()` exists **only** on `CapabilitySession<Active>`.
+- `OpCapability` is an unforgeable token: `scope_id`, `max_risk`,
+  `allowed_modules`, `expires_at`. It cannot be forged by the model or by user
+  input — it is issued only through `authorize()`.
+- Every attempt (granted or denied) records a `CapEvent` in the audit log.
+- Invalid states (e.g., running `network/ports` from `Discovered`, or acting
+  from `Closed`) are unrepresentable in the type system.
 
-## What the workspace shows
+## Operation execution
 
-Assessment name/id, status and remaining validity, the authorized scope,
-whether permissions and auto-approval are on, the 12-module catalogue with each
-module's category/capability count/risk floor, and the executable operation
-table with each operation's category and risk floor.
+Every module operation goes through one entry point, `coordinator::run`, and an
+operation that is not in the static `OPERATIONS` table cannot execute at all.
+The order is enforced in code:
 
-## Operations
+1. **Authorize** the target against the assessment — before any I/O.
+2. **Resolve** and re-check every address only for operations that connect
+   (`network/ports`, `web/headers`) — the raw target is checked first, then the
+   resolved set.
+3. **Execute** the module through injected traits (`Resolver`, `Connector`,
+   `Fetcher`, and for the Kali bridge a `BinaryProbe` + `ProcessRunner`),
+   never via ambient I/O.
+4. **Persist** findings and evidence to the SQLite store with SHA-256 evidence
+   digests.
+5. **Audit** every attempt (granted or denied) to the append-only JSONL audit
+   log with secret scrubbing.
 
-| operation | category | floor | target | does |
-|---|---|---|---|---|
-| `recon/dns` | passive | low | required | resolves a host, reports bounded, de-duplicated addresses |
-| `network/ports` | active-discovery | medium | required | bounded TCP reachability over a small default port set |
-| `web/headers` | active-discovery | medium | required | one no-redirect fetch + security-header analysis |
-| `vuln/correlate` | passive | low | none (component + version) | version→CVE correlation, never a confirmed finding |
-| `exploitation/plan` | intrusive | critical | required | structured validation plan + evidence checklist |
-| `kali/available` | passive | low | none | lists the catalogued Kali tools found on `PATH` |
-| `kali/run` | active-discovery | medium | required (tool + target) | runs one catalogued Kali tool with a fixed argv template |
-| `reporting/summary` | passive | low | none | counts findings by severity and status |
-| `reporting/export` | passive | low | none (format arg) | writes md/JSON/SARIF, same renderer as `/hacker report` |
-
-All seven go through `hacker::coordinator::run`: unknown operations never
-execute, the target is authorized *before* any I/O, anything that connects or
-fetches is resolved and every address re-checked (a permitted hostname cannot
-become an SSRF into private/metadata space), and every allow/deny/error is
-audited with a duration.
-
-Execution properties:
-
-- **Bounded.** At most 8 addresses × 32 ports per network run, 32 DNS answers,
-  a single HTTP request, and no response body is read.
-- **Passive-first.** DNS and version correlation touch no target; the active
-  operations are one connect per port / one request per URL.
-- **Honest.** `vuln` reports `Suspected (version-only)` and says "no
-  vulnerability database configured" rather than implying there are none; a
-  version match is never `Confirmed`.
-- **Authorized-only execution.** `exploitation/plan` produces guidance
-  (verification steps, evidence checklist) only. Actual proof execution lives in
-  `tools/custom/exploitation/exploit_runner.py`, is non-destructive by design
-  (reads/evidence only), and requires a scope file plus the local authorization
-  password. It contains no shells, payload delivery, persistence or automation
-  of compromise.
-
-## The 12 modules
-
-`recon`, `network`, `web`, `vuln`, `forensics`, `osint`, `threat-intel`,
-`password`, `wireless`, `exploitation`, `post-exploitation`, `reporting`.
-
-Five modules execute operations (`recon`, `network`, `web`, `vuln`,
-`reporting`), `exploitation` provides the plan operation (with authorized-only
-execution in the operator tools), and `kali` bridges installed assessment tools.
-The rest remain descriptors until their phase lands.
-
-## Not (yet) implemented
-
-- No authenticated enumeration, password auditing, wireless work or
-  post-exploitation.
-- No exploit execution inside the crate. Proof execution is deliberately
-  external: `tools/custom/exploitation/exploit_runner.py` performs curated,
-  non-destructive checks only after scope + password verification. Wire your own
-  authorized framework in for anything beyond that.
-
-## Kali bridge (`kali/run`)
-
-`kali/run` executes tools already installed on the host (typically Kali Linux)
-through a **curated catalogue** with a fixed, conservative argv template and one
-authorized target substituted into `{target}`. Arbitrary flags are not
-accepted, nothing is run through a shell, and the target is refused if it is
-flag-like or contains whitespace/control characters (so it cannot inject extra
-arguments).
-
-The catalogue is deliberately limited to **assessment and enumeration**:
-`nmap`, `masscan`, `naabu`, `rustscan`, `nikto`, `whatweb`, `httpx`, `wpscan`,
-`nuclei`, `sslyze`, `sslscan`, `testssl.sh`, `wafw00f`, `subfinder`,
-`assetfinder`, `amass`, `dnsrecon`, `whois`, `dig`, `host`, `nbtscan`,
-`enum4linux`. Each run is bounded (default 180 s, output capped) and audited
-with the tool's declared risk.
-
-Credential-attack, wireless-attack and exploitation-framework tools
-(`hydra`, `medusa`, `john`, `hashcat`, `aircrack-ng`, `wifite`, `responder`,
-`msfconsole`, `sqlmap`, `bettercap`, …) are intentionally **not** wired into the
-catalogue and are rejected as unknown tools. Use `run_command` or your own
-authorized framework for those.
-
-`/hacker kali list` (or `/hacker run kali available`) reports which catalogued
-tools are installed without running anything.
-
-## Findings & evidence (Phase 3)
-
-Successful operations turn their structured results into **findings** and
-persist them to SQLite at `<hacker dir>/findings.db` (default
-`~/.local/share/nanomite/hacker/findings.db`), disabled with
-`[hacker] store = false` or `NANOMITE_HACKER_STORE=0`.
-
-- A finding carries module/operation, target, a title, a **severity**
-  (the shared informational→critical scale), a **confidence** and a status.
-- **Confidence is honest by construction.** Directly observed facts (an open
-  port, an absent header, a completed tool run, a DNS inventory) are
-  `Confirmed`. Inferences are `Suspected` — a version→CVE match is never
-  `Confirmed`.
-- Each finding's detail is stored as an **evidence** row with a **SHA-256** so a
-  later reader can tell whether what they see is what was captured. Evidence
-  text is scrubbed of secrets and bounded before it reaches disk; a `Set-Cookie`
-  **value** is never stored — only which flags are missing.
-- `/hacker findings` lists the newest first; `show <id>` shows one finding plus
-  its evidence digest; `verify <id>` re-computes every evidence SHA-256 and
-  flags a mismatch; `triage|accept|close <id>` updates its status (and is
-  itself audited). `/hacker report [md|json|sarif]` writes a markdown, JSON or
-  SARIF 2.1.0 report to `<hacker dir>/reports/` and prints the path.
-
-Findings are **evidence, not instructions**: `/hacker findings` output is
-display-only and is never fed back to a tool or to the model as authorization.
-
-Producers today: `web/headers` (missing headers, disclosure, cookie flags),
-`vuln/correlate` (one finding per CVE match, `Suspected`), `network/ports` (one
-informational finding per open port), `recon/dns` (one informational DNS
-inventory finding) and `kali/run` (one informational finding per run, so the
-bounded tool output is retained as hashed evidence). `kali/available` and
-`exploitation/plan` emit none.
-
-## Assessment lifecycle (Phase 4)
-
-Assessments are persisted with their authorized scope, so they survive a
-restart and can be resumed by id:
-
-- `/hacker assessment list` reads the newest assessments from the store
-  (id, name, status, finding count, window, authorization reference).
-- `/hacker assessment use <id>` loads the **stored** scope and window and calls
-  `HackerSession::resume`, which refuses a disabled session, an empty scope, a
-  non-authorized/completed assessment, an expired window or one that is not
-  valid yet. The scope always comes from the store/config — never from model
-  output — and `validate()` runs before the session switches.
-- `/hacker assessment complete [<id>]` marks an assessment completed; if it is
-  the active one, HACKER MODE deactivates and the tool policy falls back.
-
-The agent cannot call these: they are local slash commands (metadata + store
-reads). Resuming never bypasses the authorization gate, the scope checks or the
-audit log.
-
-## Bringing your own tooling
-
-nanomite coordinates and records; it does not embed offensive tooling. To use
-an existing authorized framework, register it as an external tool in the tool
-manifest and set `risk = "external"` so the general `ToolPolicy` gate keeps it
-behind Build/Hacker mode. HACKER MODE never shows the interactive confirmation
-prompt (the gate is Plan-only).
-
-See `docs/HACKER_SECURITY.md` for the authorization, scope and audit model.
-
-## Deep Web / Dark Web module (`deepweb`)
-
-Three authorized operations built on top of the Tor SOCKS5 proxy (`127.0.0.1:9050`, launched by `/tor start`):
-
-| operation | category | floor | target | does |
-|---|---|---|---|---|
-| `deepweb/search` | passive | low | none (query only) | DuckDuckGo HTML deep-web search over Tor SOCKS5 proxy |
-| `deepweb/browse` | active-discovery | low | required (url) | fetch `.onion` v3 or clearnet page through Tor SOCKS5 proxy |
-| `deepweb/validate-onion` | passive | low | required (address) | offline `.onion` v3 address shape validation (56-char base32) |
-
-### Usage
-
-```bash
-# 1. Start Tor (required before search/browse)
-/tor start
-
-# 2. Deep web search (passive, no target scope check)
-/hacker deepweb "target information"
-
-# 3. Browse a .onion site through Tor
-/hacker browse http://aaaqeayeaudaocajbifqydiob4ibceqtcqkrmfyydenbwha5dyp3kead.onion/
-
-# 4. Validate an onion address offline (no network, no Tor needed)
-/hacker run deepweb validate-onion <address>
-```
-
-### Security notes
-
-- All network traffic routes through `socks5h://127.0.0.1:9050` via reqwest's `socks` feature.
-- `.onion` addresses never resolve in system DNS — they are only reachable through the Tor proxy, so there is no DNS-rebinding or SSRF risk to internal space.
-- v3 onion addresses are validated offline (exactly 56 base32 chars + `.onion`) before any network attempt.
-- The `tor` daemon must be running separately (`/tor start`); this module never starts Tor itself — it only consumes the SOCKS5 endpoint.
-- Stop with `/tor stop` when deep-web work is finished.
+`exploitation` is authorized-only: the module builds the validation plan, and
+proof execution is permitted only through the password+scope-gated operator
+runner. The crate itself contains no payloads, shells, persistence, or
+compromise automation. `kali` is a curated bridge to installed Kali assessment
+tools using fixed argv templates via the shared bounded executor;
+credential/wireless/exploitation-framework tools are excluded.

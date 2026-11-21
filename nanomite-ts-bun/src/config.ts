@@ -180,12 +180,12 @@ export const DEFAULT_PRESETS: ProviderPreset[] = [
     api_key_env: "LLAMA_CPP_API_KEY",
     model: "llama-2-7b-chat",
   },
-  // Brent 1.0
+  // Local provider
   {
-    name: "brent_1",
+    name: "local",
     base_url: "http://127.0.0.1:8080/v1",
-    api_key_env: "BRENT_API_KEY",
-    model: "brent-1.0-4b",
+    api_key_env: "NANOMITE_API_KEY",
+    model: "",
   },
   // Scripted test preset
   {
@@ -238,7 +238,7 @@ function parseTomlSimple(str: string): Record<string, string> {
 export function loadConfig(): Config {
   // Built-in defaults
   let cfg: Record<string, string> = {
-    provider: "brent",
+    provider: "local",
     base_url: "http://127.0.0.1:8080/v1",
     api_key: "",
     model: "full path to artifacts/final-4bit since mlx_lm uses the path as model ID",
