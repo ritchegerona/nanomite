@@ -8,7 +8,7 @@ mod tests;
 pub mod text;
 pub mod theme;
 
-use crate::app::{App, LeftPanel, Overlay, OverlayKind};
+use crate::app::{App, Overlay, OverlayKind};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::Frame;
@@ -284,16 +284,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .layout(layout_area, input_h, queue_rows + suggestion_rows);
 
     panels::header(frame, rects.header, app);
-    // Left info column: the `/activity` cycle selects one of four live
-    // panels. Thinking still respects its own visibility flag.
-    match app.left_panel {
-        LeftPanel::Activity => panels::activity_timeline(frame, rects.left_info, app),
-        LeftPanel::LiveDiff => panels::live_diff_viewer(frame, rects.left_info, app),
-        LeftPanel::ToolMonitor => panels::tool_monitor(frame, rects.left_info, app),
-        LeftPanel::Thinking if app.show_thinking => {
-            draw_thinking_panel(frame, rects.left_info, app, &theme);
-        }
-        LeftPanel::Thinking => {}
+    // Left info column: always shows the model's thinking / reasoning.
+    if app.show_thinking {
+        draw_thinking_panel(frame, rects.left_info, app, &theme);
     }
 
     // Aux strips ride between the info panel and the composer. Both renderers

@@ -28,7 +28,6 @@ pub enum Command {
     Share,
     Themes,
     Thinking,
-    Activity,
     Undo,
     Unshare,
     Memory,
@@ -96,7 +95,7 @@ impl Command {
             }
             Memory | Favorites => "memory & knowledge",
             Tools | Image | Ocr => "tools & files",
-            Themes | Hud | Settings | Density | CodeNumbers | Details | Thinking | Activity
+            Themes | Hud | Settings | Density | CodeNumbers | Details | Thinking
             | Focus => "appearance & view",
             Worktrees | Update => "other",
             _ => "agent & automation",
@@ -373,12 +372,6 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "show or hide the thinking indicator (alt+k)",
         kind: Command::Thinking,
-    },
-    Entry {
-        command: "/activity",
-        aliases: &[],
-        hint: "cycle left panel: thinking · activity · live diff · tool monitor (ctrl+shift+a)",
-        kind: Command::Activity,
     },
     Entry {
         command: "/focus",

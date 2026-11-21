@@ -1994,34 +1994,10 @@ pub(crate) enum HackerEvent {
 pub mod hacker;
 pub mod privacy;
 
-/// Which live panel occupies the left column under the header. `/activity`
-/// (ctrl+shift+a) cycles through all four; the renderers already exist.
+/// The left column always shows the model's thinking / reasoning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LeftPanel {
     Thinking,
-    Activity,
-    LiveDiff,
-    ToolMonitor,
-}
-
-impl LeftPanel {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Thinking => "thinking",
-            Self::Activity => "activity",
-            Self::LiveDiff => "live diff",
-            Self::ToolMonitor => "tool monitor",
-        }
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            Self::Thinking => Self::Activity,
-            Self::Activity => Self::LiveDiff,
-            Self::LiveDiff => Self::ToolMonitor,
-            Self::ToolMonitor => Self::Thinking,
-        }
-    }
 }
 
 /// opencode-style follow-up suggestions: after a turn finishes, a tiny
@@ -2176,8 +2152,6 @@ pub struct App {
     /// Performance hud (`/hud`): draws the last frame time, peak and
     /// transcript stats into the footer.
     pub hud: bool,
-    /// Live panel in the left column (cycled with `/activity`, ctrl+shift+a).
-    pub left_panel: LeftPanel,
     /// Tool activity display level (`/details`, `ctrl+o`).
     pub tool_display: ToolDisplay,
     /// Compact transcript density (`/density`, `ctrl+g`).
@@ -2392,7 +2366,6 @@ impl App {
             selection: None,
             scrollbar_drag: false,
             hud: false,
-            left_panel: LeftPanel::Thinking,
             tool_display: ToolDisplay::Full,
             compact: cfg.compact,
             code_numbers: false,
@@ -3699,7 +3672,6 @@ impl App {
                 ));
                 self.invalidate_transcript();
             }
-            Command::Activity => self.cycle_left_panel(),
             Command::Undo => self.undo(),
             Command::Unshare => self.toast("nothing shared - sessions never leave this machine"),
             Command::Prev => self.prev_turn(),
@@ -8214,14 +8186,6 @@ impl App {
         self.invalidate_transcript();
     }
 
-    /// Cycles the left column panel: thinking → activity → live diff → tool
-    /// monitor → thinking (Ctrl+Shift+A, `/activity`).
-    pub fn cycle_left_panel(&mut self) {
-        self.left_panel = self.left_panel.next();
-        self.toast(format!("left panel: {}", self.left_panel.label()));
-        self.mark_dirty();
-    }
-
     /// Opens the footer search bar, seeded with the active selection when
     /// there is one (truncated to keep the bar readable).
     pub fn open_search(&mut self) {
@@ -8497,7 +8461,6 @@ impl App {
             KeyCode::Char('r') if ctrl => self.cycle_reasoning(),
             KeyCode::Char('f') if ctrl => self.open_search(),
             KeyCode::Char('o') if ctrl => self.toggle_tool_details(),
-            KeyCode::Char('a') if ctrl && shift => self.cycle_left_panel(),
             KeyCode::Char('n') if ctrl && shift => self.toggle_code_numbers(),
 
             // Paste: Ctrl+V (Linux/Windows), Super+V (Mac)
