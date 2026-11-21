@@ -686,6 +686,13 @@ impl AgentRuntime {
                 return None;
             }
 
+            // The model may emit <thoughts>...</thoughts> blocks inside the
+            // regular content stream (e.g. fine-tuned personas that were
+            // trained to think in tags). Route those blocks to the thinking
+            // panel and strip them from the visible response body so they
+            // never leak into the main transcript.
+            extract_thoughts(&mut content, &mut reasoning);
+
             let calls = accumulator.finish();
             let assistant = ChatMessage {
                 role: Role::Assistant,
@@ -2371,6 +2378,40 @@ fn bounded_preview(text: &str, max_lines: usize, max_chars: usize) -> String {
         out.push_str(&format!("\n… +{hidden} more lines"));
     }
     out
+}
+
+/// Extracts `<thoughts>...</thoughts>` blocks from the assistant's visible
+/// content and moves them into `reasoning` so they render only in the left
+/// thinking panel instead of leaking into the main transcript. Handles
+/// multiple blocks and unbalanced opening/closing tags gracefully.
+fn extract_thoughts(content: &mut String, reasoning: &mut String) {
+    let mut out = String::with_capacity(content.len());
+    let mut remaining = content.as_str();
+    while let Some(start) = remaining.find("<thoughts>") {
+        out.push_str(&remaining[..start]);
+        let after_open = &remaining[start + "<thoughts>".len()..];
+        if let Some(end) = after_open.find("</thoughts>") {
+            let block = &after_open[..end];
+            if !block.trim().is_empty() {
+                if !reasoning.is_empty() {
+                    reasoning.push('\n');
+                }
+                reasoning.push_str(block.trim());
+            }
+            remaining = &after_open[end + "</thoughts>".len()..];
+        } else {
+            // Unclosed block: treat the rest as a thought block.
+            if !after_open.trim().is_empty() {
+                if !reasoning.is_empty() {
+                    reasoning.push('\n');
+                }
+                reasoning.push_str(after_open.trim());
+            }
+            remaining = "";
+        }
+    }
+    out.push_str(remaining);
+    *content = out;
 }
 
 #[cfg(test)]
