@@ -10,17 +10,17 @@
 //! The `NeuralAgent` wraps `AgentRuntime` and intercepts tool dispatch to
 //! feed the neural loop.
 
-use crate::agent::runtime::{AgentRuntime, Cancel, AgentEvent};
 use crate::agent::provider::{ChatMessage, Usage};
-use crate::neural::memory::{NeuralMemory, NeuralMemoryQueryResult};
-use crate::neural::planner::{LearnedPlanner, ToolOutcome};
+use crate::agent::runtime::{AgentEvent, AgentRuntime, Cancel};
 use crate::neural::evolution::{EvolutionEngine, EvolutionSignal};
-use crate::neural::synthesizer::{ToolSynthesizer, SynthesisResult};
+use crate::neural::memory::{NeuralMemory, NeuralMemoryQueryResult};
 use crate::neural::network::{NeuralNetwork, TrainingSample};
 use crate::neural::now_secs;
+use crate::neural::planner::{LearnedPlanner, ToolOutcome};
+use crate::neural::synthesizer::{SynthesisResult, ToolSynthesizer};
 use std::path::PathBuf;
-use tokio::sync::mpsc::UnboundedSender;
 use std::time::Instant;
+use tokio::sync::mpsc::UnboundedSender;
 
 /// The neural-enhanced agent. Wraps the runtime and adds learning, prediction,
 /// memory, and self-evolution to every turn.
@@ -49,8 +49,8 @@ impl NeuralAgent {
         let data_dir = data_dir.into();
         let _ = std::fs::create_dir_all(&data_dir);
 
-        let memory = NeuralMemory::open(&data_dir.join("neural_memory.db"))
-            .expect("open neural memory");
+        let memory =
+            NeuralMemory::open(&data_dir.join("neural_memory.db")).expect("open neural memory");
         let evolution = EvolutionEngine::with_path(data_dir.join("evolution.json"));
         let synth_dir = data_dir.join("synthesized_tools");
         let _ = std::fs::create_dir_all(&synth_dir);
@@ -107,19 +107,21 @@ impl NeuralAgent {
         let neural_context = self.format_neural_context(&predictions);
 
         // 2. Retrieve relevant neural memories.
-        let memories = self
-            .memory
-            .query(&user_input, 5, 0.3)
-            .unwrap_or_else(|_| NeuralMemoryQueryResult {
-                records: vec![],
-                similarities: vec![],
-            });
+        let memories =
+            self.memory
+                .query(&user_input, 5, 0.3)
+                .unwrap_or_else(|_| NeuralMemoryQueryResult {
+                    records: vec![],
+                    similarities: vec![],
+                });
         let memory_context = self.format_memory_context(&memories);
 
         // 3. Inject neural + memory context into a modified system prompt for this turn.
         let enhanced_prompt = format!(
             "{}\n\n# Neural Context (learned from prior turns)\n{}\n\n# Relevant Memories\n{}",
-            self.runtime.system_prompt(), neural_context, memory_context
+            self.runtime.system_prompt(),
+            neural_context,
+            memory_context
         );
 
         // Temporarily swap the system prompt.
@@ -127,7 +129,10 @@ impl NeuralAgent {
         *self.runtime.system_prompt_mut() = enhanced_prompt;
 
         // 4. Run the actual turn.
-        let result = self.runtime.run(user_input.clone(), history, cancel, tx).await;
+        let result = self
+            .runtime
+            .run(user_input.clone(), history, cancel, tx)
+            .await;
 
         // 5. Restore original prompt.
         *self.runtime.system_prompt_mut() = original_prompt;
@@ -137,12 +142,26 @@ impl NeuralAgent {
         // here we record the turn-level summary.)
         let elapsed_ms = start.elapsed().as_millis() as u64;
         let turn_success = result.is_some();
-        self.memory.store(
+        let _ = self.memory.store(
             &format!("turn-{}", self.turn_count),
-            &format!("User: {user_input}\nResult: {} in {}ms",
-                     if turn_success { "completed" } else { "interrupted" },
-                     elapsed_ms),
-            vec!["turn".to_string(), if turn_success { "success" } else { "interrupted" }.to_string()],
+            &format!(
+                "User: {user_input}\nResult: {} in {}ms",
+                if turn_success {
+                    "completed"
+                } else {
+                    "interrupted"
+                },
+                elapsed_ms
+            ),
+            vec![
+                "turn".to_string(),
+                if turn_success {
+                    "success"
+                } else {
+                    "interrupted"
+                }
+                .to_string(),
+            ],
             "turn",
         );
 
@@ -157,15 +176,20 @@ impl NeuralAgent {
         }
 
         // 8. Periodically run evolution analysis.
-        if self.turn_count % self.evolution_interval == 0 {
+        if self.turn_count.is_multiple_of(self.evolution_interval) {
             let proposals = self.evolution.analyze();
             if !proposals.is_empty() {
                 // Store evolution proposals as memories so the agent can see them.
                 for p in &proposals {
-                    self.memory.store(
+                    let _ = self.memory.store(
                         &format!("evolve-{}", p.id),
-                        &format!("{}: {}\nRationale: {}\nConfidence: {:.0}%",
-                                 p.kind as u8, p.description, p.rationale, p.confidence * 100.0),
+                        &format!(
+                            "{}: {}\nRationale: {}\nConfidence: {:.0}%",
+                            p.kind as u8,
+                            p.description,
+                            p.rationale,
+                            p.confidence * 100.0
+                        ),
                         vec!["evolution".to_string(), "proposal".to_string()],
                         "evolution",
                     );
@@ -177,7 +201,13 @@ impl NeuralAgent {
     }
 
     /// Record a specific tool outcome for learning (called by the tool dispatch wrapper).
-    pub fn record_tool_outcome(&mut self, tool: &str, success: bool, context: &str, duration_ms: u64) {
+    pub fn record_tool_outcome(
+        &mut self,
+        tool: &str,
+        success: bool,
+        context: &str,
+        duration_ms: u64,
+    ) {
         let features = LearnedPlanner::context_features(context, &[tool.to_string()], &[success]);
         let outcome = ToolOutcome {
             tool: tool.to_string(),
@@ -200,7 +230,7 @@ impl NeuralAgent {
 
         // Store successful techniques in neural memory.
         if success {
-            self.memory.store(
+            let _ = self.memory.store(
                 &format!("technique-{}-{}", tool, now_secs()),
                 &format!("Tool `{tool}` succeeded in context: {context}"),
                 vec!["technique".to_string(), "success".to_string()],
@@ -214,10 +244,12 @@ impl NeuralAgent {
         let result = self.synthesizer.synthesize(description, name, true);
         if result.success {
             // Record as a memory so the agent knows this tool exists.
-            self.memory.store(
+            let _ = self.memory.store(
                 &format!("synth-{}", result.tool.name),
-                &format!("Synthesized tool `{}`: {}\nFile: {}",
-                         result.tool.name, result.tool.description, result.tool.file_path),
+                &format!(
+                    "Synthesized tool `{}`: {}\nFile: {}",
+                    result.tool.name, result.tool.description, result.tool.file_path
+                ),
                 vec!["synthesized".to_string(), "tool".to_string()],
                 "synthesis",
             );
@@ -400,10 +432,7 @@ mod tests {
     fn synthesize_tool_creates_memory() {
         let runtime = AgentRuntime::new(
             std::sync::Arc::new(crate::agent::testdouble::ScriptedProvider::default()),
-            std::env::temp_dir().join(format!(
-                "nanomite-neural-test-{}-synth",
-                std::process::id()
-            )),
+            std::env::temp_dir().join(format!("nanomite-neural-test-{}-synth", std::process::id())),
             64 * 1024,
             Some(AgentConfig::default()),
         );
@@ -456,7 +485,7 @@ mod tests {
         );
         let mut agent2 = NeuralAgent::new(runtime2, &dir);
         agent2.load_state();
-        assert!(agent2.network.is_some() || agent2.planner.outcomes.len() >= 1);
+        assert!(agent2.network.is_some() || !agent2.planner.outcomes.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

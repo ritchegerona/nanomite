@@ -37,17 +37,28 @@ pub mod tool_glyph {
     pub const DIFF_DEL: &str = "−";
 }
 
-/// opencode-style glyph for one tool's inline row: `$` runs commands, `→`
-/// reads and lists, `←` writes, `✱` searches, `%` fetches a URL, `◈` searches
-/// the web, `⚙` anything without a dedicated mark.
-fn tool_icon(name: &str) -> &'static str {
+/// One-glyph identity for every tool in the catalog. Grouped by what the
+/// tool *does* so a transcript reads at a glance: `$` execute, `→` read,
+/// `←` mutate, `✱` search, `%` web, `◈` network, `#` version control,
+/// `▤` planning, `⬡` local model. Unknown tools fall back to `⚙`.
+pub(crate) fn tool_icon(name: &str) -> &'static str {
     match name {
-        "run_command" | "ssh_run" => "$",
-        "read_file" | "read_document" | "list_files" => "→",
-        "write_file" | "edit_file" => "←",
-        "search" => "✱",
-        "web_fetch" | "browse" | "browse_screenshot" => "%",
-        "web_search" | "ip_lookup" => "◈",
+        "run_command" | "ssh_run" | "autonomous_execute" => "$",
+        "list_files" | "read_file" | "read_document" | "ocr_image" | "index_symbols"
+        | "find_symbol" | "find_references" => "→",
+        "write_file" | "edit_file" | "memory_save" | "memory_update" | "memory_delete"
+        | "update_task" => "←",
+        "search" | "memory_search" | "memory_get" | "memory_list" | "skills_list"
+        | "skills_known" | "list_self_edits" => "✱",
+        "web_fetch" | "browse" | "browse_screenshot" | "web_recon" => "%",
+        "web_search" | "ip_lookup" | "scan_ports" | "wireless_recon" => "◈",
+        "git_status" | "git_diff" | "git_log" | "git_commit" | "git_branch" => "#",
+        "run_tests" => "✓",
+        "propose_self_edit" => "✎",
+        "create_plan" | "get_plan" | "list_plans" | "delete_plan" => "▤",
+        "local_model_list" | "local_model_load" | "local_model_unload" | "local_model_chat" => "⬡",
+        "multi_agent_orchestrate" => "⬣",
+        "vpn_control" | "tor_control" => "⇄",
         _ => "⚙",
     }
 }
@@ -164,6 +175,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     let busy = app.is_busy();
     let turn_eta = app.turn_eta();
     let compact = app.compact;
+    let app_code_numbers = app.code_numbers;
     let crate::app::App { entries, view, .. } = app;
     let entries = &mut entries[focus_base..];
     // Reserve space for scrollbar
@@ -189,7 +201,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
     for idx in first..entries.len() {
         let (start, end) = (view.offsets[idx], view.offsets[idx + 1]);
         if entries.len() <= WARM_LIMIT || (end > top + pad && start < window_bottom + pad) {
-            entries[idx].ensure_rendered(&theme, width, tool_display, compact, mode);
+            entries[idx].ensure_rendered(
+                &theme,
+                width,
+                tool_display,
+                compact,
+                mode,
+                app_code_numbers,
+            );
         }
     }
     view.mark_dirty();
@@ -226,7 +245,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut crate::app::App) {
         let status = status_line(&entries[idx], &theme, view.spinner, turn_eta, !compact)
             .filter(|_| show_thinking);
         let entry = &mut entries[idx];
-        let cached = entry.ensure_rendered(&theme, width, tool_display, compact, mode);
+        let cached =
+            entry.ensure_rendered(&theme, width, tool_display, compact, mode, app_code_numbers);
 
         let batch_start = row;
         let mut batch: Vec<Line<'static>> = Vec::with_capacity((bottom - row) as usize);
@@ -488,9 +508,15 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Title: name + tagline on one line.
+    // Title: a monochrome hex mark, the wordmark, the running version and
+    // the tagline on one line. All glyphs come from the shared theme table.
     lines.push(Line::from(vec![
+        Span::styled(
+            format!("{} ", glyph::display(glyph::HEX_FILL, "*")),
+            theme.accent(),
+        ),
         Span::styled("nanomite", theme.bold().fg(theme.accent())),
+        Span::styled(format!(" v{}", crate::VERSION), theme.faint_style()),
         Span::styled("  Intelligence Without Boundaries", theme.faint_style()),
     ]));
     lines.push(Line::default());
@@ -512,15 +538,34 @@ fn render_welcome(frame: &mut Frame, area: Rect, app: &crate::app::App, theme: &
         text::display_path(&app.cwd, width.saturating_sub(13)),
         &mut lines,
     );
+    let catalog = crate::tools::ToolSet::catalog();
+    let categories = catalog
+        .iter()
+        .map(|tool| tool.category as usize)
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     fact(
         "tools",
-        "files · shell · ssh · web · browser · memory".into(),
+        format!("{} tools across {} groups", catalog.len(), categories),
         &mut lines,
     );
     if let Some(hint) = &app.resume_hint {
         fact("resume", hint.clone(), &mut lines);
     }
 
+    lines.push(Line::default());
+
+    // Quick start: the three highest-value next actions, styled as chips.
+    lines.push(Line::from(vec![
+        Span::styled("  ", theme.faint_style()),
+        Span::styled(" /models ", Style::default().fg(theme.accent_soft())),
+        Span::styled(glyph::DOT, theme.faint_style()),
+        Span::styled(" /panel ", Style::default().fg(theme.accent_soft())),
+        Span::styled(glyph::DOT, theme.faint_style()),
+        Span::styled(" /memory ", Style::default().fg(theme.accent_soft())),
+        Span::styled(glyph::DOT, theme.faint_style()),
+        Span::styled(" /learn ", Style::default().fg(theme.accent_soft())),
+    ]));
     lines.push(Line::default());
 
     // Prompt hint.
@@ -584,20 +629,8 @@ fn status_line(
             Style::default().fg(theme.faint()),
         ),
     ];
-    // Steps · tools finished so far
-    let done_tools = entry.tools.iter().filter(|t| !t.running).count();
-    if entry.steps > 0 || done_tools > 0 {
-        spans.push(Span::styled(
-            format!("  · {}", text::plural(entry.steps, "step")),
-            Style::default().fg(theme.faint()),
-        ));
-        if done_tools > 0 {
-            spans.push(Span::styled(
-                format!(" · {}", text::plural(done_tools, "tool")),
-                Style::default().fg(theme.faint()),
-            ));
-        }
-    }
+    // Step/tool counts live in the header's single working indicator; this
+    // streaming row only adds the transient ETA so the two never double-print.
     // ETA from the model's recent history, once it has enough turns.
     if let Some(eta) = eta {
         let secs = eta.as_secs();
@@ -612,6 +645,30 @@ fn status_line(
         ));
     }
     Some(Line::from(spans))
+}
+
+/// Turns a raw provider/runtime error into one actionable next step. The text
+/// is lower-cased once per cached entry (never per frame) and only recognises
+/// error families the app can actually help with.
+fn recovery_hint(err: &str) -> Option<(&'static str, &'static str)> {
+    let e = err.to_ascii_lowercase();
+    if e.contains("unauthorized") || e.contains("api key") || e.contains("401") || e.contains("403")
+    {
+        Some(("/connect", "check credentials"))
+    } else if e.contains("rate limit") || e.contains("429") {
+        Some(("/models", "switch model or wait"))
+    } else if e.contains("timeout") || e.contains("timed out") {
+        Some(("/models", "try a faster model"))
+    } else if e.contains("connection refused")
+        || e.contains("dns")
+        || e.contains("failed to connect")
+    {
+        Some(("/connect", "check the endpoint"))
+    } else if e.contains("memory") {
+        Some(("/memory", "check the store"))
+    } else {
+        None
+    }
 }
 
 impl Entry {
@@ -690,6 +747,7 @@ impl Entry {
         display: ToolDisplay,
         compact: bool,
         mode: (Color, &'static str),
+        code_numbers: bool,
     ) -> &Rendered {
         let stale = self.cache.as_ref().is_none_or(|c| {
             c.rev != self.rev
@@ -698,9 +756,11 @@ impl Entry {
                 || c.compact != compact
                 || c.mode_color != mode.0
                 || c.mode_label != mode.1
+                || c.code_numbers != code_numbers
         });
         if stale {
-            let (lines, code_blocks) = self.build(theme, width, display, compact, mode);
+            let (lines, code_blocks) =
+                self.build(theme, width, display, compact, mode, code_numbers);
             // Link regions are computed in `lines` index space; the cache
             // stores u16s like every other row reference.
             let links = crate::ui::text::link_regions(&lines)
@@ -715,6 +775,7 @@ impl Entry {
                 compact,
                 mode_color: mode.0,
                 mode_label: mode.1.to_string(),
+                code_numbers,
                 code_blocks,
                 links,
                 lines,
@@ -875,6 +936,7 @@ impl Entry {
         display: ToolDisplay,
         compact: bool,
         mode: (Color, &'static str),
+        code_numbers: bool,
     ) -> (Vec<Line<'static>>, Vec<(u16, u16, String)>) {
         let inner = width.saturating_sub(GUTTER).max(8);
         let mut lines = Vec::new();
@@ -921,9 +983,9 @@ impl Entry {
                     }
                     return finish_build(lines, code_blocks);
                 }
-                // Cozy user turn: indented text with the dedicated `user` colour
-                // for the body; no rail-node glyph. Wrapped lines hang under
-                // the text column, indented four cells.
+                // Cozy user turn: a quiet prompt node in the same gutter as the
+                // assistant's diamond, then body text in the dedicated `user`
+                // colour. Wrapped lines hang under the text column.
                 let text_style = Style::default().fg(theme.user());
                 let stamp = text::clock(self.at);
                 let wrap_w = inner.saturating_sub(4).max(8);
@@ -936,8 +998,13 @@ impl Entry {
                     for seg in wrap_spans(vec![Span::raw(raw.to_string())], wrap_w) {
                         let content: String =
                             seg.spans.iter().map(|s| s.content.as_ref()).collect();
+                        let marker = if first {
+                            format!("  {} ", glyph::PROMPT)
+                        } else {
+                            "    ".to_string()
+                        };
                         let mut spans = vec![
-                            Span::raw("    ".to_string()),
+                            Span::styled(marker, Style::default().fg(theme.user())),
                             Span::styled(content, text_style),
                         ];
                         if first {
@@ -967,6 +1034,7 @@ impl Entry {
                 let lead = if rail { RAIL } else { "   " };
                 let mut st = text::MarkdownStyles::new(theme);
                 st.rail = rail;
+                st.code_numbers = code_numbers;
                 // The model's reasoning lives in the left thinking panel; the
                 // transcript carries only the answer and the tool activity.
 
@@ -983,8 +1051,20 @@ impl Entry {
                     }
                 }
 
+                let interrupted = self.phase == Phase::Interrupted;
+                let mut caret_on_fence_footer = false;
                 if self.text.trim().is_empty() {
-                    lines.push(Line::default());
+                    if interrupted {
+                        lines.push(Line::from(vec![
+                            Span::raw("  ".to_string()),
+                            Span::styled(
+                                format!("{} interrupted", glyph::HOURGLASS),
+                                Style::default().fg(theme.warn()),
+                            ),
+                        ]));
+                    } else {
+                        lines.push(Line::default());
+                    }
                 } else {
                     let base = lines.len();
                     let display_text = text::professionalize(&self.text);
@@ -997,7 +1077,16 @@ impl Entry {
                     // cells as the plain indent, so wrapping never shifts.
                     let elapsed = self.elapsed.unwrap_or_else(|| self.started.elapsed());
                     let elapsed_str = text::format_duration(elapsed);
-                    let elapsed_display = format!(" {}", elapsed_str);
+                    let elapsed_display = if interrupted {
+                        format!(" {} · interrupted", elapsed_str)
+                    } else {
+                        format!(" {}", elapsed_str)
+                    };
+                    let (node, node_color) = if interrupted {
+                        (glyph::HOURGLASS, theme.warn())
+                    } else {
+                        (glyph::NODE, theme.success())
+                    };
                     let mut first_text = true;
                     for (idx, mut line) in md_lines.into_iter().enumerate() {
                         // Code blocks stay inside the turn's indent rather
@@ -1007,8 +1096,8 @@ impl Entry {
                         if rail && first_text {
                             spans.push(Span::raw("  ".to_string()));
                             spans.push(Span::styled(
-                                format!("{} ", glyph::NODE),
-                                Style::default().fg(theme.success()),
+                                format!("{} ", node),
+                                Style::default().fg(node_color),
                             ));
                             // Add content first, then right-align elapsed if it fits.
                             spans.append(&mut line.spans);
@@ -1041,6 +1130,12 @@ impl Entry {
                     for (start, end, source) in blocks {
                         code_blocks.push(((base + start) as u16, (base + end) as u16, source));
                     }
+                    // Never hang the live caret off a code-block footer rule;
+                    // it corrupts the `─ N lines · click to copy` line instead.
+                    caret_on_fence_footer = lines
+                        .len()
+                        .checked_sub(base + 1)
+                        .is_some_and(|last_md| closes.contains(&last_md));
                 }
 
                 // Live stream cursor at the head of the reply, like opencode.
@@ -1048,7 +1143,7 @@ impl Entry {
                 // is only yielded when the final line already fills the
                 // viewport, so short lines never flicker and full ones never
                 // clip the caret.
-                if self.phase == Phase::Streaming {
+                if self.phase == Phase::Streaming && !caret_on_fence_footer {
                     if let Some(last) = lines.last_mut() {
                         let line_width: usize = last
                             .spans
@@ -1113,6 +1208,18 @@ impl Entry {
                         Style::default().fg(theme.faint()),
                     )));
                 }
+            }
+            if let Some((command, reason)) = recovery_hint(err) {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{hint_prefix}try "), theme.faint_style()),
+                    Span::styled(
+                        command.to_string(),
+                        Style::default()
+                            .fg(theme.accent_soft())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!(" · {reason}"), theme.faint_style()),
+                ]));
             }
         }
 

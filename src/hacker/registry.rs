@@ -74,15 +74,19 @@ impl HackerModule for DescriptorModule {
     fn id(&self) -> &'static str {
         self.id
     }
+
     fn name(&self) -> &'static str {
         self.name
     }
+
     fn description(&self) -> &'static str {
         self.description
     }
+
     fn category(&self) -> ModuleCategory {
         self.category
     }
+
     fn capabilities(&self) -> Vec<ModuleCapability> {
         self.capabilities.to_vec()
     }
@@ -140,6 +144,15 @@ const CAPS_POST_EXPLOITATION: &[ModuleCapability] =
 const CAPS_REPORTING: &[ModuleCapability] = &[
     cap("summary", "assessment summary", RiskLevel::Informational),
     cap("export", "markdown export", RiskLevel::Informational),
+];
+const CAPS_DEEPWEB: &[ModuleCapability] = &[
+    cap("search", "deep web search over tor", RiskLevel::Low),
+    cap("browse", "browse pages via tor socks5", RiskLevel::Medium),
+    cap(
+        "validate-onion",
+        "validate .onion v3 addresses",
+        RiskLevel::Informational,
+    ),
 ];
 
 /// The built-in module set. Four are real in Phase 2; the rest are catalogued
@@ -230,6 +243,14 @@ pub fn builtin_modules() -> Vec<Box<dyn HackerModule>> {
             category: ModuleCategory::Reporting,
             capabilities: CAPS_REPORTING,
         }),
+        Box::new(DescriptorModule {
+            id: "deepweb",
+            name: "Deep Web / Dark Web",
+            description:
+                "Tor-based deep web and dark web access: search, browse and .onion validation.",
+            category: ModuleCategory::Osint,
+            capabilities: CAPS_DEEPWEB,
+        }),
     ]
 }
 
@@ -277,11 +298,11 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn builtin_registry_has_all_twelve_modules_with_unique_ids() {
+    fn builtin_registry_has_all_modules_with_unique_ids() {
         let reg = Registry::builtin();
-        assert_eq!(reg.len(), 12);
+        assert_eq!(reg.len(), 13);
         let ids: HashSet<_> = reg.iter().map(|m| m.id()).collect();
-        assert_eq!(ids.len(), 12, "module ids must be unique");
+        assert_eq!(ids.len(), 13, "module ids must be unique");
         for id in [
             "recon",
             "network",
@@ -295,6 +316,7 @@ mod tests {
             "exploitation",
             "post-exploitation",
             "reporting",
+            "deepweb",
         ] {
             assert!(reg.get(id).is_some(), "missing module {id}");
         }

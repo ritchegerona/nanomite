@@ -26,6 +26,7 @@ use super::modules::advanced_recon;
 use super::modules::advanced_web;
 use super::modules::attack_path;
 use super::modules::c2_simulation;
+use super::modules::deepweb::{self};
 use super::modules::kali::{self, BinaryProbe, PathProbe, ProcessRunner, SystemRunner};
 use super::modules::network::{Connector, TcpConnector};
 use super::modules::post_exploitation;
@@ -468,6 +469,31 @@ pub const OPERATIONS: &[OpSpec] = &[
         false,
         false,
         "",
+    ),
+    // Deep Web / Dark Web (Tor)
+    spec(
+        "deepweb",
+        "search",
+        OperationCategory::Passive,
+        false,
+        false,
+        "<query>",
+    ),
+    spec(
+        "deepweb",
+        "browse",
+        OperationCategory::ActiveDiscovery,
+        true,
+        true,
+        "<url>",
+    ),
+    spec(
+        "deepweb",
+        "validate-onion",
+        OperationCategory::Passive,
+        true,
+        false,
+        "<address>",
     ),
 ];
 
@@ -974,6 +1000,13 @@ pub fn run(
             Ok(c2_simulation::simulate_beacon_traffic(profile, count))
         }
         ("c2_simulation", "sweep") => Ok(c2_simulation::full_analysis()),
+        // Deep Web / Dark Web (Tor)
+        ("deepweb", "search") => deepweb::search(arg, &deepweb::TorFetcher),
+        ("deepweb", "browse") => {
+            let host = host.as_deref().unwrap_or(target);
+            deepweb::browse(host, &deepweb::TorFetcher)
+        }
+        ("deepweb", "validate-onion") => Ok(deepweb::validate_onion_op(target)),
         _ => Err(format!(
             "operation `{}/{}` is in the table but has no implementation",
             spec.module, spec.op
@@ -1370,7 +1403,7 @@ mod tests {
             now(&ctx),
         )
         .unwrap();
-        assert!(report.summary.len() > 0, "{report:?}");
+        assert!(!report.summary.is_empty(), "{report:?}");
     }
 
     #[test]
@@ -1430,7 +1463,7 @@ mod tests {
             now(&ctx),
         )
         .unwrap();
-        assert!(report.summary.len() > 0, "{report:?}");
+        assert!(!report.summary.is_empty(), "{report:?}");
     }
 
     #[test]
@@ -1568,7 +1601,7 @@ mod tests {
             after,
         )
         .unwrap();
-        assert!(report.summary.len() > 0, "{report:?}");
+        assert!(!report.summary.is_empty(), "{report:?}");
 
         ctx.status = AssessmentStatus::Revoked;
         let report = run(
@@ -1582,7 +1615,7 @@ mod tests {
             now(&ctx),
         )
         .unwrap();
-        assert!(report.summary.len() > 0, "{report:?}");
+        assert!(!report.summary.is_empty(), "{report:?}");
 
         let report = run(
             None,
@@ -1595,7 +1628,7 @@ mod tests {
             SystemTime::now(),
         )
         .unwrap();
-        assert!(report.summary.len() > 0, "{report:?}");
+        assert!(!report.summary.is_empty(), "{report:?}");
     }
 
     #[test]

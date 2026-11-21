@@ -97,11 +97,8 @@ impl ReconTools {
             return Err("recon: url must start with http:// or https://".to_string());
         }
 
-        let timeout = Duration::from_millis(
-            args.timeout_ms
-                .unwrap_or(120_000)
-                .clamp(5_000, 300_000),
-        );
+        let timeout =
+            Duration::from_millis(args.timeout_ms.unwrap_or(120_000).clamp(5_000, 300_000));
 
         let scanners: Vec<&str> = match args.scanners.as_str() {
             "gobuster" => vec!["gobuster"],
@@ -116,13 +113,18 @@ impl ReconTools {
 
         for scanner in &scanners {
             let result = match *scanner {
-                "gobuster" => self.run_gobuster(url, args.wordlist.as_deref(), args.gobuster_extra.as_deref(), &timeout)?,
+                "gobuster" => self.run_gobuster(
+                    url,
+                    args.wordlist.as_deref(),
+                    args.gobuster_extra.as_deref(),
+                    &timeout,
+                )?,
                 "nikto" => self.run_nikto(url, &timeout)?,
                 _ => continue,
             };
             scanners_run.push(scanner.to_string());
             if !raw_output.is_empty() {
-                raw_output.push_str("\n");
+                raw_output.push('\n');
             }
             raw_output.push_str(&format!("=== {} ===\n{}", scanner, result.raw_output));
             all_findings.extend(result.findings);
@@ -138,7 +140,7 @@ impl ReconTools {
             for f in &all_findings {
                 let _ = memory.save(&crate::memory::model::NewMemory::new(
                     crate::memory::model::MemoryCategory::Episodic,
-                    &format!(
+                    format!(
                         "Web recon [{}] {} → {} (target: {})",
                         f.scanner,
                         f.finding,
@@ -232,7 +234,9 @@ impl ReconTools {
             all
         });
 
-        let status = child.wait().map_err(|e| format!("gobuster wait failed: {e}"))?;
+        let status = child
+            .wait()
+            .map_err(|e| format!("gobuster wait failed: {e}"))?;
         let stdout_all = out_handle.join().unwrap_or_default();
         let stderr_all = err_handle.join().unwrap_or_default();
 
@@ -264,11 +268,7 @@ impl ReconTools {
     }
 
     /// Run nikto web server vulnerability scan.
-    fn run_nikto(
-        &self,
-        url: &str,
-        timeout: &Duration,
-    ) -> Result<WebReconResult, String> {
+    fn run_nikto(&self, url: &str, timeout: &Duration) -> Result<WebReconResult, String> {
         let mut cmd = Command::new("nikto");
         cmd.arg("-h")
             .arg(url)
@@ -316,7 +316,9 @@ impl ReconTools {
             all
         });
 
-        let status = child.wait().map_err(|e| format!("nikto wait failed: {e}"))?;
+        let status = child
+            .wait()
+            .map_err(|e| format!("nikto wait failed: {e}"))?;
         let stdout_all = out_handle.join().unwrap_or_default();
         let stderr_all = err_handle.join().unwrap_or_default();
 
@@ -334,7 +336,7 @@ impl ReconTools {
             if line.starts_with('+') {
                 findings.push(ReconFinding {
                     scanner: "nikto".to_string(),
-                    finding: line[1..].trim().to_string(),
+                    finding: line.strip_prefix('+').unwrap_or(line).trim().to_string(),
                     status: None,
                     size: None,
                     raw: line.to_string(),

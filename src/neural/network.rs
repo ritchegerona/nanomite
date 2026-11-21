@@ -36,7 +36,13 @@ impl Activation {
 
     pub fn derivative(self, x: f64) -> f64 {
         match self {
-            Activation::Relu => if x > 0.0 { 1.0 } else { 0.0 },
+            Activation::Relu => {
+                if x > 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             Activation::Sigmoid => {
                 let s = self.activate(x);
                 s * (1.0 - s)
@@ -64,11 +70,7 @@ impl Layer {
         // Use a simple deterministic PRNG seeded by layer shape so we don't
         // need an external RNG crate.
         let weights = (0..outputs)
-            .map(|_| {
-                (0..inputs)
-                    .map(|_| xavier_random(limit))
-                    .collect()
-            })
+            .map(|_| (0..inputs).map(|_| xavier_random(limit)).collect())
             .collect();
         let biases = (0..outputs).map(|_| xavier_random(limit * 0.1)).collect();
         Self {
@@ -108,8 +110,8 @@ fn splitmix64(mut x: u64) -> u64 {
 
 /// Forward pass result: layer outputs and pre-activations (for backprop).
 #[derive(Debug, Clone)]
-struct ForwardTrace {
-    layer_outputs: Vec<Vec<f64>>,  // including input as index 0
+pub struct ForwardTrace {
+    layer_outputs: Vec<Vec<f64>>,   // including input as index 0
     pre_activations: Vec<Vec<f64>>, // per layer (excluding input)
 }
 
@@ -148,12 +150,7 @@ impl NeuralNetwork {
         }
         let weight_velocity = layers
             .iter()
-            .map(|l| {
-                l.weights
-                    .iter()
-                    .map(|row| vec![0.0; row.len()])
-                    .collect()
-            })
+            .map(|l| l.weights.iter().map(|row| vec![0.0; row.len()]).collect())
             .collect();
         let bias_velocity = layers.iter().map(|l| vec![0.0; l.biases.len()]).collect();
         Self {
@@ -176,7 +173,12 @@ impl NeuralNetwork {
             let mut pre = Vec::with_capacity(layer.weights.len());
             let mut next = Vec::with_capacity(layer.weights.len());
             for (w, b) in layer.weights.iter().zip(layer.biases.iter()) {
-                let sum: f64 = w.iter().zip(current.iter()).map(|(wi, xi)| wi * xi).sum::<f64>() + b;
+                let sum: f64 = w
+                    .iter()
+                    .zip(current.iter())
+                    .map(|(wi, xi)| wi * xi)
+                    .sum::<f64>()
+                    + b;
                 pre.push(sum);
                 next.push(layer.activation.activate(sum));
             }
@@ -256,7 +258,7 @@ fn mse(output: &[f64], target: &[f64]) -> f64 {
 /// Backpropagation: compute gradients and update weights/biases with momentum.
 fn backpropagate(net: &mut NeuralNetwork, trace: &ForwardTrace, input: &[f64], target: &[f64]) {
     let n_layers = net.layers.len();
-    let mut output = trace.layer_outputs.last().unwrap().clone();
+    let output = trace.layer_outputs.last().unwrap().clone();
     // Output layer error (dL/dz for sigmoid + MSE).
     let mut deltas: Vec<Vec<f64>> = (0..n_layers).map(|_| Vec::new()).collect();
 
@@ -290,10 +292,13 @@ fn backpropagate(net: &mut NeuralNetwork, trace: &ForwardTrace, input: &[f64], t
     }
 
     // Update weights and biases with momentum.
-    let mut prev_activation = input.to_vec();
-    for l in 0..n_layers {
-        let activations = if l == 0 { input } else { &trace.layer_outputs[l] };
-        let layer = &mut net.layers[l];
+    let _prev_activation = input.to_vec();
+    for (l, layer) in net.layers.iter_mut().enumerate() {
+        let activations = if l == 0 {
+            input
+        } else {
+            &trace.layer_outputs[l]
+        };
         let delta = &deltas[l];
 
         for (i, neuron_weights) in layer.weights.iter_mut().enumerate() {
@@ -404,12 +409,10 @@ mod tests {
     fn serialize_roundtrip() {
         let mut net = NeuralNetwork::new(&[3, 5, 2], 0.01, 0.9);
         net.train_epochs(
-            &[
-                TrainingSample {
-                    input: vec![1.0, 2.0, 3.0],
-                    target: vec![0.9, 0.1],
-                },
-            ],
+            &[TrainingSample {
+                input: vec![1.0, 2.0, 3.0],
+                target: vec![0.9, 0.1],
+            }],
             10,
         );
         let json = net.to_json();

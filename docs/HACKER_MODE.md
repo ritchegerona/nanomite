@@ -264,3 +264,37 @@ behind Build/Hacker mode. HACKER MODE never shows the interactive confirmation
 prompt (the gate is Plan-only).
 
 See `docs/HACKER_SECURITY.md` for the authorization, scope and audit model.
+
+## Deep Web / Dark Web module (`deepweb`)
+
+Three authorized operations built on top of the Tor SOCKS5 proxy (`127.0.0.1:9050`, launched by `/tor start`):
+
+| operation | category | floor | target | does |
+|---|---|---|---|---|
+| `deepweb/search` | passive | low | none (query only) | DuckDuckGo HTML deep-web search over Tor SOCKS5 proxy |
+| `deepweb/browse` | active-discovery | low | required (url) | fetch `.onion` v3 or clearnet page through Tor SOCKS5 proxy |
+| `deepweb/validate-onion` | passive | low | required (address) | offline `.onion` v3 address shape validation (56-char base32) |
+
+### Usage
+
+```bash
+# 1. Start Tor (required before search/browse)
+/tor start
+
+# 2. Deep web search (passive, no target scope check)
+/hacker deepweb "target information"
+
+# 3. Browse a .onion site through Tor
+/hacker browse http://aaaqeayeaudaocajbifqydiob4ibceqtcqkrmfyydenbwha5dyp3kead.onion/
+
+# 4. Validate an onion address offline (no network, no Tor needed)
+/hacker run deepweb validate-onion <address>
+```
+
+### Security notes
+
+- All network traffic routes through `socks5h://127.0.0.1:9050` via reqwest's `socks` feature.
+- `.onion` addresses never resolve in system DNS — they are only reachable through the Tor proxy, so there is no DNS-rebinding or SSRF risk to internal space.
+- v3 onion addresses are validated offline (exactly 56 base32 chars + `.onion`) before any network attempt.
+- The `tor` daemon must be running separately (`/tor start`); this module never starts Tor itself — it only consumes the SOCKS5 endpoint.
+- Stop with `/tor stop` when deep-web work is finished.

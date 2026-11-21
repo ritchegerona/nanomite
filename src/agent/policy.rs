@@ -77,6 +77,7 @@ pub trait Confirmer: Send + Sync {
 }
 
 /// Which tools each mode permits. Word-exact matches on the trimmed name.
+#[allow(dead_code)]
 fn is_plan_tool(name: &str) -> bool {
     matches!(
         name.trim(),
@@ -151,8 +152,8 @@ impl ToolPolicy {
         Ok(())
     }
 
-
     /// Plan: reads + the plan tools. Building the plan IS the mode's purpose.
+    #[allow(dead_code)]
     fn plan_allowed(name: &str) -> bool {
         Risk::of(name) == Risk::Safe || is_plan_tool(name)
     }
@@ -160,6 +161,7 @@ impl ToolPolicy {
     /// Coder: plan set + workspace file edits and memory/self-edit writes.
     /// Deliberately excludes run_command (execution), git_commit/git_branch
     /// (history), ssh_run (remote), memory_delete (destructive).
+    #[allow(dead_code)]
     fn coder_allowed(name: &str) -> bool {
         Self::plan_allowed(name)
             || matches!(
@@ -174,6 +176,7 @@ impl ToolPolicy {
     }
 
     /// Build: coder set + local execution and git history. Still no SSH.
+    #[allow(dead_code)]
     fn build_allowed(name: &str) -> bool {
         Self::coder_allowed(name)
             || matches!(

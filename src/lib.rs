@@ -4,6 +4,10 @@
 //! agent runtime, the providers, the tools and the memory engine can be driven
 //! directly by tests.
 
+/// Single source of truth for the running version. Displayed in the TUI and
+/// embedded in generated reports; `Cargo.toml` remains the only place to bump.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod agent;
 pub mod app;
 pub mod board;
@@ -17,11 +21,11 @@ pub mod herdr;
 pub mod hooks;
 pub mod improve;
 pub mod learn;
-pub mod reporting;
 #[cfg(feature = "tor")]
 pub mod nanomite_tor;
 #[cfg(feature = "vpn")]
 pub mod nanomite_vpn;
+pub mod reporting;
 // The memory engine exposes a deliberate API superset of what the TUI consumes
 // today (backup/restore, consolidation, listing helpers); unused members of a
 // published library surface are not dead code.

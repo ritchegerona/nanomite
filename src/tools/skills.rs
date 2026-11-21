@@ -152,13 +152,7 @@ const DEFAULT_SKILLS: &[(&str, &str, &str, &str, &str)] = &[
         "system",
         "gobuster",
     ),
-    (
-        "dirb",
-        "Web content scanner",
-        "web",
-        "system",
-        "dirb",
-    ),
+    ("dirb", "Web content scanner", "web", "system", "dirb"),
     (
         "zaproxy",
         "OWASP Zed Attack Proxy (web app scanner)",
@@ -308,21 +302,18 @@ impl SkillRegistry {
         category: SkillCategory,
     ) {
         let now = now_secs();
-        let entry = self
-            .skills
-            .entry(name.to_string())
-            .or_insert(Skill {
-                name: name.to_string(),
-                description: String::new(),
-                category,
-                installed_via: via.to_string(),
-                package_name: package.to_string(),
-                first_recorded: now,
-                last_used: now,
-                use_count: 0,
-                present: true,
-                notes: String::new(),
-            });
+        let entry = self.skills.entry(name.to_string()).or_insert(Skill {
+            name: name.to_string(),
+            description: String::new(),
+            category,
+            installed_via: via.to_string(),
+            package_name: package.to_string(),
+            first_recorded: now,
+            last_used: now,
+            use_count: 0,
+            present: true,
+            notes: String::new(),
+        });
         entry.installed_via = via.to_string();
         entry.package_name = package.to_string();
         entry.present = true;
@@ -345,21 +336,18 @@ impl SkillRegistry {
     /// Mark `name` as present on PATH (detected without install).
     pub fn record_present(&mut self, name: &str, category: SkillCategory) {
         let now = now_secs();
-        let entry = self
-            .skills
-            .entry(name.to_string())
-            .or_insert(Skill {
-                name: name.to_string(),
-                description: String::new(),
-                category,
-                installed_via: "system".to_string(),
-                package_name: String::new(),
-                first_recorded: now,
-                last_used: now,
-                use_count: 0,
-                present: true,
-                notes: String::new(),
-            });
+        let entry = self.skills.entry(name.to_string()).or_insert(Skill {
+            name: name.to_string(),
+            description: String::new(),
+            category,
+            installed_via: "system".to_string(),
+            package_name: String::new(),
+            first_recorded: now,
+            last_used: now,
+            use_count: 0,
+            present: true,
+            notes: String::new(),
+        });
         entry.present = true;
         entry.last_used = now;
         self.save();

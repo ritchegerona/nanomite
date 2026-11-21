@@ -1,5 +1,5 @@
-pub mod browser_tools;
 pub mod auto_install;
+pub mod browser_tools;
 pub mod catalog;
 pub mod document_tools;
 pub mod exec_tools;
@@ -15,10 +15,10 @@ pub mod privacy_tools;
 pub mod skills;
 pub mod test_tools;
 
-pub mod web_tools;
-pub mod recon_tools;
-pub mod wireless_tools;
 pub mod local_model;
+pub mod recon_tools;
+pub mod web_tools;
+pub mod wireless_tools;
 
 use crate::evidence::EvidenceLocker;
 use crate::improve::ImproveEngine;
@@ -76,6 +76,7 @@ pub struct ToolSet {
     pub offline: bool,
     /// Optional pre-tool-call gate: consulted before dispatching any tool.
     /// Returns true to allow the call, false to block it.
+    #[allow(clippy::type_complexity)]
     pub pre_tool_gate: Option<std::sync::Arc<dyn Fn(&str, &str) -> bool + Send + Sync>>,
 }
 

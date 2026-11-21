@@ -5,6 +5,7 @@ pub mod db;
 pub mod error;
 pub mod models;
 pub mod auth;
+pub mod storage;
 
 pub fn init() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();

@@ -20,11 +20,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
 
 use crate::agent::openai::OpenAiProvider;
-use crate::tools::auto_install::{AutoInstaller, PackageManager, SkillTracker};
+use crate::tools::auto_install::{AutoInstaller, SkillTracker};
 
 /// Default port for the local llama-server endpoint.
 pub const DEFAULT_LLAMA_PORT: u16 = 8080;
@@ -61,7 +61,10 @@ impl LocalModelRegistry {
     }
 
     pub fn with_path(path: PathBuf) -> Self {
-        Self { path: Some(path), ..Default::default() }
+        Self {
+            path: Some(path),
+            ..Default::default()
+        }
     }
 
     pub fn load(path: &PathBuf) -> Self {
@@ -69,7 +72,10 @@ impl LocalModelRegistry {
             Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
             Err(_) => HashMap::new(),
         };
-        Self { models, path: Some(path.clone()) }
+        Self {
+            models,
+            path: Some(path.clone()),
+        }
     }
 
     pub fn save(&self) {
@@ -121,6 +127,7 @@ pub struct LocalModelManager {
     /// Auto-installer for llama.cpp / llama-server.
     installer: Arc<Mutex<AutoInstaller>>,
     /// Skill tracker shared with auto-install.
+    #[allow(dead_code)]
     skills: Arc<Mutex<SkillTracker>>,
 }
 
@@ -130,9 +137,9 @@ impl LocalModelManager {
         registry_path: PathBuf,
         skills: Arc<Mutex<SkillTracker>>,
     ) -> Self {
-        let installer = Arc::new(Mutex::new(AutoInstaller::new(
-            Arc::new(Mutex::new(SkillTracker::new())),
-        )));
+        let installer = Arc::new(Mutex::new(AutoInstaller::new(Arc::new(Mutex::new(
+            SkillTracker::new(),
+        )))));
         let registry = Arc::new(Mutex::new(LocalModelRegistry::load(&registry_path)));
 
         // Ensure models dir exists.
@@ -190,11 +197,7 @@ impl LocalModelManager {
     }
 
     /// Download a GGUF model file to dest with a hard timeout.
-    pub async fn download_model(
-        &self,
-        url: &str,
-        dest: &Path,
-    ) -> Result<(), String> {
+    pub async fn download_model(&self, url: &str, dest: &Path) -> Result<(), String> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(600))
             .build()
@@ -219,10 +222,14 @@ impl LocalModelManager {
 
         while let Some(result) = resp.chunk().await.transpose() {
             let chunk = result.map_err(|e| format!("stream read error: {e}"))?;
-            file.write_all(&chunk).await.map_err(|e| format!("model write error: {e}"))?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| format!("model write error: {e}"))?;
         }
 
-        file.flush().await.map_err(|e| format!("model flush error: {e}"))?;
+        file.flush()
+            .await
+            .map_err(|e| format!("model flush error: {e}"))?;
         Ok(())
     }
 
@@ -261,7 +268,8 @@ impl LocalModelManager {
         cmd.arg("--model").arg(model_path);
         cmd.arg("--host").arg("127.0.0.1");
         cmd.arg("--port").arg(port.to_string());
-        cmd.arg("--ctx-size").arg(ctx_size.unwrap_or(4096).to_string());
+        cmd.arg("--ctx-size")
+            .arg(ctx_size.unwrap_or(4096).to_string());
 
         if let Some(layers) = n_gpu_layers {
             cmd.arg("--n-gpu-layers").arg(layers.to_string());
@@ -290,7 +298,10 @@ impl LocalModelManager {
 
         let mut healthy = false;
         while Instant::now() < deadline {
-            if let Some(status) = child.try_wait().map_err(|e| format!("child wait error: {e}"))? {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|e| format!("child wait error: {e}"))?
+            {
                 return Err(format!(
                     "llama-server exited early with {status}; check log at {}",
                     log_path.display()
@@ -346,7 +357,13 @@ impl LocalModelManager {
 
     /// List all registered local models.
     pub async fn list_models(&self) -> Vec<LocalModelEntry> {
-        self.registry.lock().await.list().into_iter().cloned().collect()
+        self.registry
+            .lock()
+            .await
+            .list()
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     /// Registry accessor.
@@ -361,10 +378,7 @@ impl LocalModelManager {
 
     /// Get an OpenAiProvider configured to talk to the local llama-server
     /// for the given model id.
-    pub async fn provider_for(
-        &self,
-        model_id: &str,
-    ) -> Result<OpenAiProvider, String> {
+    pub async fn provider_for(&self, model_id: &str) -> Result<OpenAiProvider, String> {
         let reg = self.registry.lock().await;
         let entry = reg
             .get(model_id)
@@ -405,10 +419,7 @@ mod tests {
     use std::env;
 
     fn temp_models_dir() -> PathBuf {
-        let dir = env::temp_dir().join(format!(
-            "nanomite_local_model_test_{}",
-            std::process::id()
-        ));
+        let dir = env::temp_dir().join(format!("nanomite_local_model_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

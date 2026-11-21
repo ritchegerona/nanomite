@@ -76,14 +76,7 @@ impl DiagnosticsParser {
                 let severity = Severity::Error;
 
                 out.push(DebugDiagnostic::new(
-                    id,
-                    kind,
-                    severity,
-                    file,
-                    line_no,
-                    col,
-                    message,
-                    context,
+                    id, kind, severity, file, line_no, col, message, context,
                 ));
                 i = j;
             } else {
@@ -105,7 +98,11 @@ impl DiagnosticsParser {
         let code = line[6..end_code].to_string(); // skip "error["
         let rest = line[end_code + 1..].trim();
         // Skip `: ` or `:`
-        let message = rest.strip_prefix(": ").unwrap_or(rest.strip_prefix(':').unwrap_or(rest)).trim().to_string();
+        let message = rest
+            .strip_prefix(": ")
+            .unwrap_or(rest.strip_prefix(':').unwrap_or(rest))
+            .trim()
+            .to_string();
         Some((code, message))
     }
 
@@ -120,15 +117,23 @@ impl DiagnosticsParser {
             return None;
         }
         let file = parts[0].trim().to_string();
-        let line_no = parts.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
-        let col = parts.get(2).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+        let line_no = parts
+            .get(1)
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let col = parts
+            .get(2)
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
         Some((file, line_no, col))
     }
 
     /// Classify a rustc error code into a DiagnosticKind.
     fn classify_compiler_error(&self, code: &str, _message: &str) -> DiagnosticKind {
         match code {
-            "E0433" | "E0432" | "E0601" | "E0602" | "E0603" | "E0604" => DiagnosticKind::UnresolvedImport,
+            "E0433" | "E0432" | "E0601" | "E0602" | "E0603" | "E0604" => {
+                DiagnosticKind::UnresolvedImport
+            }
             "E0308" | "E0277" | "E0631" => DiagnosticKind::TypeMismatch,
             "E0499" | "E0502" | "E0507" | "E0597" => DiagnosticKind::Lifetime,
             "E0463" | "E0554" | "E0555" | "E0556" => DiagnosticKind::MissingDependency,

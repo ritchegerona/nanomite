@@ -75,6 +75,17 @@ pub enum EntryRole {
     System,
 }
 
+/// Severity carried alongside a transient status message so the composer can
+/// colour a warning differently from a success without parsing its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToastKind {
+    #[default]
+    Info,
+    Success,
+    Warn,
+    Error,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Streaming,
@@ -152,6 +163,8 @@ pub struct Rendered {
     /// colouring.
     pub mode_color: ratatui::style::Color,
     pub mode_label: String,
+    /// Whether fenced blocks were built with a line-number gutter.
+    pub code_numbers: bool,
     /// Fenced code blocks as `(first body row, last border row, raw source)`,
     /// rows indexing `lines` — the click-to-copy target list.
     pub code_blocks: Vec<(u16, u16, String)>,
@@ -486,6 +499,12 @@ impl Picker {
         // typed the list is a flat match set.
         if !query.is_empty() {
             self.items.retain(|item| !item.is_header());
+            // A grouped list starts with a header, so its initial cursor is
+            // row 1. Once the query flattens the list, row 0 is the first
+            // match; keep it highlighted unless a row is explicitly current.
+            if !self.items.iter().any(|item| item.current) {
+                self.cursor = 0;
+            }
         }
         self.cursor = self.cursor.min(self.items.len().saturating_sub(1));
         self.normalize_cursor();
@@ -1975,6 +1994,36 @@ pub(crate) enum HackerEvent {
 pub mod hacker;
 pub mod privacy;
 
+/// Which live panel occupies the left column under the header. `/activity`
+/// (ctrl+shift+a) cycles through all four; the renderers already exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftPanel {
+    Thinking,
+    Activity,
+    LiveDiff,
+    ToolMonitor,
+}
+
+impl LeftPanel {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Thinking => "thinking",
+            Self::Activity => "activity",
+            Self::LiveDiff => "live diff",
+            Self::ToolMonitor => "tool monitor",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Thinking => Self::Activity,
+            Self::Activity => Self::LiveDiff,
+            Self::LiveDiff => Self::ToolMonitor,
+            Self::ToolMonitor => Self::Thinking,
+        }
+    }
+}
+
 /// opencode-style follow-up suggestions: after a turn finishes, a tiny
 /// side-call asks the model for a few short prompts the user would most
 /// plausibly send next. The strip above the composer shows them; `Tab`
@@ -2005,6 +2054,9 @@ pub struct App {
     pub turn_started: Option<Instant>,
     pub view: View,
     pub toast: Option<(String, Instant)>,
+    /// Severity of the current toast; kept separate so existing `(msg, time)`
+    /// consumers keep working unchanged.
+    pub toast_kind: ToastKind,
     /// Lightweight runtime telemetry: turn and tool-call timings.
     pub telemetry: crate::telemetry::TelemetryHandle,
     /// Toggles behind `/details` and `/thinking`.
@@ -2061,7 +2113,7 @@ pub struct App {
     /// Bumped on every `/improve` open and on every decision inside it.
     improve_gen: u64,
     /// Self-heal pipeline: debug → fix → stage → learn.
-    self_heal: crate::debug::SelfHeal,
+    _self_heal: crate::debug::SelfHeal,
     /// Fix history: records every fix decision across sessions.
     fix_history: Option<crate::debug::FixHistory>,
     pub(crate) cancel: Option<Cancel>,
@@ -2124,12 +2176,15 @@ pub struct App {
     /// Performance hud (`/hud`): draws the last frame time, peak and
     /// transcript stats into the footer.
     pub hud: bool,
-    /// Show activity timeline panel (toggled with Ctrl+A).
-    pub show_activity: bool,
+    /// Live panel in the left column (cycled with `/activity`, ctrl+shift+a).
+    pub left_panel: LeftPanel,
     /// Tool activity display level (`/details`, `ctrl+o`).
     pub tool_display: ToolDisplay,
     /// Compact transcript density (`/density`, `ctrl+g`).
     pub compact: bool,
+    /// Show a line-number gutter inside fenced code blocks (`/linenumbers`).
+    /// Off by default; folded into the per-entry render cache.
+    pub code_numbers: bool,
     /// Footprints of the last finished turns (per-model ETA source).
     turn_stats: VecDeque<TurnStat>,
     /// Time machine: pre-change file contents per turn, newest last.
@@ -2267,6 +2322,7 @@ impl App {
             telemetry: TelemetryHandle::default(),
             turn_started: None,
             toast: None,
+            toast_kind: ToastKind::Info,
             show_tool_details: true,
             debug_drops: std::env::var("NANOMITE_DEBUG_DROPS")
                 .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
@@ -2301,7 +2357,7 @@ impl App {
             improve_rx,
             improve_tx,
             improve_gen: 0,
-            self_heal: crate::debug::SelfHeal::new(),
+            _self_heal: crate::debug::SelfHeal::new(),
             fix_history: Some(crate::debug::FixHistory::open(Self::fix_history_dir())),
             cancel: None,
             last_esc: None,
@@ -2336,9 +2392,10 @@ impl App {
             selection: None,
             scrollbar_drag: false,
             hud: false,
-            show_activity: false,
+            left_panel: LeftPanel::Thinking,
             tool_display: ToolDisplay::Full,
             compact: cfg.compact,
+            code_numbers: false,
             turn_stats: VecDeque::new(),
             snapshots: Vec::new(),
             turn_serial: 0,
@@ -2622,12 +2679,21 @@ impl App {
     /// browser; only a failed spawn surfaces (the click already toasted).
     pub fn on_link_opened(&mut self, ok: bool) {
         if !ok {
-            self.toast("could not open browser (xdg-open)");
+            self.toast_error("could not open browser (xdg-open)");
         }
     }
 
     fn toast(&mut self, msg: impl Into<String>) {
+        self.toast_with(msg, ToastKind::Info);
+    }
+
+    fn toast_with(&mut self, msg: impl Into<String>, kind: ToastKind) {
         self.toast = Some((msg.into(), Instant::now()));
+        self.toast_kind = kind;
+    }
+
+    fn toast_error(&mut self, msg: impl Into<String>) {
+        self.toast_with(msg, ToastKind::Error);
     }
 
     // -- events -------------------------------------------------------------
@@ -3578,6 +3644,7 @@ impl App {
             Command::Details => self.toggle_tool_details(),
             Command::Hud => self.toggle_hud(),
             Command::Density => self.toggle_compact(),
+            Command::CodeNumbers => self.toggle_code_numbers(),
             Command::Settings => self.open_settings(),
             Command::Revert => self.revert_turn(parse_turn_arg(args)),
             Command::Fork => self.fork_session_at(parse_turn_arg(args).unwrap_or(0)),
@@ -3632,18 +3699,7 @@ impl App {
                 ));
                 self.invalidate_transcript();
             }
-            Command::Activity => {
-                self.show_activity = !self.show_activity;
-                self.toast(format!(
-                    "left panel: {}",
-                    if self.show_activity {
-                        "activity"
-                    } else {
-                        "thinking"
-                    }
-                ));
-                self.invalidate_transcript();
-            }
+            Command::Activity => self.cycle_left_panel(),
             Command::Undo => self.undo(),
             Command::Unshare => self.toast("nothing shared - sessions never leave this machine"),
             Command::Prev => self.prev_turn(),
@@ -4450,7 +4506,7 @@ impl App {
                 "session-default",
                 &result.interface,
                 "wireless_recon",
-                &format!("wireless_recon: {}", &result.interface),
+                &format!("wireless_recon: {}", result.interface),
                 payload.as_bytes(),
                 vec![
                     "tool_output".into(),
@@ -4535,7 +4591,7 @@ impl App {
             // Note: full async execution requires spawning a tokio task.
             // The plan is saved to disk and can be executed via the agent
             // using the autonomous_execute tool.
-            self.toast(&format!(
+            self.toast(format!(
                 "Plan {} created ({} tasks)",
                 plan.id,
                 plan.tasks.len()
@@ -8130,6 +8186,17 @@ impl App {
         self.invalidate_transcript();
     }
 
+    /// Toggles fenced-code line numbers (`/linenumbers`, ctrl+shift+n).
+    /// The flag is part of the render-cache key, so no per-frame work is added.
+    pub fn toggle_code_numbers(&mut self) {
+        self.code_numbers = !self.code_numbers;
+        self.toast(format!(
+            "code line numbers: {}",
+            if self.code_numbers { "on" } else { "off" }
+        ));
+        self.invalidate_transcript();
+    }
+
     /// Cycles the tool display level (`/details`, `ctrl+o`):
     /// hidden -> rows -> full -> hidden.
     pub fn toggle_tool_details(&mut self) {
@@ -8147,11 +8214,11 @@ impl App {
         self.invalidate_transcript();
     }
 
-    /// Toggles the activity timeline panel visibility (Ctrl+Shift+A).
-    pub fn toggle_activity(&mut self) {
-        self.show_activity = !self.show_activity;
-        let label = if self.show_activity { "on" } else { "off" };
-        self.toast(format!("activity panel: {label}"));
+    /// Cycles the left column panel: thinking → activity → live diff → tool
+    /// monitor → thinking (Ctrl+Shift+A, `/activity`).
+    pub fn cycle_left_panel(&mut self) {
+        self.left_panel = self.left_panel.next();
+        self.toast(format!("left panel: {}", self.left_panel.label()));
         self.mark_dirty();
     }
 
@@ -8430,7 +8497,8 @@ impl App {
             KeyCode::Char('r') if ctrl => self.cycle_reasoning(),
             KeyCode::Char('f') if ctrl => self.open_search(),
             KeyCode::Char('o') if ctrl => self.toggle_tool_details(),
-            KeyCode::Char('a') if ctrl && shift => self.toggle_activity(),
+            KeyCode::Char('a') if ctrl && shift => self.cycle_left_panel(),
+            KeyCode::Char('n') if ctrl && shift => self.toggle_code_numbers(),
 
             // Paste: Ctrl+V (Linux/Windows), Super+V (Mac)
             // Actual paste content comes via bracketed paste (Event::Paste -> on_paste)
@@ -11121,6 +11189,43 @@ mod tests {
                     model: "claude-3".into()
                 }
         );
+    }
+
+    /// When no provider lists any models (empty groups), the current model is
+    /// still inserted at the top — the list always includes it.
+    #[tokio::test]
+    async fn grouped_model_items_inserts_current_when_no_provider_lists_models() {
+        let mut app = test_app().await;
+        app.cfg.preset = "openai".into();
+        app.cfg.model = "gpt-4o".into();
+        let items = app.grouped_model_items(Vec::new());
+        assert_eq!(
+            items.len(),
+            1,
+            "the current model must be listed: {:?}",
+            items
+        );
+        assert!(items[0].current);
+        assert_eq!(items[0].label, "gpt-4o");
+    }
+
+    /// When the current model is listed by its provider group, it is pinned to
+    /// the top and the provider's other models follow.
+    #[tokio::test]
+    async fn grouped_model_items_pins_current_listed_by_the_provider() {
+        let mut app = test_app().await;
+        app.cfg.preset = "openai".into();
+        app.cfg.model = "gpt-4o".into();
+        let groups = vec![ProviderModels {
+            id: "openai".into(),
+            label: "OpenAI".into(),
+            models: vec!["gpt-4o-mini".into(), "gpt-4o".into()],
+        }];
+        let items = app.grouped_model_items(groups);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].label, "gpt-4o", "current must lead: {:?}", items);
+        assert!(items[0].current);
+        assert_eq!(items[2].label, "gpt-4o-mini");
     }
 
     #[tokio::test]

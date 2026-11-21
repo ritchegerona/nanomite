@@ -74,10 +74,10 @@ impl ClippyParser {
                     || message.as_str().contains("redundant")
                     || message.as_str().contains("unwrap_used")
                     || message.as_str().contains("expect_used")
-                    && matches!(
-                        kind,
-                        DiagnosticKind::UnresolvedImport | DiagnosticKind::Other
-                    );
+                        && matches!(
+                            kind,
+                            DiagnosticKind::UnresolvedImport | DiagnosticKind::Other
+                        );
 
                 diagnostics.push(DebugDiagnostic::new(
                     id,
@@ -113,8 +113,14 @@ impl ClippyParser {
             return None;
         }
         let file = parts[0].trim().to_string();
-        let line_no = parts.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
-        let col = parts.get(2).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+        let line_no = parts
+            .get(1)
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let col = parts
+            .get(2)
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
         Some((file, line_no, col))
     }
 
@@ -122,13 +128,15 @@ impl ClippyParser {
     fn classify_clippy(&self, message: &str) -> DiagnosticKind {
         if message.contains("unused_imports") || message.contains("unused import") {
             DiagnosticKind::UnresolvedImport
-        } else if message.contains("dead_code") || message.contains("dead code") {
-            DiagnosticKind::Other
-        } else if message.contains("unwrap_used") || message.contains("unwrap()") {
-            DiagnosticKind::Other
-        } else if message.contains("expect_used") || message.contains("expect(") {
-            DiagnosticKind::Other
-        } else if message.contains("needless") || message.contains("redundant") {
+        } else if message.contains("dead_code")
+            || message.contains("dead code")
+            || message.contains("unwrap_used")
+            || message.contains("unwrap()")
+            || message.contains("expect_used")
+            || message.contains("expect(")
+            || message.contains("needless")
+            || message.contains("redundant")
+        {
             DiagnosticKind::Other
         } else {
             DiagnosticKind::Compiler

@@ -8,6 +8,8 @@ pub type Rgb = (u8, u8, u8);
 /// 16-colour fallback for terminals that do not advertise `COLORTERM=truecolor`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorDepth {
+    /// `NO_COLOR` is set: emit no colour sequences at all.
+    None,
     Ansi,
     Rgb,
 }
@@ -525,11 +527,12 @@ impl Theme {
         let term = std::env::var("TERM")
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let no_color = std::env::var("NO_COLOR").is_ok();
-        let rgb = !no_color
-            && (colorterm.contains("truecolor")
-                || colorterm.contains("24bit")
-                || term.contains("256color"));
+        if std::env::var_os("NO_COLOR").is_some() {
+            return ColorDepth::None;
+        }
+        let rgb = colorterm.contains("truecolor")
+            || colorterm.contains("24bit")
+            || term.contains("256color");
         if rgb {
             ColorDepth::Rgb
         } else {
@@ -544,15 +547,10 @@ impl Theme {
     /// Emits the truecolor value on a capable terminal, otherwise the 16-colour
     /// fallback for that role. The fallback belongs to the *role*, not the
     /// palette, so it is passed alongside the RGB triple rather than stored.
-    /// ANSI fallback that differs per palette.
-    #[inline]
-    fn ansi(&self, _default: Color, _opencode: Color) -> Color {
-        _default
-    }
-
     #[inline]
     fn pick(&self, rgb: Rgb, ansi: Color) -> Color {
         match self.depth {
+            ColorDepth::None => Color::Reset,
             ColorDepth::Rgb => Color::Rgb(rgb.0, rgb.1, rgb.2),
             ColorDepth::Ansi => ansi,
         }
@@ -577,13 +575,10 @@ impl Theme {
         self.pick(self.palette().border_focus, Color::Indexed(124))
     }
     pub fn accent(&self) -> Color {
-        self.pick(self.palette().accent, self.ansi(Color::Red, Color::Yellow))
+        self.pick(self.palette().accent, Color::Red)
     }
     pub fn accent_soft(&self) -> Color {
-        self.pick(
-            self.palette().accent_soft,
-            self.ansi(Color::Indexed(88), Color::Magenta),
-        )
+        self.pick(self.palette().accent_soft, Color::Indexed(88))
     }
     pub fn success(&self) -> Color {
         self.pick(self.palette().success, Color::Green)
@@ -611,6 +606,24 @@ impl Theme {
     }
     pub fn code(&self) -> Color {
         self.pick(self.palette().code, Color::Green)
+    }
+    /// Quiet ground behind fenced code. Derived from each palette's panel
+    /// ground so all ten themes get a code surface without extra literals;
+    /// ANSI terminals leave the background at their default.
+    pub fn code_bg(&self) -> Color {
+        let p = self.palette();
+        let blend = |a: u8, b: u8| ((u16::from(a) * 3 + u16::from(b)) / 4) as u8;
+        let rgb = (
+            blend(p.panel_bg.0, p.neutral.0),
+            blend(p.panel_bg.1, p.neutral.1),
+            blend(p.panel_bg.2, p.neutral.2),
+        );
+        self.pick(rgb, Color::Reset)
+    }
+    /// Line-number gutter; reuses the palette's tertiary text so it stays
+    /// legible but never competes with the code itself.
+    pub fn code_gutter(&self) -> Color {
+        self.pick(self.palette().faint, Color::DarkGray)
     }
     pub fn quote(&self) -> Color {
         self.pick(self.palette().quote, Color::DarkGray)
@@ -672,6 +685,24 @@ impl Theme {
 
 /// Glyphs shared across widgets.
 pub mod glyph {
+    use std::sync::OnceLock;
+
+    /// `NANOMITE_ASCII=1` swaps decorative unicode marks for plain ASCII so
+    /// fonts or terminals without the glyphs still render a readable chrome.
+    pub fn ascii_mode() -> bool {
+        static FLAG: OnceLock<bool> = OnceLock::new();
+        *FLAG.get_or_init(|| std::env::var_os("NANOMITE_ASCII").is_some())
+    }
+
+    /// Picks the unicode mark, or its ASCII stand-in when ASCII mode is on.
+    pub fn display(unicode: &'static str, ascii: &'static str) -> &'static str {
+        if ascii_mode() {
+            ascii
+        } else {
+            unicode
+        }
+    }
+
     pub const PROMPT: &str = "❯";
     pub const HEX: &str = "⬡";
     /// Filled hexagon, used by the welcome-card molecule mark.
@@ -776,6 +807,31 @@ mod tests {
     }
 
     #[test]
+    fn no_color_depth_emits_no_colours() {
+        let mut t = Theme::with_id(ThemeId::Cyberpunk);
+        t.depth = ColorDepth::None;
+        for color in [
+            t.text(),
+            t.strong(),
+            t.muted(),
+            t.faint(),
+            t.border(),
+            t.border_focus(),
+            t.accent(),
+            t.accent_soft(),
+            t.success(),
+            t.danger(),
+            t.warn(),
+            t.user(),
+            t.code(),
+            t.panel_bg(),
+            t.element_bg(),
+        ] {
+            assert_eq!(color, Color::Reset, "NO_COLOR leaked a colour");
+        }
+    }
+
+    #[test]
     fn cyberpunk_is_the_default_skin() {
         assert_eq!(Theme::detect().id, ThemeId::Cyberpunk);
         assert_eq!(ThemeId::ALL[0], ThemeId::Mono);
@@ -794,6 +850,47 @@ mod tests {
         umb.depth = ColorDepth::Ansi;
         assert_eq!(umb.accent(), Color::Red);
         // Both use the same fallback since we removed per-palette fallbacks
+    }
+
+    #[test]
+    fn palette_text_roles_keep_legible_contrast() {
+        fn luminance((r, g, b): Rgb) -> f64 {
+            let channel = |v: u8| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+        }
+        fn contrast(a: Rgb, b: Rgb) -> f64 {
+            let (hi, lo) = match (luminance(a), luminance(b)) {
+                (x, y) if x >= y => (x, y),
+                (x, y) => (y, x),
+            };
+            (hi + 0.05) / (lo + 0.05)
+        }
+        for id in ThemeId::ALL {
+            let p = id.palette();
+            assert!(
+                contrast(p.text, p.panel_bg) >= 7.0,
+                "{id:?}: body text must stay highly legible"
+            );
+            assert!(
+                contrast(p.muted, p.panel_bg) >= 2.8,
+                "{id:?}: secondary text must not disappear"
+            );
+            assert!(
+                contrast(p.accent, p.panel_bg) >= 4.0,
+                "{id:?}: accent must remain visible"
+            );
+            assert!(
+                contrast(p.code, p.panel_bg) >= 4.5,
+                "{id:?}: code must remain readable"
+            );
+        }
     }
 
     #[test]

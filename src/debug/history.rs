@@ -11,7 +11,6 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// One recorded fix decision.
@@ -64,7 +63,10 @@ impl FixHistory {
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("fix-history.jsonl");
         let seq = Self::count_existing(&path);
-        Self { path, seq: AtomicU64::new(seq) }
+        Self {
+            path,
+            seq: AtomicU64::new(seq),
+        }
     }
 
     fn count_existing(path: &PathBuf) -> u64 {
@@ -92,7 +94,11 @@ impl FixHistory {
         rationale: &str,
         applied_content_preview: &str,
     ) -> String {
-        let id = format!("fix-{}-{:04}", Self::now(), self.seq.fetch_add(1, Ordering::Relaxed));
+        let id = format!(
+            "fix-{}-{:04}",
+            Self::now(),
+            self.seq.fetch_add(1, Ordering::Relaxed)
+        );
         let record = FixHistoryRecord {
             id: id.clone(),
             timestamp: Self::now(),
@@ -104,7 +110,11 @@ impl FixHistory {
             applied_content_preview: applied_content_preview.to_string(),
         };
         let line = serde_json::to_string(&record).unwrap_or_default();
-        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&self.path) {
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
             let _ = writeln!(f, "{line}");
         }
         id
@@ -118,8 +128,8 @@ impl FixHistory {
         };
         let mut records: Vec<FixHistoryRecord> = BufReader::new(file)
             .lines()
-            .filter_map(|l| l.ok())
-            .filter_map(|l| serde_json::from_str(&l).ok())
+            .map_while(|l| l.ok())
+            .map_while(|l| serde_json::from_str(&l).ok())
             .collect();
         records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| b.id.cmp(&a.id)));
         records

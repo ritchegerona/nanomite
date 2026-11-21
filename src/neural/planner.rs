@@ -74,9 +74,9 @@ impl LearnedPlanner {
             self.vocab_tool.insert(i, tool.clone());
         }
         // Ensure at least one "unknown" output slot.
-        if !self.vocab_tool.contains_key(&(PLANNER_OUTPUT_DIM - 1)) {
-            self.vocab_tool.insert(PLANNER_OUTPUT_DIM - 1, "<unknown>".to_string());
-        }
+        self.vocab_tool
+            .entry(PLANNER_OUTPUT_DIM - 1)
+            .or_insert_with(|| "<unknown>".to_string());
 
         // Create or load the network.
         let net = NeuralNetwork::new(&[PLANNER_INPUT_DIM, 32, 16, PLANNER_OUTPUT_DIM], 0.01, 0.9);
@@ -113,9 +113,7 @@ impl LearnedPlanner {
         let mut scored: Vec<(String, f64)> = self
             .vocab_tool
             .iter()
-            .filter_map(|(idx, tool)| {
-                probs.get(*idx).map(|p| (tool.clone(), *p))
-            })
+            .filter_map(|(idx, tool)| probs.get(*idx).map(|p| (tool.clone(), *p)))
             .collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.into_iter().take(top_k).collect()
@@ -134,16 +132,19 @@ impl LearnedPlanner {
 
     /// Extract context features from a task description + workspace state.
     /// Fixed-size feature vector: keyword presence, tool history stats, etc.
-    pub fn context_features(task: &str, recent_tools: &[String], recent_successes: &[bool]) -> Vec<f64> {
+    pub fn context_features(
+        task: &str,
+        recent_tools: &[String],
+        recent_successes: &[bool],
+    ) -> Vec<f64> {
         let mut features = vec![0.0f64; PLANNER_INPUT_DIM];
 
         // Keyword presence features (first 24 dims).
         let keywords = [
-            "nmap", "port", "scan", "web", "http", "vuln", "sql", "inject",
-            "password", "crack", "hash", "wifi", "wireless", "recon", "enum",
-            "dir", "bust", "file", "read", "write", "edit", "command", "ssh",
-            "remote", "memory", "save", "search", "plan", "create", "git",
-            "commit", "test", "run", "install", "tool",
+            "nmap", "port", "scan", "web", "http", "vuln", "sql", "inject", "password", "crack",
+            "hash", "wifi", "wireless", "recon", "enum", "dir", "bust", "file", "read", "write",
+            "edit", "command", "ssh", "remote", "memory", "save", "search", "plan", "create",
+            "git", "commit", "test", "run", "install", "tool",
         ];
         let task_lower = task.to_ascii_lowercase();
         for (i, kw) in keywords.iter().enumerate() {
@@ -162,7 +163,9 @@ impl LearnedPlanner {
             *cat_counts.entry(cat).or_insert(0) += 1;
         }
         let total = recent_tools.len().max(1);
-        let cats = ["recon", "web", "password", "wireless", "exec", "memory", "plan", "git"];
+        let cats = [
+            "recon", "web", "password", "wireless", "exec", "memory", "plan", "git",
+        ];
         for (i, cat) in cats.iter().enumerate() {
             if 24 + i >= PLANNER_INPUT_DIM {
                 break;
@@ -214,6 +217,10 @@ impl LearnedPlanner {
     pub fn len(&self) -> usize {
         self.outcomes.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.outcomes.is_empty()
+    }
 }
 
 /// Map a tool name to its category for feature extraction.
@@ -222,7 +229,8 @@ fn category_of(tool: &str) -> &str {
         "list_files" | "read_file" | "search" | "read_document" | "ocr_image" => "exec", // file inspection
         "run_command" | "ssh_run" | "scan_ports" => "exec",
         "web_fetch" | "web_search" | "browse" | "ip_lookup" => "web",
-        "memory_save" | "memory_search" | "memory_get" | "memory_list" | "memory_update" | "memory_delete" => "memory",
+        "memory_save" | "memory_search" | "memory_get" | "memory_list" | "memory_update"
+        | "memory_delete" => "memory",
         "create_plan" | "get_plan" | "update_task" | "list_plans" | "delete_plan" => "plan",
         "git_status" | "git_diff" | "git_log" | "git_commit" | "git_branch" => "git",
         "write_file" | "edit_file" => "exec",

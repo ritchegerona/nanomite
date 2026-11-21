@@ -10,7 +10,7 @@
 //! `/debug auto-apply on`.
 
 use crate::debug::{FixConfidence, FixProposal};
-use crate::improve::{Actor, ApplyOutcome, CargoTestRunner, ImproveEngine, RegressionRunner, Roots, Target};
+use crate::improve::{Actor, CargoTestRunner, ImproveEngine, Roots, Target};
 
 /// Auto-apply policy: which confidence levels may auto-apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,17 +94,17 @@ impl AutoApplyGate {
             roots,
         ) {
             Ok(p) => p.id.clone(),
-            Err(e) => return AutoApplyResult::Error {
-                id: proposal.diagnostic_id.clone(),
-                error: e.to_string(),
-            },
+            Err(e) => {
+                return AutoApplyResult::Error {
+                    id: proposal.diagnostic_id.clone(),
+                    error: e.to_string(),
+                }
+            }
         };
 
         // Auto-apply only high-confidence fixes when policy is HighOnly.
-        let should_auto = matches!(
-            self.config.policy,
-            AutoApplyPolicy::HighOnly
-        ) && proposal.confidence == FixConfidence::High;
+        let should_auto = matches!(self.config.policy, AutoApplyPolicy::HighOnly)
+            && proposal.confidence == FixConfidence::High;
 
         if !should_auto {
             return AutoApplyResult::Staged { id };
@@ -184,10 +184,7 @@ mod tests {
             ..Default::default()
         });
 
-        let proposal = make_proposal(
-            file.to_str().unwrap(),
-            FixConfidence::High,
-        );
+        let proposal = make_proposal(file.to_str().unwrap(), FixConfidence::High);
         let result = gate.evaluate(&engine, &roots, &proposal);
         assert!(matches!(result, AutoApplyResult::Staged { .. }));
     }
@@ -211,10 +208,7 @@ mod tests {
             ..Default::default()
         });
 
-        let proposal = make_proposal(
-            file.to_str().unwrap(),
-            FixConfidence::High,
-        );
+        let proposal = make_proposal(file.to_str().unwrap(), FixConfidence::High);
         let result = gate.evaluate(&engine, &roots, &proposal);
         // Regression gate runs cargo test --lib which will fail in temp dir
         // (no Cargo.toml), so we expect RolledBack or Error — but the key
@@ -241,10 +235,7 @@ mod tests {
             ..Default::default()
         });
 
-        let proposal = make_proposal(
-            file.to_str().unwrap(),
-            FixConfidence::Medium,
-        );
+        let proposal = make_proposal(file.to_str().unwrap(), FixConfidence::Medium);
         let result = gate.evaluate(&engine, &roots, &proposal);
         assert!(matches!(result, AutoApplyResult::Staged { .. }));
     }

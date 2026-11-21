@@ -54,6 +54,7 @@ pub enum Command {
     Focus,
     Team,
     Density,
+    CodeNumbers,
     Settings,
     Hacker,
     Learn,
@@ -66,6 +67,41 @@ pub enum Command {
     DebugFile,
     Fix,
     Heal,
+}
+
+/// Palette section order, shared by the command picker and help sheet.
+pub const GROUPS: [&str; 8] = [
+    "connect & model",
+    "transcript",
+    "session",
+    "tools & files",
+    "memory & knowledge",
+    "appearance & view",
+    "agent & automation",
+    "other",
+];
+
+impl Command {
+    /// Palette/Help section for this command. Kept as a method so the command
+    /// table itself stays a flat list of canonical names.
+    pub fn group(self) -> &'static str {
+        use Command::*;
+        match self {
+            Connect | Models | Reasoning | Refresh => "connect & model",
+            New | Sessions | Share | Unshare | Export | Fork | Revert | Editor | Exit | Init => {
+                "session"
+            }
+            Compact | Undo | Redo | Copy | Prev | Next | EditTurn | Evidence | History => {
+                "transcript"
+            }
+            Memory | Favorites => "memory & knowledge",
+            Tools | Image | Ocr => "tools & files",
+            Themes | Hud | Settings | Density | CodeNumbers | Details | Thinking | Activity
+            | Focus => "appearance & view",
+            Worktrees | Update => "other",
+            _ => "agent & automation",
+        }
+    }
 }
 
 pub struct Entry {
@@ -341,7 +377,7 @@ pub const COMMANDS: &[Entry] = &[
     Entry {
         command: "/activity",
         aliases: &[],
-        hint: "toggle left panel: thinking ↔ activity timeline (alt+a)",
+        hint: "cycle left panel: thinking · activity · live diff · tool monitor (ctrl+shift+a)",
         kind: Command::Activity,
     },
     Entry {
@@ -355,6 +391,12 @@ pub const COMMANDS: &[Entry] = &[
         aliases: &[],
         hint: "toggle compact density (ctrl+g)",
         kind: Command::Density,
+    },
+    Entry {
+        command: "/linenumbers",
+        aliases: &["/numbers"],
+        hint: "toggle code-block line numbers (ctrl+shift+n)",
+        kind: Command::CodeNumbers,
     },
     Entry {
         command: "/settings",

@@ -15,6 +15,7 @@ pub mod advanced_recon;
 pub mod advanced_web;
 pub mod attack_path;
 pub mod c2_simulation;
+pub mod deepweb;
 pub mod exploitation;
 pub mod kali;
 pub mod network;

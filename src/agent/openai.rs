@@ -22,15 +22,16 @@ fn dns_overrides() -> Vec<(String, SocketAddr)> {
     };
     raw.split(',')
         .map(|pair| {
-            let (host, ip) = pair
-                .split_once('=')
-                .unwrap_or((pair.trim(), ""));
+            let (host, ip) = pair.split_once('=').unwrap_or((pair.trim(), ""));
             let host = host.trim().to_string();
             let ip = ip.trim();
-            (host, ip.parse::<SocketAddr>().unwrap_or_else(|_| {
-                // Treat a bare IPv4/IPv6 literal as SocketAddr with port 443.
-                format!("{ip}:443").parse::<SocketAddr>().unwrap()
-            }))
+            (
+                host,
+                ip.parse::<SocketAddr>().unwrap_or_else(|_| {
+                    // Treat a bare IPv4/IPv6 literal as SocketAddr with port 443.
+                    format!("{ip}:443").parse::<SocketAddr>().unwrap()
+                }),
+            )
         })
         .filter(|(host, _)| !host.is_empty())
         .collect()

@@ -31,8 +31,8 @@ pub use diagnostics::{DebugDiagnostic, DiagnosticKind, Severity};
 pub use fix::{stage_fixes, FixGenerator, FixResult};
 pub use fix_ext::{stage_ext_fixes, FixExtGenerator, FixExtResult};
 pub use history::{FixDecision, FixHistory, FixHistoryRecord};
-pub use self_heal::SelfHeal;
 pub use parser::DiagnosticsParser;
+pub use self_heal::SelfHeal;
 
 /// How confident the auto-fix generator is in a proposed fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

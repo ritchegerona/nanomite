@@ -12,8 +12,8 @@
 //! improve engine — they remain `Pending` until human approval, and the
 //! regression gate (`cargo test --lib`) decides whether they stick.
 
-use super::diagnostics::{DebugDiagnostic, DiagnosticKind, Severity};
-use super::{FixConfidence, FixGenerator, FixProposal};
+use super::diagnostics::{DebugDiagnostic, DiagnosticKind};
+use super::{FixConfidence, FixProposal};
 use crate::improve::{Actor, ImproveEngine, Roots, Target};
 
 /// Result of extended fix generation.
@@ -24,6 +24,7 @@ pub struct FixExtResult {
 }
 
 /// Extended fix generator for patterns not covered by `fix.rs`.
+#[derive(Default)]
 pub struct FixExtGenerator;
 
 impl FixExtGenerator {
@@ -65,7 +66,10 @@ impl FixExtGenerator {
             }
         }
 
-        FixExtResult { proposals, unfixable }
+        FixExtResult {
+            proposals,
+            unfixable,
+        }
     }
 
     // --- individual fix patterns -------------------------------------------
@@ -76,7 +80,7 @@ impl FixExtGenerator {
 
         // E0499: cannot borrow `x` as mutable more than once at a time
         if message.contains("cannot borrow") || message.contains("borrow of moved") {
-            let old = format!("{}", d.context.first().cloned().unwrap_or_default());
+            let old = d.context.first().cloned().unwrap_or_default().to_string();
             let new = format!(
                 "{}  // .clone() to avoid borrow conflict",
                 d.context.first().cloned().unwrap_or_default()
@@ -101,7 +105,8 @@ impl FixExtGenerator {
                 diagnostic_id: d.id.clone(),
                 file_path: d.file.clone(),
                 old_content: String::new(),
-                new_content: "  // consider extending lifetime or using Arc<RwLock<T>>\n".to_string(),
+                new_content: "  // consider extending lifetime or using Arc<RwLock<T>>\n"
+                    .to_string(),
                 rationale: format!(
                     "Lifetime error at {}:{} — variable dropped before use.",
                     d.file, d.line
@@ -233,9 +238,9 @@ fn extract_quoted(message: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::debug::{DebugDiagnostic, DebugSession, DiagnosticKind, Severity};
+    use crate::debug::{DebugSession, Severity};
 
-    fn make_diag(kind: DiagnosticKind, message: &str, has_known_fix: bool) -> DebugDiagnostic {
+    fn make_diag(kind: DiagnosticKind, message: &str, _has_known_fix: bool) -> DebugDiagnostic {
         DebugDiagnostic::new(
             "test-id".into(),
             kind,
@@ -280,7 +285,11 @@ mod tests {
 
     #[test]
     fn unfixable_without_known_fix() {
-        let d = make_diag(DiagnosticKind::Lifetime, "lifetime may not live long enough", false);
+        let d = make_diag(
+            DiagnosticKind::Lifetime,
+            "lifetime may not live long enough",
+            false,
+        );
         let session = DebugSession {
             source: "test".into(),
             diagnostics: vec![d],

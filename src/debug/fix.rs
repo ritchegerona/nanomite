@@ -16,10 +16,10 @@
 //! - **Missing dependency** (`E0463`): suggests adding to Cargo.toml.
 //! - **Panic / test failure**: logs as a technique for the neural memory.
 
-use super::diagnostics::{DebugDiagnostic, DiagnosticKind, Severity};
-use super::FixProposal;
+use super::diagnostics::{DebugDiagnostic, DiagnosticKind};
 use super::FixConfidence;
-use crate::improve::{Actor, ImproveEngine, Proposal, Roots, Status, Target};
+use super::FixProposal;
+use crate::improve::{Actor, ImproveEngine, Roots, Target};
 
 /// Result of auto-fix generation: proposals plus non-fixable diagnostics.
 #[derive(Debug, Clone, Default)]
@@ -29,6 +29,7 @@ pub struct FixResult {
 }
 
 /// Analyzes diagnostics and generates fix proposals.
+#[derive(Default)]
 pub struct FixGenerator;
 
 impl FixGenerator {
@@ -75,7 +76,10 @@ impl FixGenerator {
             }
         }
 
-        FixResult { proposals, unfixable }
+        FixResult {
+            proposals,
+            unfixable,
+        }
     }
 
     // --- individual fix patterns -------------------------------------------
@@ -199,10 +203,8 @@ fn extract_found_type(message: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::debug::{
-        DebugDiagnostic, DebugSession, DiagnosticKind, Severity,
-    };
     use super::{extract_expected_type, extract_found_type, extract_quoted, FixGenerator};
+    use crate::debug::{DebugDiagnostic, DiagnosticKind, Severity};
 
     #[test]
     fn generates_proposal_for_unresolved_import() {
@@ -253,7 +255,10 @@ mod tests {
 
     #[test]
     fn extracts_quoted_symbol() {
-        assert_eq!(extract_quoted("could not find `Foo` in scope"), Some("Foo".into()));
+        assert_eq!(
+            extract_quoted("could not find `Foo` in scope"),
+            Some("Foo".into())
+        );
         assert_eq!(extract_quoted("no backticks here"), None);
     }
 

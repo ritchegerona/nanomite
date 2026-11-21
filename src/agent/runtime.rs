@@ -9,7 +9,6 @@ use crate::neural::{
     multi_agent::{AgentOrchestrator, MultiAgentArgs},
     now_secs,
 };
-use std::sync::Arc;
 use crate::tools::document_tools::ReadDocumentArgs;
 use crate::tools::exec_tools::{RunCommandArgs, ScanPortsArgs, SshRunArgs};
 use crate::tools::file_tools::{
@@ -24,17 +23,18 @@ use crate::tools::memory_tools::{
     MemoryUpdateArgs,
 };
 use crate::tools::plan_tools::{CreatePlanArgs, DeletePlanArgs, GetPlanArgs, UpdateTaskArgs};
+use crate::tools::recon_tools::WebReconArgs;
 use crate::tools::skills::{
     Skill, SkillSummary, SkillsKnownArgs, SkillsKnownResult, SkillsListArgs, SkillsListResult,
 };
 use crate::tools::test_tools::RunTestsArgs;
 use crate::tools::web_tools::{IpLookupArgs, WebFetchArgs, WebSearchArgs};
-use crate::tools::recon_tools::WebReconArgs;
 use crate::tools::wireless_tools::WirelessReconArgs;
 use crate::tools::ToolSet;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc::UnboundedSender, Notify};
 
@@ -501,7 +501,9 @@ impl AgentRuntime {
 
     /// Returns a shared handle to the autonomous planner so the UI can view
     /// saved plans or trigger autonomous execution (e.g. `/plan`).
-    pub fn autonomous_planner(&self) -> Option<std::sync::Arc<crate::neural::autonomous_planner::AutonomousPlanner>> {
+    pub fn autonomous_planner(
+        &self,
+    ) -> Option<std::sync::Arc<crate::neural::autonomous_planner::AutonomousPlanner>> {
         self.autonomous_planner.clone()
     }
 
@@ -788,21 +790,31 @@ impl AgentRuntime {
                                 if let Some(planner_arc) = planner_arc {
                                     let mut planner = (*planner_arc).clone();
                                     if require_approval {
-                                        planner = planner.with_pre_tool_gate(Arc::new(
-                                            |tool, _args| {
+                                        planner =
+                                            planner.with_pre_tool_gate(Arc::new(|tool, _args| {
                                                 matches!(
                                                     tool,
-                                                    "run_command" | "ssh_run" | "web_recon" | "wireless_recon" | "scan_ports"
+                                                    "run_command"
+                                                        | "ssh_run"
+                                                        | "web_recon"
+                                                        | "wireless_recon"
+                                                        | "scan_ports"
                                                 )
-                                            },
-                                        ));
+                                            }));
                                     }
-                                    let plan = planner.create_plan(&parsed.goal, parsed.scope.as_deref());
+                                    let plan =
+                                        planner.create_plan(&parsed.goal, parsed.scope.as_deref());
                                     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
                                     let result = planner.execute_plan(Cancel::new(), tx).await;
                                     let _ = event_tx.send(AgentEvent::Activity {
-                                        action: format!("Autonomous plan {}: {}", plan.id, result.summary),
-                                        detail: Some(format!("{}/{} tasks completed", result.tasks_completed, result.total_tasks)),
+                                        action: format!(
+                                            "Autonomous plan {}: {}",
+                                            plan.id, result.summary
+                                        ),
+                                        detail: Some(format!(
+                                            "{}/{} tasks completed",
+                                            result.tasks_completed, result.total_tasks
+                                        )),
                                         done: true,
                                     });
                                     Ok((
@@ -810,7 +822,8 @@ impl AgentRuntime {
                                         result.summary,
                                     ))
                                 } else {
-                                    Err("autonomous planner is not attached to this session".to_string())
+                                    Err("autonomous planner is not attached to this session"
+                                        .to_string())
                                 }
                             });
                             plan_result
@@ -823,7 +836,9 @@ impl AgentRuntime {
                                 Ok(a) => a,
                                 Err(e) => {
                                     return (
-                                        Err(format!("invalid multi_agent_orchestrate arguments: {e}")),
+                                        Err(format!(
+                                            "invalid multi_agent_orchestrate arguments: {e}"
+                                        )),
                                         snapshot,
                                     )
                                 }
@@ -839,11 +854,10 @@ impl AgentRuntime {
                                 // Build an AgentOrchestrator from the runtime.
                                 let runtime_arc = match &orchestrator_arc {
                                     Some(p) => p.runtime(),
-                                    None => {
-                                        return Err(
-                                            "multi-agent orchestrator is not attached to this session".to_string()
-                                        )
-                                    }
+                                    None => return Err(
+                                        "multi-agent orchestrator is not attached to this session"
+                                            .to_string(),
+                                    ),
                                 };
                                 let mut orchestrator = AgentOrchestrator::new(
                                     runtime_arc,
@@ -854,19 +868,30 @@ impl AgentRuntime {
                                     )),
                                 );
                                 if require_approval {
-                                    orchestrator = orchestrator.with_pre_tool_gate(Arc::new(
-                                        |tool, _args| {
+                                    orchestrator =
+                                        orchestrator.with_pre_tool_gate(Arc::new(|tool, _args| {
                                             matches!(
                                                 tool,
-                                                "run_command" | "ssh_run" | "web_recon" | "wireless_recon" | "scan_ports"
+                                                "run_command"
+                                                    | "ssh_run"
+                                                    | "web_recon"
+                                                    | "wireless_recon"
+                                                    | "scan_ports"
                                             )
-                                        },
-                                    ));
+                                        }));
                                 }
-                                let result = orchestrator.orchestrate(parsed, Cancel::new(), event_tx.clone()).await;
+                                let result = orchestrator
+                                    .orchestrate(parsed, Cancel::new(), event_tx.clone())
+                                    .await;
                                 let _ = event_tx.send(AgentEvent::Activity {
-                                    action: format!("Multi-agent swarm {}: {}", result.swarm_id, result.summary),
-                                    detail: Some(format!("{}/{} agents completed", result.tasks_completed, result.total_tasks)),
+                                    action: format!(
+                                        "Multi-agent swarm {}: {}",
+                                        result.swarm_id, result.summary
+                                    ),
+                                    detail: Some(format!(
+                                        "{}/{} agents completed",
+                                        result.tasks_completed, result.total_tasks
+                                    )),
                                     done: true,
                                 });
                                 Ok((
@@ -1132,10 +1157,10 @@ fn snapshot_file(
 
 pub(crate) fn run_tool(
     tools: &ToolSet,
-    disabled: &[String],
+    _disabled: &[String],
     tool_policy: ToolPolicy,
-    hooks: &[HookConfig],
-    workspace: &std::path::Path,
+    _hooks: &[HookConfig],
+    _workspace: &std::path::Path,
     call: &ToolCall,
 ) -> Result<(String, String), String> {
     let requested = call.name.trim().to_ascii_lowercase();
@@ -1843,7 +1868,11 @@ pub(crate) fn run_tool(
                     "wireless_recon",
                     &format!("wireless_recon: {}", shorten(&result.interface, 40)),
                     payload.as_bytes(),
-                    vec!["tool_output".into(), "wireless_recon".into(), "wireless".into()],
+                    vec![
+                        "tool_output".into(),
+                        "wireless_recon".into(),
+                        "wireless".into(),
+                    ],
                     "application/json",
                 );
             }
@@ -1922,10 +1951,14 @@ pub(crate) fn run_tool(
             use std::path::PathBuf;
             let parsed: serde_json::Value = serde_json::from_value(args)
                 .map_err(|e| format!("bad local_model_load arguments: {e}"))?;
-            let model_id = parsed["model_id"].as_str()
-                .ok_or("model_id required")?.to_string();
-            let label = parsed["label"].as_str()
-                .ok_or("label required")?.to_string();
+            let model_id = parsed["model_id"]
+                .as_str()
+                .ok_or("model_id required")?
+                .to_string();
+            let label = parsed["label"]
+                .as_str()
+                .ok_or("label required")?
+                .to_string();
             let model_url = parsed["model_url"].as_str();
             let model_name = parsed["model_name"].as_str();
             let ctx_size = parsed["ctx_size"].as_u64().map(|v| v as u32);
@@ -1939,9 +1972,8 @@ pub(crate) fn run_tool(
                 let dest = tools.local_model.models_dir().join(name);
                 if !dest.exists() {
                     tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(
-                            tools.local_model.download_model(url, &dest)
-                        )
+                        tokio::runtime::Handle::current()
+                            .block_on(tools.local_model.download_model(url, &dest))
                     })?;
                 }
                 dest
@@ -1950,12 +1982,15 @@ pub(crate) fn run_tool(
             };
 
             let entry = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    tools.local_model.load_model(
-                        &model_id, &label, &model_path, ctx_size, n_gpu_layers,
-                    )
-                )
-            }).map_err(|e| format!("local_model_load failed: {e}"))?;
+                tokio::runtime::Handle::current().block_on(tools.local_model.load_model(
+                    &model_id,
+                    &label,
+                    &model_path,
+                    ctx_size,
+                    n_gpu_layers,
+                ))
+            })
+            .map_err(|e| format!("local_model_load failed: {e}"))?;
             let payload = serde_json::to_string(&entry).unwrap_or_default();
             let summary = format!("local model {} loaded on port {}", model_id, entry.port);
             Ok((payload, summary))
@@ -1963,36 +1998,45 @@ pub(crate) fn run_tool(
         "local_model_unload" => {
             let parsed: serde_json::Value = serde_json::from_value(args)
                 .map_err(|e| format!("bad local_model_unload arguments: {e}"))?;
-            let model_id = parsed["model_id"].as_str()
-                .ok_or("model_id required")?.to_string();
+            let model_id = parsed["model_id"]
+                .as_str()
+                .ok_or("model_id required")?
+                .to_string();
             tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    tools.local_model.unload_model(&model_id)
-                )
-            }).map_err(|e| format!("local_model_unload failed: {e}"))?;
+                tokio::runtime::Handle::current()
+                    .block_on(tools.local_model.unload_model(&model_id))
+            })
+            .map_err(|e| format!("local_model_unload failed: {e}"))?;
             let summary = format!("local model {} unloaded", model_id);
             Ok(("{}".to_string(), summary))
         }
         "local_model_chat" => {
             let parsed: serde_json::Value = serde_json::from_value(args)
                 .map_err(|e| format!("bad local_model_chat arguments: {e}"))?;
-            let model_id = parsed["model_id"].as_str()
-                .ok_or("model_id required")?.to_string();
-            let messages = parsed["messages"].as_str()
-                .ok_or("messages required")?.to_string();
+            let model_id = parsed["model_id"]
+                .as_str()
+                .ok_or("model_id required")?
+                .to_string();
+            let messages = parsed["messages"]
+                .as_str()
+                .ok_or("messages required")?
+                .to_string();
             let temperature = parsed["temperature"].as_f64().unwrap_or(0.7);
             let max_tokens = parsed["max_tokens"].as_u64().unwrap_or(2048) as u32;
 
             let provider = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    tools.local_model.provider_for(&model_id)
-                )
-            }).map_err(|e| format!("local_model_chat failed: {e}"))?;
+                tokio::runtime::Handle::current()
+                    .block_on(tools.local_model.provider_for(&model_id))
+            })
+            .map_err(|e| format!("local_model_chat failed: {e}"))?;
             let result = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    provider.local_chat(&messages, temperature, max_tokens)
-                )
-            }).map_err(|e| format!("local model chat failed: {e}"))?;
+                tokio::runtime::Handle::current().block_on(provider.local_chat(
+                    &messages,
+                    temperature,
+                    max_tokens,
+                ))
+            })
+            .map_err(|e| format!("local model chat failed: {e}"))?;
             let payload = serde_json::to_string(&result).unwrap_or_default();
             let summary = format!("local model {} responded", model_id);
             Ok((payload, summary))
@@ -2496,7 +2540,12 @@ mod tests {
         // No mode refuses any tool call — all authorize Ok(()) for every name.
         // Execution failures (e.g. sh missing in temp dir) are not refusals;
         // we check only for user_declined / refusal markers.
-        for policy in [ToolPolicy::Plan, ToolPolicy::Coder, ToolPolicy::Build, ToolPolicy::Hacker] {
+        for policy in [
+            ToolPolicy::Plan,
+            ToolPolicy::Coder,
+            ToolPolicy::Build,
+            ToolPolicy::Hacker,
+        ] {
             let runtime = runtime_with(Arc::new(RunCommandProvider::new()), None)
                 .with_tool_policy(policy)
                 .with_confirmer(Arc::new(FixedConfirmer { allow: false }));
@@ -2511,7 +2560,9 @@ mod tests {
             );
             // The turn should complete successfully.
             assert!(
-                events.iter().any(|e| matches!(e, AgentEvent::Finished { .. })),
+                events
+                    .iter()
+                    .any(|e| matches!(e, AgentEvent::Finished { .. })),
                 "{policy:?} must finish the turn: {events:?}"
             );
         }
@@ -2520,7 +2571,12 @@ mod tests {
     #[tokio::test]
     async fn confirmer_never_consulted_no_refusals() {
         // Since all modes auto-approve, a deny-everything confirmer is never consulted.
-        for policy in [ToolPolicy::Plan, ToolPolicy::Coder, ToolPolicy::Build, ToolPolicy::Hacker] {
+        for policy in [
+            ToolPolicy::Plan,
+            ToolPolicy::Coder,
+            ToolPolicy::Build,
+            ToolPolicy::Hacker,
+        ] {
             let runtime = runtime_with(Arc::new(RunCommandProvider::new()), None)
                 .with_tool_policy(policy)
                 .with_confirmer(Arc::new(FixedConfirmer { allow: false }));
@@ -2820,15 +2876,8 @@ mod tests {
             index: 0,
         };
         // No refusals in any mode: write_file is authorized.
-        let (payload, _) = run_tool(
-            &tools,
-            &[],
-            ToolPolicy::Plan,
-            &[],
-            &ws,
-            &call,
-        )
-        .expect("write_file authorized in plan mode");
+        let (payload, _) = run_tool(&tools, &[], ToolPolicy::Plan, &[], &ws, &call)
+            .expect("write_file authorized in plan mode");
         assert!(payload.contains("\"bytes_written\""), "{payload}");
         // Plan tools still run.
         let call = ToolCall {
@@ -2837,15 +2886,8 @@ mod tests {
             arguments: "{}".to_string(),
             index: 0,
         };
-        let (payload, _) = run_tool(
-            &tools,
-            &[],
-            ToolPolicy::Plan,
-            &[],
-            &ws,
-            &call,
-        )
-        .expect("plan tools run in plan mode");
+        let (payload, _) = run_tool(&tools, &[], ToolPolicy::Plan, &[], &ws, &call)
+            .expect("plan tools run in plan mode");
         assert!(payload.contains("\"plans\""), "{payload}");
     }
 
@@ -2891,11 +2933,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nanomite-hook-gate-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("deny-write.sh");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\nexit 0\n",
-        )
-        .unwrap();
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -2947,7 +2985,10 @@ mod tests {
 
         // Defense in depth: disabled tools are filtered from schemas but
         // dispatch no longer refuses them — the model can call them.
-        let ws = std::env::temp_dir().join(format!("nanomite-disabled-tool-{id}", id = std::process::id()));
+        let ws = std::env::temp_dir().join(format!(
+            "nanomite-disabled-tool-{id}",
+            id = std::process::id()
+        ));
         std::fs::create_dir_all(&ws).unwrap();
         std::fs::write(ws.join("target.txt"), "hello disabled world").unwrap();
         let tools = ToolSet::new(ws.clone(), 64 * 1024, false);

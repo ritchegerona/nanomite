@@ -1,6 +1,6 @@
 use super::text;
 use super::theme::glyph;
-use crate::app::App;
+use crate::app::{App, ToastKind};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -39,7 +39,8 @@ fn render_image_chips(frame: &mut Frame, area: Rect, app: &App, y: u16, width: u
             path = image.path.display(),
         );
         let chip = format!(" {label} ");
-        if x + chip.len() > area.x as usize + budget {
+        let chip_w = text::width(&chip);
+        if x + chip_w > area.x as usize + budget {
             break;
         }
         spans.push(Span::styled(
@@ -48,7 +49,7 @@ fn render_image_chips(frame: &mut Frame, area: Rect, app: &App, y: u16, width: u
                 .fg(theme.warn())
                 .add_modifier(Modifier::BOLD),
         ));
-        x += chip.len() + 1;
+        x += chip_w + 1;
     }
     if !spans.is_empty() {
         frame.render_widget(
@@ -628,13 +629,20 @@ pub fn status_line(app: &App, width: usize) -> Line<'static> {
         return Line::from(truncate_spans_tail(spans, width));
     }
 
-    // 2. Toast message.
+    // 2. Toast message: severity sets both the colour and a text marker, so
+    //    colour is never the only channel carrying the meaning.
     if let Some((toast_msg, _)) = &app.toast {
+        let (marker, color) = match app.toast_kind {
+            ToastKind::Info => (glyph::DOT, theme.accent()),
+            ToastKind::Success => (glyph::CHECK, theme.success()),
+            ToastKind::Warn => (glyph::HOURGLASS, theme.warn()),
+            ToastKind::Error => (glyph::CROSS, theme.danger()),
+        };
         return Line::from(truncate_spans_tail(
-            vec![Span::styled(
-                toast_msg.clone(),
-                Style::default().fg(theme.warn()),
-            )],
+            vec![
+                Span::styled(format!("{marker} "), Style::default().fg(color)),
+                Span::styled(toast_msg.clone(), Style::default().fg(color)),
+            ],
             width,
         ));
     }
@@ -749,7 +757,7 @@ fn render_compact(
 
     let prompt = Span::styled(
         format!("{} ", glyph::PROMPT),
-        Style::default().fg(if area.height > 0 {
+        Style::default().fg(if app.composer_focused() && !busy {
             theme.accent()
         } else {
             theme.muted()
@@ -766,10 +774,13 @@ fn render_compact(
     );
     let text_x = area.x + 2;
     let text_w = area.width.saturating_sub(2);
-    let text_h = area.height as usize;
 
     let y = render_image_chips(frame, area, app, text_top, text_w.into());
+    let chip_rows = y.saturating_sub(text_top) as usize;
     let text_top = y;
+    // Chips steal rows from the text area; painting at full height would
+    // spill the last prompt line past the tile onto the screen's bottom row.
+    let text_h = (area.height as usize).saturating_sub(chip_rows).max(1);
 
     if app.composer.is_empty() {
         let hint = if busy {
@@ -906,24 +917,37 @@ pub fn render(
     );
 
     if app.composer.is_empty() {
-        let hint = if busy {
-            "the agent is working - type to queue the next turn"
+        let accent_hint = if busy {
+            theme.faint_style()
         } else {
-            // opencode's phrasing, minus the @-file mentions nanomite has no
-            // picker for.
-            "Send a message or type / for commands"
+            Style::default().fg(theme.accent_soft())
+        };
+        let line = match app.composer.ghost() {
+            Some(ghost) if !ghost.trim().is_empty() => {
+                let first = ghost.lines().next().unwrap_or_default();
+                let hint = " tab accept";
+                let budget = (text_w as usize).saturating_sub(hint.len());
+                Line::from(vec![
+                    Span::styled(text::truncate(first, budget), theme.faint_style()),
+                    Span::styled(hint, accent_hint),
+                ])
+            }
+            _ => {
+                let hint = if busy {
+                    "the agent is working - type to queue the next turn"
+                } else {
+                    // opencode's phrasing, minus the @-file mentions nanomite
+                    // has no picker for.
+                    "Send a message or type / for commands"
+                };
+                Line::from(Span::styled(
+                    text::truncate(hint, text_w as usize),
+                    accent_hint,
+                ))
+            }
         };
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                text::truncate(hint, text_w as usize),
-                // The placeholder keeps the accent tone at low intensity so the
-                // empty composer still reads as "yours" without shouting.
-                if busy {
-                    theme.faint_style()
-                } else {
-                    Style::default().fg(theme.accent_soft())
-                },
-            )),
+            Paragraph::new(line),
             Rect {
                 x: text_x,
                 y: text_top,

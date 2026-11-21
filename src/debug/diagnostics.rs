@@ -82,6 +82,7 @@ pub struct DebugDiagnostic {
 }
 
 impl DebugDiagnostic {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         kind: DiagnosticKind,

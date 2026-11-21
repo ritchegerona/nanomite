@@ -9,12 +9,10 @@
 //! record findings — they never exploit.
 
 use crate::agent::runtime::{AgentEvent, AgentRuntime};
-use crate::agent::provider::ToolCall;
+use crate::neural::autonomous_planner::{AutonomousPlanner, PlanTask};
 use crate::neural::memory::NeuralMemory;
-use crate::neural::autonomous_planner::{AutonomousExecuteArgs, AutonomousPlanner, PlanTask};
 use crate::neural::{hash_string, now_secs};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
@@ -22,10 +20,10 @@ use tokio::sync::mpsc::UnboundedSender;
 /// A sub-agent role: what kind of assessment it performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentRole {
-    Recon,      // web_recon, scan_ports, whois-style discovery
-    Vuln,       // nikto, sqlmap, directory busting, web vuln checks
-    Crack,      // password cracking, hash cracking, credential reuse
-    Report,     // synthesize findings into a report from evidence
+    Recon,  // web_recon, scan_ports, whois-style discovery
+    Vuln,   // nikto, sqlmap, directory busting, web vuln checks
+    Crack,  // password cracking, hash cracking, credential reuse
+    Report, // synthesize findings into a report from evidence
 }
 
 /// One sub-agent in the swarm.
@@ -33,8 +31,8 @@ pub enum AgentRole {
 pub struct SubAgent {
     pub id: String,
     pub role: AgentRole,
-    pub target: String,       // URL, host, network range, or hash list
-    pub goal: String,         // natural-language goal for this sub-agent
+    pub target: String, // URL, host, network range, or hash list
+    pub goal: String,   // natural-language goal for this sub-agent
     pub status: SubAgentStatus,
     pub result: Option<SubAgentResult>,
     pub started_at: Option<u64>,
@@ -123,6 +121,7 @@ pub struct AgentOrchestrator {
     runtime: Arc<AgentRuntime>,
     neural_memory: Option<Arc<NeuralMemory>>,
     /// Pre-tool-call gate: consulted before each risky tool dispatch.
+    #[allow(clippy::type_complexity)]
     pre_tool_gate: Option<Arc<dyn Fn(&str, &str) -> bool + Send + Sync>>,
     /// Active swarm (if any).
     active_swarm: Option<Vec<SubAgent>>,
@@ -132,10 +131,7 @@ pub struct AgentOrchestrator {
 
 impl AgentOrchestrator {
     /// Create a new orchestrator wrapping an agent runtime.
-    pub fn new(
-        runtime: Arc<AgentRuntime>,
-        data_dir: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn new(runtime: Arc<AgentRuntime>, data_dir: impl Into<PathBuf>) -> Self {
         let data_dir = data_dir.into();
         let _ = std::fs::create_dir_all(&data_dir);
 
@@ -155,6 +151,7 @@ impl AgentOrchestrator {
     }
 
     /// Attach a pre-tool-call gate for human approval of risky commands.
+    #[allow(clippy::type_complexity)]
     pub fn with_pre_tool_gate(
         mut self,
         gate: Arc<dyn Fn(&str, &str) -> bool + Send + Sync>,
@@ -171,11 +168,7 @@ impl AgentOrchestrator {
         cancel: crate::agent::runtime::Cancel,
         tx: UnboundedSender<AgentEvent>,
     ) -> MultiAgentResult {
-        let swarm_id = format!(
-            "swarm-{}-{}",
-            slugify(&args.goal),
-            now_secs()
-        );
+        let swarm_id = format!("swarm-{}-{}", slugify(&args.goal), now_secs());
 
         let roles = if args.roles.is_empty() {
             default_roles()
@@ -185,8 +178,7 @@ impl AgentOrchestrator {
 
         // Build sub-agents from roles + scope.
         let mut agents: Vec<SubAgent> = Vec::new();
-        let mut id: u64 = 1;
-        for role in roles {
+        for (id, role) in (1_u64..).zip(roles) {
             let (target, goal) = self.sub_agent_goal(&args, role, &args.scope);
             agents.push(SubAgent {
                 id: format!("{}-{}", swarm_id, id),
@@ -198,7 +190,6 @@ impl AgentOrchestrator {
                 started_at: None,
                 finished_at: None,
             });
-            id += 1;
         }
 
         let agent_count = agents.len();
@@ -228,14 +219,7 @@ impl AgentOrchestrator {
 
                 async move {
                     Self::run_sub_agent(
-                        runtime,
-                        agent,
-                        memory,
-                        gate,
-                        &swarm_id,
-                        data_dir,
-                        cancel,
-                        tx,
+                        runtime, agent, memory, gate, &swarm_id, data_dir, cancel, tx,
                     )
                     .await
                 }
@@ -258,12 +242,13 @@ impl AgentOrchestrator {
 
                     // Store finding as episodic neural memory.
                     if let Some(memory) = &self.neural_memory {
+                        let role_str = format!("{:?}", agent.role);
                         let _ = memory.store(
                             &format!("swarm-{}-{}", swarm_id, agent.id),
                             &format!(
                                 "Swarm: {goal}\nAgent: {role} ({target})\nResult: {summary}\nTools: {tools}",
                                 goal = args.goal,
-                                role = format!("{:?}", agent.role),
+                                role = role_str,
                                 target = agent.target,
                                 summary = sub_result.summary,
                                 tools = sub_result.tools_used.join(", "),
@@ -308,15 +293,15 @@ impl AgentOrchestrator {
             }
         }
 
-        let swarm_status = if failed > 0 {
-            "partial"
-        } else {
-            "complete"
-        };
+        let swarm_status = if failed > 0 { "partial" } else { "complete" };
 
         let summary = format!(
             "Swarm {}: {} agents completed, {} failed out of {} total ({}).",
-            swarm_id, completed, failed, original_agents.len(), swarm_status
+            swarm_id,
+            completed,
+            failed,
+            original_agents.len(),
+            swarm_status
         );
 
         let _ = tx.send(AgentEvent::Activity {
@@ -341,6 +326,7 @@ impl AgentOrchestrator {
 
     /// Run a single sub-agent: create an autonomous plan for its goal, execute
     /// it, then synthesize findings.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     async fn run_sub_agent(
         runtime: Arc<AgentRuntime>,
         mut agent: SubAgent,
@@ -392,7 +378,7 @@ impl AgentOrchestrator {
                     findings.push(finding);
                 }
             }
-            if let Some(ref result_str) = task.result {
+            if let Some(ref _result_str) = task.result {
                 // Store evidence reference.
                 let id = hash_string(&format!("{}-{}-{}", swarm_id, agent.id, task.id));
                 evidence_ids.push(format!("ev-{:x}", id));
@@ -451,7 +437,10 @@ impl AgentOrchestrator {
             severity: sev,
             description: result.chars().take(2000).collect::<String>(),
             target: target.to_string(),
-            evidence_ref: Some(format!("ev-{:x}", hash_string(&format!("{}-{}", target, task.id)))),
+            evidence_ref: Some(format!(
+                "ev-{:x}",
+                hash_string(&format!("{}-{}", target, task.id))
+            )),
             tags: vec![tool.to_string(), "swarm".to_string(), format!("{:?}", tool)],
         })
     }
@@ -459,7 +448,7 @@ impl AgentOrchestrator {
     /// Build the target + goal for a sub-agent role.
     fn sub_agent_goal(
         &self,
-        args: &MultiAgentArgs,
+        _args: &MultiAgentArgs,
         role: AgentRole,
         scope: &Option<String>,
     ) -> (String, String) {
@@ -501,15 +490,24 @@ impl AgentOrchestrator {
                 {
                     if let Ok(text) = std::fs::read_to_string(&path) {
                         if let Ok(agents) = serde_json::from_str::<Vec<SubAgent>>(&text) {
-                            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                            let name = path
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("")
+                                .to_string();
                             swarms.push((name, agents));
                         }
                     }
                 }
             }
         }
-        swarms.sort_by(|a, b| b.1.iter().filter_map(|ag| ag.started_at).max().unwrap_or(0)
-            .cmp(&a.1.iter().filter_map(|ag| ag.started_at).max().unwrap_or(0)));
+        swarms.sort_by(|a, b| {
+            b.1.iter()
+                .filter_map(|ag| ag.started_at)
+                .max()
+                .unwrap_or(0)
+                .cmp(&a.1.iter().filter_map(|ag| ag.started_at).max().unwrap_or(0))
+        });
         swarms
     }
 
@@ -565,7 +563,7 @@ mod tests {
             "orchestrator_creates_swarm"
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let mut orchestrator = AgentOrchestrator::new(Arc::clone(&runtime), &dir);
+        let _orchestrator = AgentOrchestrator::new(Arc::clone(&runtime), &dir);
 
         let args = MultiAgentArgs {
             goal: "Assess the web app on http://10.0.0.5".to_string(),
@@ -597,11 +595,13 @@ mod tests {
             require_approval: true,
         };
 
-        let (recon_target, recon_goal) = orchestrator.sub_agent_goal(&args, AgentRole::Recon, &args.scope);
+        let (recon_target, recon_goal) =
+            orchestrator.sub_agent_goal(&args, AgentRole::Recon, &args.scope);
         assert_eq!(recon_target, "http://10.0.0.5");
         assert!(recon_goal.contains("reconnaissance"));
 
-        let (report_target, report_goal) = orchestrator.sub_agent_goal(&args, AgentRole::Report, &args.scope);
+        let (report_target, report_goal) =
+            orchestrator.sub_agent_goal(&args, AgentRole::Report, &args.scope);
         assert_eq!(report_target, "http://10.0.0.5");
         assert!(report_goal.contains("report"));
 
@@ -620,7 +620,8 @@ mod tests {
             error: None,
             executed_at: Some(now_secs()),
         };
-        let finding = AgentOrchestrator::extract_finding(&task, "Found /admin panel", "http://10.0.0.5");
+        let finding =
+            AgentOrchestrator::extract_finding(&task, "Found /admin panel", "http://10.0.0.5");
         assert!(finding.is_some());
         let f = finding.unwrap();
         assert_eq!(f.severity, FindingSeverity::Medium);
@@ -637,7 +638,8 @@ mod tests {
             error: None,
             executed_at: Some(now_secs()),
         };
-        let w_finding = AgentOrchestrator::extract_finding(&wireless_task, "WPS enabled on AP", "wlan0");
+        let w_finding =
+            AgentOrchestrator::extract_finding(&wireless_task, "WPS enabled on AP", "wlan0");
         assert!(w_finding.is_some());
         let wf = w_finding.unwrap();
         assert_eq!(wf.severity, FindingSeverity::High);
@@ -651,7 +653,7 @@ mod tests {
             "save_and_list_swarms"
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let mut orchestrator = AgentOrchestrator::new(Arc::clone(&runtime), &dir);
+        let orchestrator = AgentOrchestrator::new(Arc::clone(&runtime), &dir);
 
         let agents = vec![SubAgent {
             id: "swarm-1".to_string(),

@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 /// Hard cap for a single package-manager invocation.
+#[allow(dead_code)]
 const INSTALL_TIMEOUT_MS: u64 = 180_000;
 
 /// Package manager probe order per platform.
@@ -154,18 +155,15 @@ impl SkillTracker {
     /// Record that `tool` was installed via `manager` as `package`.
     pub fn record_install(&mut self, tool: &str, manager: PackageManager, package: &str) {
         let now = now_secs();
-        let entry = self
-            .skills
-            .entry(tool.to_string())
-            .or_insert(SkillEntry {
-                tool: tool.to_string(),
-                manager,
-                package: package.to_string(),
-                installed_at: now,
-                last_used: now,
-                use_count: 0,
-                present: true,
-            });
+        let entry = self.skills.entry(tool.to_string()).or_insert(SkillEntry {
+            tool: tool.to_string(),
+            manager,
+            package: package.to_string(),
+            installed_at: now,
+            last_used: now,
+            use_count: 0,
+            present: true,
+        });
         entry.manager = manager;
         entry.package = package.to_string();
         entry.installed_at = now;
@@ -188,18 +186,15 @@ impl SkillTracker {
     /// Mark `tool` as present on PATH (detected without install).
     pub fn record_present(&mut self, tool: &str) {
         let now = now_secs();
-        let entry = self
-            .skills
-            .entry(tool.to_string())
-            .or_insert(SkillEntry {
-                tool: tool.to_string(),
-                manager: PackageManager::Brew,
-                package: String::new(),
-                installed_at: now,
-                last_used: now,
-                use_count: 0,
-                present: true,
-            });
+        let entry = self.skills.entry(tool.to_string()).or_insert(SkillEntry {
+            tool: tool.to_string(),
+            manager: PackageManager::Brew,
+            package: String::new(),
+            installed_at: now,
+            last_used: now,
+            use_count: 0,
+            present: true,
+        });
         entry.present = true;
         entry.last_used = now;
         self.save();
@@ -217,9 +212,7 @@ impl SkillTracker {
 
     /// Check whether `tool` is recorded as present.
     pub fn is_present(&self, tool: &str) -> bool {
-        self.skills
-            .get(tool)
-            .is_some_and(|e| e.present)
+        self.skills.get(tool).is_some_and(|e| e.present)
     }
 }
 
@@ -238,10 +231,7 @@ impl AutoInstaller {
     /// managers and shares `skills` for persistence.
     pub fn new(skills: Arc<Mutex<SkillTracker>>) -> Self {
         let available = probe_managers();
-        Self {
-            available,
-            skills,
-        }
+        Self { available, skills }
     }
 
     /// List package managers detected on this host.
@@ -254,9 +244,9 @@ impl AutoInstaller {
         TOOL_PACKAGE_MAP
             .iter()
             .find(|(name, _, _)| name.eq_ignore_ascii_case(tool))
-            .and_then(|(_, brew, apt)| match manager {
-                PackageManager::Brew => Some(*brew),
-                PackageManager::Apt => Some(*apt),
+            .map(|(_, brew, apt)| match manager {
+                PackageManager::Brew => *brew,
+                PackageManager::Apt => *apt,
             })
     }
 
@@ -318,7 +308,10 @@ impl AutoInstaller {
                 if status.success() {
                     Ok(())
                 } else {
-                    Err(format!("brew install {package} exited {}", status.code().unwrap_or(-1)))
+                    Err(format!(
+                        "brew install {package} exited {}",
+                        status.code().unwrap_or(-1)
+                    ))
                 }
             }
             PackageManager::Apt => {
@@ -393,6 +386,7 @@ fn now_secs() -> u64 {
 }
 
 /// Run a bounded package-manager command with a hard timeout.
+#[allow(dead_code)]
 pub(crate) async fn run_with_timeout(
     program: &str,
     args: &[String],
@@ -411,8 +405,10 @@ pub(crate) async fn run_with_timeout(
 
     loop {
         match child.try_wait() {
-            Ok(Some(st)) => {
-                let out = child.wait_with_output().map_err(|e| format!("{program} wait failed: {e}"))?;
+            Ok(Some(_st)) => {
+                let out = child
+                    .wait_with_output()
+                    .map_err(|e| format!("{program} wait failed: {e}"))?;
                 return Ok((
                     out.status.code().unwrap_or(-1),
                     String::from_utf8_lossy(&out.stdout).to_string(),
@@ -450,7 +446,10 @@ mod tests {
             Some("owasp-zap")
         );
         // Unknown tool -> None.
-        assert_eq!(AutoInstaller::package_for("no_such_tool_xyz", PackageManager::Brew), None);
+        assert_eq!(
+            AutoInstaller::package_for("no_such_tool_xyz", PackageManager::Brew),
+            None
+        );
     }
 
     #[test]
@@ -471,6 +470,8 @@ mod tests {
     fn probe_managers_returns_vec() {
         let mgrs = probe_managers();
         // At least empty; brew/apt may or may not be present.
-        assert!(mgrs.iter().all(|m| matches!(m, PackageManager::Brew | PackageManager::Apt)));
+        assert!(mgrs
+            .iter()
+            .all(|m| matches!(m, PackageManager::Brew | PackageManager::Apt)));
     }
 }

@@ -91,10 +91,7 @@ impl EvolutionEngine {
         self.signals.push(signal);
 
         // Update running stats.
-        let entry = self
-            .tool_stats
-            .entry(tool)
-            .or_insert((0, 0));
+        let entry = self.tool_stats.entry(tool).or_insert((0, 0));
         if success {
             entry.0 += 1;
         }
@@ -149,7 +146,7 @@ impl EvolutionEngine {
             .fold(HashMap::new(), |mut acc, ctx| {
                 *acc.entry(ctx).or_insert(0) += 1;
                 acc
-        });
+            });
         for (ctx, count) in failed_contexts {
             if count >= self.min_evidence {
                 new_proposals.push(EvolutionProposal {
@@ -209,6 +206,10 @@ impl EvolutionEngine {
 
     pub fn len(&self) -> usize {
         self.signals.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.signals.is_empty()
     }
 }
 
@@ -270,7 +271,10 @@ mod tests {
         }
         let proposals = engine.analyze();
         assert!(
-            proposals.iter().any(|p| p.kind == ProposalKind::RemoveToolRecommendation && p.description.contains("broken_tool")),
+            proposals
+                .iter()
+                .any(|p| p.kind == ProposalKind::RemoveToolRecommendation
+                    && p.description.contains("broken_tool")),
             "should propose removing broken_tool: {proposals:?}"
         );
     }
@@ -289,7 +293,9 @@ mod tests {
         }
         let proposals = engine.analyze();
         assert!(
-            proposals.iter().any(|p| p.kind == ProposalKind::SynthesizeTool),
+            proposals
+                .iter()
+                .any(|p| p.kind == ProposalKind::SynthesizeTool),
             "should propose synthesizing a tool for repeated failures: {proposals:?}"
         );
     }
@@ -326,7 +332,9 @@ mod tests {
         }
         let proposals = engine.analyze();
         assert!(
-            !proposals.iter().any(|p| p.description.contains("great_tool")),
+            !proposals
+                .iter()
+                .any(|p| p.description.contains("great_tool")),
             "great_tool should not be proposed for removal: {proposals:?}"
         );
     }

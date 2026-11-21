@@ -72,6 +72,7 @@ pub struct WirelessReconResult {
 #[derive(Clone)]
 pub struct WirelessTools {
     /// Workspace root for resolving relative files.
+    #[allow(dead_code)]
     root: PathBuf,
     /// Neural memory for storing discovered techniques (optional).
     pub memory: Option<Arc<crate::memory::MemoryEngine>>,
@@ -98,11 +99,8 @@ impl WirelessTools {
             return Err("wireless: interface is required".to_string());
         }
 
-        let timeout = Duration::from_millis(
-            args.timeout_ms
-                .unwrap_or(120_000)
-                .clamp(5_000, 300_000),
-        );
+        let timeout =
+            Duration::from_millis(args.timeout_ms.unwrap_or(120_000).clamp(5_000, 300_000));
 
         let tools: Vec<&str> = match args.tools.as_str() {
             "wash" => vec!["wash"],
@@ -118,14 +116,20 @@ impl WirelessTools {
 
         for tool in &tools {
             let result = match *tool {
-                "wash" => self.run_wash(interface, args.bssid.as_deref(), args.channel, &timeout)?,
-                "aircrack-ng" => self.run_aircrack(interface, args.bssid.as_deref(), args.channel, &timeout)?,
-                "wifite" => self.run_wifite(interface, args.bssid.as_deref(), args.channel, &timeout)?,
+                "wash" => {
+                    self.run_wash(interface, args.bssid.as_deref(), args.channel, &timeout)?
+                }
+                "aircrack-ng" => {
+                    self.run_aircrack(interface, args.bssid.as_deref(), args.channel, &timeout)?
+                }
+                "wifite" => {
+                    self.run_wifite(interface, args.bssid.as_deref(), args.channel, &timeout)?
+                }
                 _ => continue,
             };
             tools_run.push(tool.to_string());
             if !raw_output.is_empty() {
-                raw_output.push_str("\n");
+                raw_output.push('\n');
             }
             raw_output.push_str(&format!("=== {} ===\n{}", tool, result.raw_output));
             all_findings.extend(result.findings);
@@ -141,14 +145,9 @@ impl WirelessTools {
             for f in &all_findings {
                 let _ = memory.save(&crate::memory::model::NewMemory::new(
                     crate::memory::model::MemoryCategory::Episodic,
-                    &format!(
+                    format!(
                         "Wireless recon [{}] {} → BSSID: {:?} SSID: {:?} CH: {:?} (iface: {})",
-                        f.tool,
-                        f.finding,
-                        f.bssid,
-                        f.ssid,
-                        f.channel,
-                        interface
+                        f.tool, f.finding, f.bssid, f.ssid, f.channel, interface
                     ),
                 ));
             }
@@ -173,7 +172,11 @@ impl WirelessTools {
         timeout: &Duration,
     ) -> Result<WirelessReconResult, String> {
         let mut cmd = Command::new("wash");
-        cmd.arg("-i").arg(interface).arg("-C").stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.arg("-i")
+            .arg(interface)
+            .arg("-C")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         if let Some(b) = bssid {
             cmd.arg("--bssid").arg(b);
@@ -268,7 +271,10 @@ impl WirelessTools {
         let mut cmd = Command::new(tool);
         match tool {
             "airodump-ng" => {
-                cmd.arg("--output-format").arg("csv").arg("-w").arg("/tmp/nanomite-wireless");
+                cmd.arg("--output-format")
+                    .arg("csv")
+                    .arg("-w")
+                    .arg("/tmp/nanomite-wireless");
                 if let Some(c) = channel {
                     cmd.arg("-c").arg(c.to_string());
                 }
@@ -285,7 +291,9 @@ impl WirelessTools {
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let started = Instant::now();
-        let mut child = cmd.spawn().map_err(|e| format!("{tool} spawn failed: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("{tool} spawn failed: {e}"))?;
         let mut stdout = child.stdout.take().expect("piped stdout");
         let mut stderr = child.stderr.take().expect("piped stderr");
 
@@ -321,7 +329,9 @@ impl WirelessTools {
             all
         });
 
-        let status = child.wait().map_err(|e| format!("{tool} wait failed: {e}"))?;
+        let status = child
+            .wait()
+            .map_err(|e| format!("{tool} wait failed: {e}"))?;
         let stdout_all = out_handle.join().unwrap_or_default();
         let stderr_all = err_handle.join().unwrap_or_default();
 
@@ -368,7 +378,11 @@ impl WirelessTools {
         timeout: &Duration,
     ) -> Result<WirelessReconResult, String> {
         let mut cmd = Command::new("wifite");
-        cmd.arg("-i").arg(interface).arg("--stdout").stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.arg("-i")
+            .arg(interface)
+            .arg("--stdout")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         if let Some(b) = bssid {
             cmd.arg("--bssid").arg(b);
@@ -378,7 +392,9 @@ impl WirelessTools {
         }
 
         let started = Instant::now();
-        let mut child = cmd.spawn().map_err(|e| format!("wifite spawn failed: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("wifite spawn failed: {e}"))?;
         let mut stdout = child.stdout.take().expect("piped stdout");
         let mut stderr = child.stderr.take().expect("piped stderr");
 
@@ -414,7 +430,9 @@ impl WirelessTools {
             all
         });
 
-        let status = child.wait().map_err(|e| format!("wifite wait failed: {e}"))?;
+        let status = child
+            .wait()
+            .map_err(|e| format!("wifite wait failed: {e}"))?;
         let stdout_all = out_handle.join().unwrap_or_default();
         let stderr_all = err_handle.join().unwrap_or_default();
 
@@ -456,7 +474,10 @@ fn parse_wash_line(line: &str) -> WirelessFinding {
 
     WirelessFinding {
         tool: "wash".to_string(),
-        finding: format!("WPS network discovered (locked: {})", parts.get(4).unwrap_or(&"unknown")),
+        finding: format!(
+            "WPS network discovered (locked: {})",
+            parts.get(4).unwrap_or(&"unknown")
+        ),
         bssid,
         ssid,
         channel,

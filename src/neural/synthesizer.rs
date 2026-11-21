@@ -70,14 +70,20 @@ impl ToolSynthesizer {
                     .chars()
                     .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '_' || *c == '-')
                     .collect();
-                let words: Vec<&str> = slug.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
-                let cap: String = words.iter().map(|w| {
-                    let mut c = w.chars();
-                    match c.next() {
-                        None => String::new(),
-                        Some(first) => first.to_uppercase().collect::<String>() + c.as_str(),
-                    }
-                }).collect();
+                let words: Vec<&str> = slug
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                let cap: String = words
+                    .iter()
+                    .map(|w| {
+                        let mut c = w.chars();
+                        match c.next() {
+                            None => String::new(),
+                            Some(first) => first.to_uppercase().collect::<String>() + c.as_str(),
+                        }
+                    })
+                    .collect();
                 if cap.is_empty() {
                     "SynthesizedTool".to_string()
                 } else if cap.ends_with("Tool") {
@@ -210,7 +216,8 @@ fn categorize(description: &str) -> String {
         "wireless".to_string()
     } else if d.contains("web") || d.contains("http") || d.contains("vuln") || d.contains("sql") {
         "web".to_string()
-    } else if d.contains("port") || d.contains("scan") || d.contains("recon") || d.contains("nmap") {
+    } else if d.contains("port") || d.contains("scan") || d.contains("recon") || d.contains("nmap")
+    {
         "recon".to_string()
     } else if d.contains("password") || d.contains("crack") || d.contains("hash") {
         "password".to_string()
@@ -252,7 +259,12 @@ enum ToolTemplate {
     Generic,
 }
 
-fn render_template(name: &str, description: &str, category: &str, template: ToolTemplate) -> String {
+fn render_template(
+    name: &str,
+    description: &str,
+    category: &str,
+    template: ToolTemplate,
+) -> String {
     let body = match template {
         ToolTemplate::PortScanner => port_scanner_body(name),
         ToolTemplate::WebFetcher => web_fetcher_body(name),
@@ -267,13 +279,13 @@ fn render_template(name: &str, description: &str, category: &str, template: Tool
     s
 }
 
-fn header(name: &str, description: &str, category: &str) -> String {
+fn header(_name: &str, description: &str, category: &str) -> String {
     let mut s = String::new();
     s.push_str("//! ");
     s.push_str(description);
     s.push_str("\n//! Auto-synthesized by nanomite's neural tool synthesizer.\n//! Category: ");
     s.push_str(category);
-    s.push_str("\n");
+    s.push('\n');
     s
 }
 
@@ -421,7 +433,9 @@ fn file_tool_body(name: &str) -> String {
     s.push_str("Result {\n");
     s.push_str("                ok: false,\n");
     s.push_str("                content: String::new(),\n");
-    s.push_str("                message: \"write requested but no content provided\".to_string(),\n");
+    s.push_str(
+        "                message: \"write requested but no content provided\".to_string(),\n",
+    );
     s.push_str("            }\n");
     s.push_str("        }\n");
     s.push_str("    } else {\n");
@@ -578,7 +592,7 @@ fn generic_body(name: &str, description: &str) -> String {
     s.push_str("    }\n");
     s.push_str("    // TODO: implement ");
     s.push_str(description);
-    s.push_str("\n");
+    s.push('\n');
     s.push_str("    let output = \"synthesized \".to_string() + name + \" executed with input: \" + input;\n");
     s.push_str("    ");
     s.push_str(name);
@@ -623,10 +637,7 @@ mod tests {
 
     #[test]
     fn synthesize_creates_valid_rust_file() {
-        let dir = temp_dir().join(format!(
-            "nanomite-synth-{}-creates",
-            std::process::id()
-        ));
+        let dir = temp_dir().join(format!("nanomite-synth-{}-creates", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -666,10 +677,7 @@ mod tests {
 
     #[test]
     fn record_invocation_updates_counts() {
-        let dir = temp_dir().join(format!(
-            "nanomite-synth-record-{}",
-            std::process::id()
-        ));
+        let dir = temp_dir().join(format!("nanomite-synth-record-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut synth = ToolSynthesizer::new(dir.clone());

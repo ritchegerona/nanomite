@@ -8,7 +8,7 @@ mod tests;
 pub mod text;
 pub mod theme;
 
-use crate::app::{App, Overlay, OverlayKind};
+use crate::app::{App, LeftPanel, Overlay, OverlayKind};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::Frame;
@@ -17,6 +17,14 @@ use theme::Theme;
 /// Nominal height of the `/memory` record overlay; the rect clamps to the area.
 const MEMORY_OVERLAY_ROWS: u16 = 28;
 
+/// `NANOMITE_REDUCED_MOTION=1` freezes the spinner on frame zero. Everything
+/// else keeps working; only the animation stops. Captured once so a frame
+/// never probes the environment.
+fn reduced_motion() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("NANOMITE_REDUCED_MOTION").is_some())
+}
+
 /// Cached frame geometry for the three-tile hacker layout (flipped T1).
 /// Left column (30%): info panel (top) + chat input (bottom).
 /// Right column (70%): main transcript + response.
@@ -24,6 +32,9 @@ const MEMORY_OVERLAY_ROWS: u16 = 28;
 pub struct Rects {
     pub header: Rect,
     pub left_info: Rect,
+    /// Rows between the info panel and the composer: prompt queue then
+    /// follow-up suggestions. Zero height when neither is showing.
+    pub left_aux: Rect,
     pub left_input: Rect,
     pub main_chat: Rect,
 }
@@ -44,7 +55,7 @@ pub struct View {
     offsets_dirty: bool,
     offset_width: u16,
     offset_view: u16,
-    pub layout: Option<(Rect, u16, Rects)>,
+    pub layout: Option<(Rect, u16, u16, Rects)>,
 }
 
 impl View {
@@ -70,12 +81,12 @@ impl View {
     }
 
     pub fn cached_chat_height(&self) -> Option<u16> {
-        self.layout.map(|(_, _, r)| r.main_chat.height)
+        self.layout.map(|(_, _, _, r)| r.main_chat.height)
     }
 
     /// Get the cached chat area rect for mouse hit testing
     pub fn cached_chat_rect(&self) -> Option<Rect> {
-        self.layout.map(|(_, _, r)| r.main_chat)
+        self.layout.map(|(_, _, _, r)| r.main_chat)
     }
 
     /// Get the viewport row count (chat area height)
@@ -197,13 +208,47 @@ pub fn help_row_count() -> usize {
     crate::commands::COMMANDS.len() + 3 + panels::help_keys().len()
 }
 
+/// Rows needed by the two strips above the composer: queued prompts (header
+/// plus up to three previews, with a `+N more` row) and follow-up suggestions
+/// (header plus up to three rows). Kept in one place so the layout split and
+/// the renderers agree on geometry.
+fn aux_rows(app: &App) -> (u16, u16) {
+    const MAX_SHOWN: usize = 3;
+    let queued = app.prompt_queue_len();
+    let queue_rows = if queued == 0 {
+        0
+    } else {
+        1 + queued.min(MAX_SHOWN) + usize::from(queued > MAX_SHOWN)
+    };
+    let suggestion_rows = app
+        .suggestions
+        .as_ref()
+        .map(|strip| 1 + strip.items.len().min(MAX_SHOWN))
+        .unwrap_or(0);
+    (queue_rows as u16, suggestion_rows as u16)
+}
+
 /// Draws the whole frame.
 pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    let theme = app.theme;
     if area.width < 24 || area.height < 8 {
+        if area.width >= 20 && area.height >= 1 {
+            let hint = format!("terminal too small - {}x{} needed", 24, 8);
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
+                    ratatui::text::Span::styled(hint, Style::default().fg(theme.warn())),
+                )),
+                Rect {
+                    x: area.x,
+                    y: area.y + (area.height - 1) / 2,
+                    width: area.width,
+                    height: 1,
+                },
+            );
+        }
         return;
     }
-    let theme = app.theme;
 
     // The left input tile hugs the composer: measure the wrapped prompt at
     // the tile's inner text width (borders + `❯ ` gutter), give the composer
@@ -222,17 +267,66 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     };
     let min_input = if app.compact { 1 } else { 5 };
     let input_h = composer_rows.max(min_input);
-    let rects = app.view.layout(area, input_h);
+    let (queue_rows, suggestion_rows) = aux_rows(app);
+    // A pending approval / toast / search gets its own reserved bottom row so
+    // the full-width status bar never paints over the composer's bottom border.
+    let has_status_bar = composer::has_priority_status(app) && area.height >= 2;
+    let layout_area = if has_status_bar {
+        Rect {
+            height: area.height - 1,
+            ..area
+        }
+    } else {
+        area
+    };
+    let rects = app
+        .view
+        .layout(layout_area, input_h, queue_rows + suggestion_rows);
 
     panels::header(frame, rects.header, app);
-    // Left info column: activity timeline overrides the thinking panel when
-    // toggled on; otherwise the thinking panel shows (gated by show_thinking,
-    // default true). Neither flag shows an empty panel.
-    if app.show_activity {
-        panels::activity_timeline(frame, rects.left_info, app);
-    } else if app.show_thinking {
-        draw_thinking_panel(frame, rects.left_info, app, &theme);
+    // Left info column: the `/activity` cycle selects one of four live
+    // panels. Thinking still respects its own visibility flag.
+    match app.left_panel {
+        LeftPanel::Activity => panels::activity_timeline(frame, rects.left_info, app),
+        LeftPanel::LiveDiff => panels::live_diff_viewer(frame, rects.left_info, app),
+        LeftPanel::ToolMonitor => panels::tool_monitor(frame, rects.left_info, app),
+        LeftPanel::Thinking if app.show_thinking => {
+            draw_thinking_panel(frame, rects.left_info, app, &theme);
+        }
+        LeftPanel::Thinking => {}
     }
+
+    // Aux strips ride between the info panel and the composer. Both renderers
+    // are no-ops when their state is empty, so the split is cheap.
+    if rects.left_aux.height > 0 {
+        let mut y = rects.left_aux.y;
+        if queue_rows > 0 {
+            let h = queue_rows.min(rects.left_aux.height);
+            chat::render_prompt_queue(
+                frame,
+                Rect {
+                    y,
+                    height: h,
+                    ..rects.left_aux
+                },
+                app,
+            );
+            y += h;
+        }
+        if suggestion_rows > 0 && y < rects.left_aux.y + rects.left_aux.height {
+            let h = (rects.left_aux.y + rects.left_aux.height - y).min(suggestion_rows);
+            panels::suggestions(
+                frame,
+                Rect {
+                    y,
+                    height: h,
+                    ..rects.left_aux
+                },
+                app,
+            );
+        }
+    }
+
     chat::render(frame, rects.main_chat, app);
     let cursor = composer::render(frame, rects.left_input, app, &prompt_layout, app.compact);
 
@@ -241,7 +335,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // densities (the composer's own border line is too narrow for approval
     // prompts). The old permanent footer row is gone; this row exists only
     // while something actionable is pending.
-    if composer::has_priority_status(app) && area.height >= 2 {
+    if has_status_bar {
         frame.render_widget(
             ratatui::widgets::Paragraph::new(composer::status_line(app, area.width as usize)),
             Rect {
@@ -311,7 +405,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         None => {}
     }
 
-    if app.is_busy() {
+    // Approval is the one truly modal surface: it paints above overlays and
+    // carries the full command plus the y/a/n/d legend, not a truncated line.
+    panels::confirm_modal(frame, area, app);
+
+    if app.is_busy() && !reduced_motion() {
         app.view.spinner = app.view.spinner.wrapping_add(1);
     }
     if let Some((_, x, y)) = cursor {
@@ -332,13 +430,13 @@ pub(crate) fn left_tile_width(area: Rect) -> u16 {
 }
 
 impl View {
-    fn layout(&mut self, area: Rect, input_h: u16) -> Rects {
-        // Two-tile layout: header | (left: info+input) | (right: main).
+    fn layout(&mut self, area: Rect, input_h: u16, aux_h: u16) -> Rects {
+        // Two-tile layout: header | (left: info+aux+input) | (right: main).
         // The old full-width footer row is gone (owner decision 2026-11-11):
         // mode and working state live in the header, transient status (tool
         // approval, toasts, search) rides the composer's bottom border.
-        if let Some((cached_area, cached_input, rects)) = self.layout {
-            if cached_area == area && cached_input == input_h {
+        if let Some((cached_area, cached_input, cached_aux, rects)) = self.layout {
+            if cached_area == area && cached_input == input_h && cached_aux == aux_h {
                 return rects;
             }
         }
@@ -379,10 +477,12 @@ impl View {
             height: main_area.height,
         };
 
-        // Left column vertical split: the composer hugs its content, the info
-        // panel occupies the rest. Always leave the panel a few rows.
+        // Left column vertical split: the composer hugs its content, the aux
+        // strips ride above it, and the info panel occupies the rest. Always
+        // leave the panel a few rows.
         let input_h = input_h.max(1).min(left.height.saturating_sub(3)).max(1);
-        let info_h = left.height.saturating_sub(input_h);
+        let aux_h = aux_h.min(left.height.saturating_sub(input_h + 3));
+        let info_h = left.height.saturating_sub(input_h + aux_h);
 
         let left_info = Rect {
             x: left.x,
@@ -391,9 +491,16 @@ impl View {
             height: info_h,
         };
 
-        let left_input = Rect {
+        let left_aux = Rect {
             x: left.x,
             y: left.y + info_h,
+            width: left.width,
+            height: aux_h,
+        };
+
+        let left_input = Rect {
+            x: left.x,
+            y: left.y + info_h + aux_h,
             width: left.width,
             height: input_h,
         };
@@ -401,10 +508,11 @@ impl View {
         let rects = Rects {
             header,
             left_info,
+            left_aux,
             left_input,
             main_chat: right,
         };
-        self.layout = Some((area, input_h, rects));
+        self.layout = Some((area, input_h, aux_h, rects));
         rects
     }
 }

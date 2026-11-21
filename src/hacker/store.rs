@@ -583,10 +583,24 @@ impl FindingsStore {
             let domains_json: String = row.get(7)?;
 
             let start = parse_rfc3339(&started_at).ok_or_else(|| {
-                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("assessment {id}: bad started_at"))))
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("assessment {id}: bad started_at"),
+                    )),
+                )
             })?;
             let expiry = parse_rfc3339(&expiry_at).ok_or_else(|| {
-                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("assessment {id}: bad expiry_at"))))
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("assessment {id}: bad expiry_at"),
+                    )),
+                )
             })?;
 
             Ok(StoredAssessmentSpec {
@@ -754,13 +768,10 @@ impl FindingsStore {
     }
 
     /// Renders a CSV report for spreadsheet import.
-    pub fn render_csv(
-        &self,
-        assessment_id: Option<&str>,
-    ) -> Result<String, FindingStoreError> {
+    pub fn render_csv(&self, assessment_id: Option<&str>) -> Result<String, FindingStoreError> {
         let findings = self.findings(assessment_id, HARD_FINDING_LIMIT)?;
         let mut wtr = csv::Writer::from_writer(vec![]);
-        wtr.write_record(&[
+        wtr.write_record([
             "id",
             "assessment_id",
             "module",
@@ -772,21 +783,23 @@ impl FindingsStore {
             "status",
             "detail",
             "created_at",
-        ]).map_err(csv_err)?;
+        ])
+        .map_err(csv_err)?;
         for f in &findings {
-            wtr.write_record(&[
-                &f.id.to_string(),
-                &f.assessment_id,
-                &f.module,
-                &f.operation,
-                &f.target,
-                &f.title,
-                &f.severity,
-                &f.confidence,
-                &f.status,
-                &f.detail,
-                &f.created_at,
-            ]).map_err(csv_err)?;
+            wtr.write_record([
+                f.id.to_string(),
+                f.assessment_id.clone(),
+                f.module.clone(),
+                f.operation.clone(),
+                f.target.clone(),
+                f.title.clone(),
+                f.severity.clone(),
+                f.confidence.clone(),
+                f.status.clone(),
+                f.detail.clone(),
+                f.created_at.clone(),
+            ])
+            .map_err(csv_err)?;
         }
         let csv_data = wtr.into_inner().map_err(csv_inner_err)?;
         String::from_utf8(csv_data)

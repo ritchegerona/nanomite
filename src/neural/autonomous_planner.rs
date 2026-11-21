@@ -10,12 +10,13 @@
 //! Execution is plan-only: nanomite produces commands, parses results, and
 //! records findings — it never exploits.
 
-use crate::agent::runtime::{AgentEvent, AgentRuntime};
 use crate::agent::provider::ToolCall;
+use crate::agent::runtime::{AgentEvent, AgentRuntime};
 use crate::neural::memory::NeuralMemory;
 use crate::neural::planner::LearnedPlanner;
 use crate::neural::{hash_string, now_secs};
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
@@ -25,10 +26,10 @@ use tokio::sync::mpsc::UnboundedSender;
 pub struct PlanTask {
     pub id: u64,
     pub description: String,
-    pub tool: String,            // tool name to invoke (run_command, web_recon, etc.)
-    pub arguments: String,       // JSON arguments for the tool
+    pub tool: String,      // tool name to invoke (run_command, web_recon, etc.)
+    pub arguments: String, // JSON arguments for the tool
     pub status: TaskStatus,
-    pub result: Option<String>,  // tool payload summary
+    pub result: Option<String>, // tool payload summary
     pub error: Option<String>,
     pub executed_at: Option<u64>,
 }
@@ -98,6 +99,7 @@ pub struct AutonomousPlanner {
     learned_planner: Option<LearnedPlanner>,
     /// Pre-tool-call gate: consulted before each risky tool dispatch.
     /// When `Some`, the operator must approve each call.
+    #[allow(clippy::type_complexity)]
     pre_tool_gate: Option<Arc<dyn Fn(&str, &str) -> bool + Send + Sync>>,
     /// Active plan (if any).
     active_plan: Option<AutonomousPlan>,
@@ -107,10 +109,7 @@ pub struct AutonomousPlanner {
 
 impl AutonomousPlanner {
     /// Create a new autonomous planner wrapping an agent runtime.
-    pub fn new(
-        runtime: Arc<AgentRuntime>,
-        data_dir: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn new(runtime: Arc<AgentRuntime>, data_dir: impl Into<PathBuf>) -> Self {
         let data_dir = data_dir.into();
         let _ = std::fs::create_dir_all(&data_dir);
 
@@ -137,6 +136,7 @@ impl AutonomousPlanner {
     }
 
     /// Attach a pre-tool-call gate for human approval of risky commands.
+    #[allow(clippy::type_complexity)]
     pub fn with_pre_tool_gate(
         mut self,
         gate: Arc<dyn Fn(&str, &str) -> bool + Send + Sync>,
@@ -149,7 +149,7 @@ impl AutonomousPlanner {
     /// into ordered tasks with tool assignments.
     pub fn create_plan(&mut self, goal: &str, scope: Option<&str>) -> AutonomousPlan {
         let id = format!("plan-{}-{}", slugify(goal), now_secs());
-        let mut tasks = self.decompose_goal(goal, scope);
+        let tasks = self.decompose_goal(goal, scope);
 
         let plan = AutonomousPlan {
             id: id.clone(),
@@ -252,8 +252,11 @@ impl AutonomousPlanner {
 
                     // Feed back to learned planner if available.
                     if let Some(planner) = &mut self.learned_planner {
-                        let features =
-                            LearnedPlanner::context_features(&task.description, &[task.tool.clone()], &[true]);
+                        let features = LearnedPlanner::context_features(
+                            &task.description,
+                            std::slice::from_ref(&task.tool),
+                            &[true],
+                        );
                         planner.observe_outcome(crate::neural::planner::ToolOutcome {
                             tool: task.tool.clone(),
                             success: true,
@@ -303,7 +306,10 @@ impl AutonomousPlanner {
 
         let summary = format!(
             "Plan {}: {} tasks completed, {} failed out of {} total.",
-            plan.id, completed, failed, plan.tasks.len()
+            plan.id,
+            completed,
+            failed,
+            plan.tasks.len()
         );
 
         AutonomousExecuteResult {
@@ -335,14 +341,7 @@ impl AutonomousPlanner {
         let hooks: Vec<crate::hooks::HookConfig> = Vec::new();
         let workspace = self.runtime.workspace();
 
-        crate::agent::runtime::run_tool(
-            &tools,
-            &disabled,
-            policy,
-            &hooks,
-            &workspace,
-            call,
-        )
+        crate::agent::runtime::run_tool(&tools, &disabled, policy, &hooks, workspace, call)
     }
 
     /// Decompose a high-level goal into ordered tasks with tool assignments.
@@ -372,7 +371,8 @@ impl AutonomousPlanner {
                     "url": url,
                     "scanners": "both",
                     "timeout_ms": 120000
-                }).to_string(),
+                })
+                .to_string(),
                 status: TaskStatus::Pending,
                 result: None,
                 error: None,
@@ -381,7 +381,10 @@ impl AutonomousPlanner {
             id += 1;
         }
 
-        if goal_lower.contains("port") || goal_lower.contains("scan") || goal_lower.contains("network") {
+        if goal_lower.contains("port")
+            || goal_lower.contains("scan")
+            || goal_lower.contains("network")
+        {
             let host = if !target.is_empty() {
                 target.clone()
             } else {
@@ -394,7 +397,8 @@ impl AutonomousPlanner {
                 arguments: serde_json::json!({
                     "host": host,
                     "ports": [22, 80, 443, 8080, 8443]
-                }).to_string(),
+                })
+                .to_string(),
                 status: TaskStatus::Pending,
                 result: None,
                 error: None,
@@ -403,14 +407,18 @@ impl AutonomousPlanner {
             id += 1;
         }
 
-        if goal_lower.contains("command") || goal_lower.contains("run") || goal_lower.contains("execute") {
+        if goal_lower.contains("command")
+            || goal_lower.contains("run")
+            || goal_lower.contains("execute")
+        {
             tasks.push(PlanTask {
                 id,
                 description: "Execute discovery command".to_string(),
                 tool: "run_command".to_string(),
                 arguments: serde_json::json!({
                     "command": "whoami && id && uname -a"
-                }).to_string(),
+                })
+                .to_string(),
                 status: TaskStatus::Pending,
                 result: None,
                 error: None,
@@ -427,7 +435,8 @@ impl AutonomousPlanner {
                 tool: "run_command".to_string(),
                 arguments: serde_json::json!({
                     "command": "echo 'No specific tool matched for goal: {}'".replace("{}", goal)
-                }).to_string(),
+                })
+                .to_string(),
                 status: TaskStatus::Pending,
                 result: None,
                 error: None,
@@ -478,7 +487,7 @@ impl AutonomousPlanner {
                 }
             }
         }
-        plans.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        plans.sort_by_key(|b| Reverse(b.created_at));
         plans
     }
 }
@@ -517,10 +526,7 @@ mod tests {
     fn test_runtime() -> AgentRuntime {
         AgentRuntime::new(
             Arc::new(ScriptedProvider::default()),
-            std::env::temp_dir().join(format!(
-                "nanomite-autonomous-test-{}",
-                std::process::id()
-            )),
+            std::env::temp_dir().join(format!("nanomite-autonomous-test-{}", std::process::id())),
             64 * 1024,
             Some(AgentConfig::default()),
         )
@@ -529,10 +535,8 @@ mod tests {
     #[test]
     fn create_plan_decomposes_web_goal() {
         let runtime = Arc::new(test_runtime());
-        let dir = std::env::temp_dir().join(format!(
-            "nanomite-autonomous-state-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nanomite-autonomous-state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut planner = AutonomousPlanner::new(Arc::clone(&runtime), &dir);
 
@@ -546,10 +550,8 @@ mod tests {
     #[test]
     fn create_plan_decomposes_port_scan_goal() {
         let runtime = Arc::new(test_runtime());
-        let dir = std::env::temp_dir().join(format!(
-            "nanomite-autonomous-state-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nanomite-autonomous-state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut planner = AutonomousPlanner::new(Arc::clone(&runtime), &dir);
 
@@ -561,18 +563,16 @@ mod tests {
     #[test]
     fn pre_tool_gate_blocks_risky_tools() {
         let runtime = Arc::new(test_runtime());
-        let dir = std::env::temp_dir().join(format!(
-            "nanomite-autonomous-state-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nanomite-autonomous-state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+        #[allow(clippy::type_complexity)]
         let gate: Arc<dyn Fn(&str, &str) -> bool + Send + Sync> =
             Arc::new(|tool: &str, _args: &str| {
                 // Allow everything except run_command.
                 tool != "run_command"
             });
-        let mut planner = AutonomousPlanner::new(Arc::clone(&runtime), &dir)
-            .with_pre_tool_gate(gate);
+        let planner = AutonomousPlanner::new(Arc::clone(&runtime), &dir).with_pre_tool_gate(gate);
 
         let call = ToolCall {
             id: "t1".into(),
@@ -592,17 +592,19 @@ mod tests {
         };
         let result2 = planner.dispatch_tool(&call2);
         // list_files may fail in temp dir but should not be gate-blocked.
-        assert!(!result2.as_ref().err().map(|e| e.contains("pre_tool_gate")).unwrap_or(false));
+        assert!(!result2
+            .as_ref()
+            .err()
+            .map(|e| e.contains("pre_tool_gate"))
+            .unwrap_or(false));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn save_and_list_plans_roundtrip() {
         let runtime = Arc::new(test_runtime());
-        let dir = std::env::temp_dir().join(format!(
-            "nanomite-autonomous-state-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nanomite-autonomous-state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut planner = AutonomousPlanner::new(Arc::clone(&runtime), &dir);
 
@@ -618,10 +620,8 @@ mod tests {
     #[test]
     fn decompose_generic_goal_creates_fallback_task() {
         let runtime = Arc::new(test_runtime());
-        let dir = std::env::temp_dir().join(format!(
-            "nanomite-autonomous-state-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nanomite-autonomous-state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let planner = AutonomousPlanner::new(Arc::clone(&runtime), &dir);
 

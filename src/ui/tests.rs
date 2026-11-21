@@ -72,6 +72,18 @@ fn with_tool(name: &str, detail: &str, ok: bool) -> ToolRow {
     }
 }
 
+#[test]
+fn every_catalog_tool_has_a_dedicated_icon() {
+    for tool in crate::tools::ToolSet::catalog() {
+        assert_ne!(
+            super::chat::tool_icon(tool.name),
+            "⚙",
+            "{} has no dedicated transcript icon",
+            tool.name
+        );
+    }
+}
+
 #[tokio::test]
 async fn renders_welcome_state() {
     let mut app = test_app().await;
@@ -79,6 +91,10 @@ async fn renders_welcome_state() {
     let text = frame_text(&mut app, 92, 24);
     println!("{text}");
     assert!(text.contains("nanomite"), "title missing:\n{text}");
+    assert!(
+        text.contains(&format!("v{}", crate::VERSION)),
+        "running version missing from welcome:\n{text}"
+    );
     assert!(
         text.contains("Intelligence Without Boundaries"),
         "tagline missing:\n{text}"
@@ -137,7 +153,7 @@ async fn composer_layout_width_tracks_terminal() {
 async fn composer_tile_hugs_five_rows_and_grows() {
     let mut app = test_app().await;
     let _ = frame_text(&mut app, 92, 24);
-    let rects = app.view.layout.expect("layout cached").2;
+    let rects = app.view.layout.expect("layout cached").3;
     assert_eq!(
         rects.left_input.height, 5,
         "empty composer rests at 5 rows:\n{rects:?}"
@@ -153,7 +169,7 @@ async fn composer_tile_hugs_five_rows_and_grows() {
         app.composer.newline();
     }
     let _ = frame_text(&mut app, 92, 24);
-    let rects = app.view.layout.expect("layout cached").2;
+    let rects = app.view.layout.expect("layout cached").3;
     assert!(
         rects.left_input.height > 5,
         "composer must grow with input: {}",
@@ -166,9 +182,9 @@ async fn composer_tile_hugs_five_rows_and_grows() {
     );
     // The info panel keeps the rest of the left column.
     assert_eq!(
-        rects.left_info.height + rects.left_input.height,
+        rects.left_info.height + rects.left_aux.height + rects.left_input.height,
         rects.main_chat.height,
-        "info + input must fill the column"
+        "info + aux + input must fill the column"
     );
 }
 
@@ -276,10 +292,11 @@ async fn user_message_renders_as_a_raised_block() {
 
     let text = frame_text(&mut app, 92, 24);
     assert!(text.contains("list the files"), "text missing:\n{text}");
-    // User turn in cozy mode now uses plain 4-space indent (no rail node).
+    // User turn in cozy mode carries a quiet prompt node in the same gutter
+    // as the assistant's diamond, with text starting at column four.
     assert!(
-        text.contains("    list the files"),
-        "user indent missing:\n{text}"
+        text.contains("  ❯ list the files"),
+        "user node missing:\n{text}"
     );
     // opencode drops the YOU/AI badges and timestamps entirely.
     assert!(!text.contains("YOU"), "badge should be gone:\n{text}");
@@ -592,6 +609,24 @@ async fn scrolled_up_pill_counts_new_lines() {
     assert!(
         !text.contains("end to follow"),
         "pill stayed visible:\n{text}"
+    );
+}
+
+#[tokio::test]
+async fn errors_carry_a_contextual_recovery_hint() {
+    let mut app = test_app().await;
+    let mut entry = assistant("failed");
+    entry.phase = Phase::Failed;
+    entry.error = Some("401 unauthorized - check NANOMITE_API_KEY".into());
+    app.entries.push(entry);
+    let text = frame_text(&mut app, 92, 20);
+    assert!(
+        text.contains("try /connect"),
+        "recovery hint missing:\n{text}"
+    );
+    assert!(
+        text.contains("check credentials"),
+        "reason missing:\n{text}"
     );
 }
 

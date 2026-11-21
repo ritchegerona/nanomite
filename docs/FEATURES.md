@@ -89,6 +89,16 @@ test suite.
   with dependencies, tags, statuses, JSON persistence (L3).
 - **VPN/TOR modules** (feature-gated): `nanomite-vpn` binary and Tor control
   library behind `--features vpn,tor` (913 tests with both features enabled).
+  Slash commands: `/vpn start|stop|status`, `/tor start|stop|status`. Tor
+  exposes a SOCKS5 proxy on `127.0.0.1:9050`.
+
+- **Deep Web / Dark Web module** (`deepweb`): three authorized operations on
+  top of the Tor SOCKS5 proxy — `deepweb/search <query>` (passive DuckDuckGo
+  HTML over Tor), `deepweb/browse <url>` (fetch `.onion` v3 or clearnet pages
+  through Tor), `deepweb/validate-onion <address>` (offline v3 shape
+  validation). All traffic routes through `socks5h://127.0.0.1:9050`; Tor must
+  be started separately with `/tor start`. No DNS-rebinding/SSRF risk because
+  `.onion` addresses never resolve in system DNS.
 
 ## Landing (verify before claiming)
 

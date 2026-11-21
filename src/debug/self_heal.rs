@@ -10,11 +10,10 @@
 //! Nothing is applied automatically: proposals are staged as `Pending` and
 //! must be approved in `/improve`, where the regression gate decides.
 
-use crate::debug::{debug_output, FixConfidence, FixGenerator, FixResult};
-use crate::improve::{Actor, ImproveEngine, Roots};
+use crate::debug::{debug_output, FixGenerator};
+use crate::improve::{ImproveEngine, Roots};
 use crate::memory::MemoryEngine;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// Result of a self-heal check on a command's output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,7 +59,12 @@ impl SelfHeal {
     /// Check the output of a command that just ran. If it contains
     /// compiler/test/runtime diagnostics, generate fix proposals and stage
     /// them through the improve engine.
-    pub fn check_output(&mut self, command: &str, output: &str, exit_code: Option<i32>) -> SelfHealResult {
+    pub fn check_output(
+        &mut self,
+        command: &str,
+        output: &str,
+        exit_code: Option<i32>,
+    ) -> SelfHealResult {
         let session = debug_output(command, output);
         let diagnostics_count = session.diagnostics.len();
 
@@ -95,7 +99,11 @@ impl SelfHeal {
         let mut techniques_saved = Vec::new();
         if let Some(memory) = &self.memory {
             for d in &session.diagnostics {
-                let tags = vec!["technique".to_string(), "debug".to_string(), "auto-fix".to_string()];
+                let tags = vec![
+                    "technique".to_string(),
+                    "debug".to_string(),
+                    "auto-fix".to_string(),
+                ];
                 let content = format!(
                     "Technique: auto-debug detected {} in {}\n\
                      Why: {}\n\
@@ -147,7 +155,6 @@ impl Default for SelfHeal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::improve::testing::temp_dir;
 
     #[test]
     fn no_diagnostics_means_nothing_staged() {

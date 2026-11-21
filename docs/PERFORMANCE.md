@@ -26,11 +26,16 @@ Startup (3–6 ms), TUI rendering (dirty-flagged with cached renders), and the
 SQLite memory store (WAL + `synchronous=NORMAL`) were inspected and left
 alone — already fast by design.
 
-The self-improvement gate (`/improve` → approve) shells out to
-`cargo test --lib` as its regression check. That is a full test run, not a
-microbenchmark: it runs on a background task, never on the UI thread, and a
-non-zero exit rolls the change back byte-exactly. Budget for "seconds, not
-milliseconds" when deciding to approve.
+## VPN / Tor feature-gating performance
+
+Building with `--features vpn,tor` does **not** slow down nanomite's core runtime:
+
+- **Build time:** only slightly longer (a few extra modules + the `nanomite-vpn` binary).
+- **Binary size:** modestly larger, but idle feature code has zero runtime cost.
+- **Idle:** if `/vpn start` or `/tor start` are never invoked, nanomite executes exactly as fast as without the features.
+- **Active VPN:** the VPN tunnel is a separate process; system-wide network throughput may drop due to encryption overhead, but nanomite's TUI and local commands are unaffected.
+- **Active Tor:** deepweb browsing/search latency increases because traffic traverses 3 volunteer relays through the SOCKS5 proxy on `127.0.0.1:9050`. This is network latency, not nanomite code slowing down.
+- **Recommendation:** build with the features if needed, start services only when required, and stop them (`/vpn stop`, `/tor stop`) when done.
 
 ## Rules
 

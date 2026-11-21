@@ -1,0 +1,22 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { useState } from 'react';
+import { Globe } from 'lucide-react';
+export function OSINTSpace() {
+    const [target, setTarget] = useState('');
+    const [results, setResults] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const handleScan = async () => {
+        if (!target)
+            return;
+        setLoading(true);
+        setResults([
+            { subdomain: `www.${target}`, ip: '1.2.3.4', status: 'live' },
+            { subdomain: `api.${target}`, ip: '5.6.7.8', status: 'live' },
+            { subdomain: `dev.${target}`, ip: '9.10.11.12', status: 'dead' },
+        ]);
+        setLoading(false);
+    };
+    return (_jsxs("div", { className: "space-y-6", children: [_jsxs("div", { className: "flex flex-col md:flex-row md:items-center md:justify-between gap-4", children: [_jsxs("div", { children: [_jsx("h1", { className: "text-2xl font-bold", children: "OSINT Reconnaissance" }), _jsx("p", { className: "text-muted-foreground", children: "Open source intelligence gathering for target infrastructure" })] }), _jsxs("button", { className: "px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium flex items-center gap-2", children: [_jsx(Globe, { className: "h-4 w-4" }), "New Recon"] })] }), _jsxs("div", { className: "grid grid-cols-1 lg:grid-cols-4 gap-4", children: [_jsxs("div", { className: "bg-card rounded-lg border border-border p-4", children: [_jsx("h3", { className: "text-lg font-semibold", children: "Target" }), _jsx("input", { value: target, onChange: (e) => setTarget(e.target.value), placeholder: "example.com", className: "w-full mt-2 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary outline-none" }), _jsx("button", { onClick: handleScan, disabled: loading || !target, className: "w-full mt-3 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors", children: loading ? 'Scanning...' : 'Start Recon' })] }), _jsxs("div", { className: "bg-card rounded-lg border border-border p-4", children: [_jsx("h3", { className: "text-lg font-semibold", children: "Subdomains" }), _jsx("div", { className: "space-y-2", children: results.map((r, i) => (_jsxs("div", { className: "flex items-center justify-between text-sm p-2 rounded bg-secondary/50", children: [_jsx("span", { className: "font-mono", children: r.subdomain }), _jsx("span", { className: (['text-xs px-2 py-0.5 rounded', r.status === 'live' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500']).join(' '), children: r.status })] }, i))) })] }), _jsxs("div", { className: "bg-card rounded-lg border border-border p-4", children: [_jsx("h3", { className: "text-lg font-semibold", children: "Open Ports" }), _jsx("div", { className: "space-y-2", children: [22, 80, 443, 8080].map((port) => (_jsxs("div", { className: "flex items-center justify-between text-sm p-2 rounded bg-secondary/50", children: [_jsxs("span", { className: "font-mono", children: [port, "/tcp"] }), _jsx("span", { className: "text-xs text-muted-foreground", children: "open" })] }, port))) })] }), _jsxs("div", { className: "bg-card rounded-lg border border-border p-4", children: [_jsx("h3", { className: "text-lg font-semibold", children: "Technologies" }), _jsx("div", { className: "space-y-2", children: ['Nginx', 'PHP 7.4', 'Cloudflare', 'jQuery'].map((tech, i) => (_jsxs("div", { className: "flex items-center justify-between text-sm p-2 rounded bg-secondary/50", children: [_jsx("span", { children: tech }), _jsx("span", { className: "text-xs text-muted-foreground", children: "detected" })] }, i))) })] })] }), _jsx("div", { className: "lg:col-span-4", children: _jsxs("div", { className: "border rounded-lg bg-card p-6", children: [_jsxs("div", { className: "flex items-center justify-between mb-4", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Tool Output" }), _jsx("button", { className: "text-sm text-primary hover:underline", children: "Refresh" })] }), _jsx("div", { className: "h-64 overflow-auto bg-black/50 rounded-lg p-3 border border-border font-mono text-xs text-green-400", children: loading
+                                ? 'Running subdomain enumeration...\n[+] Querying crt.sh...\n[+] Running amass...\n[+] Running subfinder...\n'
+                                : 'Ready to run reconnaissance tools.\n\nAvailable tools:\n- subdomain_enum\n- port_scan\n- dns_enum\n- tech_fingerprint\n- ssl_tls\n- whois\n- cloud_enum\n- git_recon' })] }) })] }));
+}

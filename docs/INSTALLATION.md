@@ -108,6 +108,20 @@ pip install numpy scikit-learn onnxruntime llama-cpp-python pytest mypy ruff
 
 The toolkit lives under `src/nanomite/cracking/`.
 
+## Building with VPN / Tor features
+
+The `nanomite-vpn` binary and Tor control library are feature-gated. Build them when you need VPN or Dark Web access:
+
+```bash
+# VPN only
+cargo build --release --features vpn
+
+# VPN + Tor (needed for deepweb search/browse)
+cargo build --release --features vpn,tor
+```
+
+The release binary `nanomite-vpn` is produced alongside `nanomite-ai`. Tor itself is a separate system daemon — nanomite launches and controls it via `/tor start|stop|status`, but does not bundle the `tor` binary. Install `tor` via your package manager (`apt install tor` / `brew install tor`) before using `/tor start`.
+
 ## First run
 
 ```bash

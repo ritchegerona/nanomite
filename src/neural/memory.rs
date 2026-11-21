@@ -46,6 +46,7 @@ pub struct NeuralMemoryQueryResult {
 #[derive(Debug, Clone)]
 pub struct NeuralMemory {
     conn: Arc<Mutex<Connection>>,
+    #[allow(dead_code)]
     path: PathBuf,
 }
 
@@ -91,7 +92,13 @@ impl NeuralMemory {
     }
 
     /// Store a new record, computing its embedding from the text.
-    pub fn store(&self, id: &str, text: &str, tags: Vec<String>, category: &str) -> rusqlite::Result<()> {
+    pub fn store(
+        &self,
+        id: &str,
+        text: &str,
+        tags: Vec<String>,
+        category: &str,
+    ) -> rusqlite::Result<()> {
         let embedding = embed_text(text, EMBED_DIM);
         let now = crate::neural::now_secs();
         let embedding_blob = serde_json::to_string(&embedding).unwrap_or_default();
@@ -239,7 +246,8 @@ impl NeuralMemory {
     /// Record count.
     pub fn len(&self) -> rusqlite::Result<usize> {
         let conn = self.conn.lock().unwrap();
-        let count: u64 = conn.query_row("SELECT COUNT(*) FROM neural_memories", [], |r| r.get(0))?;
+        let count: u64 =
+            conn.query_row("SELECT COUNT(*) FROM neural_memories", [], |r| r.get(0))?;
         Ok(count as usize)
     }
 
@@ -347,7 +355,10 @@ mod tests {
         let a = embed_text("nmap network scan", EMBED_DIM);
         let b = embed_text("nmap network scanning", EMBED_DIM);
         let sim = cosine_similarity(&a, &b);
-        assert!(sim > 0.6, "similar texts should have high similarity: {sim}");
+        assert!(
+            sim > 0.6,
+            "similar texts should have high similarity: {sim}"
+        );
     }
 
     #[test]
@@ -385,7 +396,9 @@ mod tests {
         )
         .expect("store m3");
 
-        let results = mem.query("nmap network reconnaissance", 5, 0.1).expect("query");
+        let results = mem
+            .query("nmap network reconnaissance", 5, 0.1)
+            .expect("query");
         assert!(!results.records.is_empty());
         // The nmap record should rank highest.
         assert_eq!(results.records[0].id, "m1");
@@ -442,13 +455,8 @@ mod tests {
     #[test]
     fn in_memory_database_works() {
         let mem = NeuralMemory::in_memory().expect("open in-memory");
-        mem.store(
-            "s1",
-            "test embedding text",
-            vec!["tag1".into()],
-            "cat",
-        )
-        .expect("store");
+        mem.store("s1", "test embedding text", vec!["tag1".into()], "cat")
+            .expect("store");
         assert_eq!(mem.len().expect("len"), 1);
         assert!(!mem.is_empty().expect("is_empty"));
     }

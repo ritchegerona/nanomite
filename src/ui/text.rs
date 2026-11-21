@@ -406,6 +406,15 @@ pub struct MarkdownStyles {
     pub code_type: Style,
     /// ALL_CAPS constants and `#[attributes]`.
     pub code_constant: Style,
+    /// Added/removed lines in a `diff` fence; diff data, not success/danger.
+    pub code_add: Style,
+    pub code_delete: Style,
+    /// Quiet ground behind fenced code, derived from the palette's panel.
+    pub code_bg: Style,
+    /// Line-number gutter inside fenced code.
+    pub code_gutter: Style,
+    /// Show a line-number gutter in fenced blocks (opt-in, cached per entry).
+    pub code_numbers: bool,
     /// Draw fenced blocks as flat frames (a `─── lang ───` rule, indented
     /// code, a `─ N lines` closing rule) instead of self-contained boxes.
     /// The transcript supplies the leading indent; this only changes the
@@ -437,6 +446,11 @@ impl MarkdownStyles {
             code_function: Style::default().fg(theme.code_function()),
             code_type: Style::default().fg(theme.code_type()),
             code_constant: Style::default().fg(theme.code_constant()),
+            code_add: Style::default().fg(theme.diff_add()),
+            code_delete: Style::default().fg(theme.diff_delete()),
+            code_bg: Style::default().bg(theme.code_bg()),
+            code_gutter: Style::default().fg(theme.code_gutter()),
+            code_numbers: false,
             rail: false,
         }
     }
@@ -445,6 +459,120 @@ impl MarkdownStyles {
 /// Renders a pragmatic subset of markdown into wrapped, styled lines.
 pub fn markdown(src: &str, max_width: usize, st: &MarkdownStyles) -> Vec<Line<'static>> {
     markdown_with_blocks(src, max_width, st).0
+}
+
+/// Paints one fenced block: a framed rule with an accented language badge,
+/// syntax-highlighted code and a closing rule. Called both when the closing
+/// fence lands and at end of input, so a streamed block is framed from its
+/// first line instead of flipping from a bare gutter mid-turn.
+fn finish_fence(
+    out: &mut Vec<Line<'static>>,
+    blocks: &mut Vec<(usize, usize, String)>,
+    start: usize,
+    lang: &str,
+    source: &[String],
+    max_width: usize,
+    st: &MarkdownStyles,
+) {
+    if source.is_empty() {
+        return;
+    }
+    let num_w = if st.code_numbers {
+        source.len().to_string().len()
+    } else {
+        0
+    };
+    // Rail: a plain leading space or ` N │ `. Box: a leading `│ ` or
+    // `│ N │ ` between the frame's borders.
+    let gutter_w = if st.code_numbers { num_w + 3 } else { 1 };
+    let hidden = source.iter().map(|line| width(line)).max().unwrap_or(0);
+
+    if st.rail {
+        let code_w = max_width.saturating_sub(1).saturating_sub(gutter_w).max(8);
+        let mut head = vec![Span::styled("─", st.fence)];
+        if !lang.is_empty() {
+            head.push(Span::styled(format!(" {lang} "), st.heading));
+        }
+        let used: usize = head.iter().map(|s| width(s.content.as_ref())).sum();
+        head.push(Span::styled(
+            "─".repeat(max_width.saturating_sub(used).max(1)),
+            st.fence,
+        ));
+        out.push(Line::from(head));
+
+        for (i, content) in source.iter().enumerate() {
+            let shown = if width(content) > code_w {
+                format!("{}…", truncate(content, code_w.saturating_sub(1)))
+            } else {
+                content.clone()
+            };
+            let mut spans = Vec::new();
+            if st.code_numbers {
+                spans.push(Span::styled(
+                    format!("{:>num_w$} │ ", i + 1),
+                    st.code_gutter,
+                ));
+            } else {
+                spans.push(Span::styled(" ".to_string(), st.code_bg));
+            }
+            let mut hl = highlight_code(&shown, code_lang(lang), st, &mut false);
+            for span in &mut hl {
+                span.style = span.style.patch(st.code_bg);
+            }
+            spans.append(&mut hl);
+            out.push(Line::from(spans));
+        }
+        let end = out.len();
+        let mut footer = format!("─ {} · click to copy", plural(source.len(), "line"));
+        let overflow = hidden.saturating_sub(code_w);
+        if overflow > 0 {
+            footer = format!(
+                "─ {} · +{} cols hidden · click to copy",
+                plural(source.len(), "line"),
+                overflow
+            );
+        }
+        out.push(Line::from(Span::styled(footer, st.fence)));
+        blocks.push((start, end, source.join("\n")));
+    } else {
+        let inner = max_width.saturating_sub(6).max(8);
+        let code_w = inner.saturating_sub(gutter_w).max(8);
+        let label = if lang.is_empty() {
+            String::new()
+        } else {
+            format!(" {} ", lang)
+        };
+        out.push(box_rule("╭", "╮", code_w + gutter_w, &label, st));
+        let mut in_block = false;
+        for (i, content) in source.iter().enumerate() {
+            let shown = if width(content) > code_w {
+                format!("{}…", truncate(content, code_w.saturating_sub(1)))
+            } else {
+                content.clone()
+            };
+            let mut spans = vec![Span::styled("│ ", st.fence)];
+            if st.code_numbers {
+                spans.push(Span::styled(
+                    format!("{:>num_w$} │ ", i + 1),
+                    st.code_gutter,
+                ));
+            }
+            let mut hl = highlight_code(&shown, code_lang(lang), st, &mut in_block);
+            let w: usize = hl.iter().map(|s| width(s.content.as_ref())).sum();
+            if w < code_w {
+                hl.push(Span::styled(" ".repeat(code_w - w), st.code_bg));
+            }
+            for span in &mut hl {
+                span.style = span.style.patch(st.code_bg);
+            }
+            spans.append(&mut hl);
+            spans.push(Span::styled(" │", st.fence));
+            out.push(Line::from(spans));
+        }
+        let end = out.len();
+        out.push(box_rule("╰", "╯", code_w + gutter_w, "", st));
+        blocks.push((start, end, source.join("\n")));
+    }
 }
 
 /// Markdown rendering that also reports finished fenced code blocks as
@@ -496,9 +624,8 @@ pub fn markdown_with_blocks(
             table_col_widths.clear();
         }
 
-        // Fenced code blocks: buffered so the whole block can render as one
-        // rounded box once the closing fence arrives. Mid-stream (unclosed)
-        // blocks fall back to the plain `▏` gutter so live code stays visible.
+        // Fenced code blocks: buffered and framed by `finish_fence` both on
+        // close and at end of input, so live code already looks finished.
         if let Some(lang) = fence_marker(trimmed) {
             if in_fence {
                 in_fence = false;
@@ -506,80 +633,7 @@ pub fn markdown_with_blocks(
                 let source = std::mem::take(&mut fence_lines);
                 let lang = std::mem::take(&mut fence_lang);
                 fence_start = 0;
-                if st.rail {
-                    // Flat frame: the transcript owns the leading indent, so
-                    // these lines only draw the rule, the code column and
-                    // the closing summary. No right border, so the full width
-                    // stays available for the code itself.
-                    let code_w = max_width.saturating_sub(1).max(8);
-                    let head = if lang.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {lang} ")
-                    };
-                    let mut rule = String::from("─");
-                    rule.push_str(&head);
-                    let fill = max_width.saturating_sub(width(&rule)).max(1);
-                    rule.push_str(&"─".repeat(fill));
-                    out.push(Line::from(Span::styled(rule, st.fence)));
-                    let kind = code_lang(&lang);
-                    let mut in_block = false;
-                    for content in &source {
-                        let shown = if width(content) > code_w {
-                            format!("{}…", truncate(content, code_w.saturating_sub(1)))
-                        } else {
-                            content.clone()
-                        };
-                        let mut spans = vec![Span::raw(" ".to_string())];
-                        let mut hl = highlight_code(&shown, kind, st, &mut in_block);
-                        spans.append(&mut hl);
-                        out.push(Line::from(spans));
-                    }
-                    let end = out.len();
-                    let count = source.len();
-                    out.push(Line::from(Span::styled(
-                        format!("─ {} · click to copy", plural(count, "line")),
-                        st.fence,
-                    )));
-                    blocks.push((start, end, source.join("\n")));
-                } else {
-                    // Box interior: the code column, capped to the viewport.
-                    let inner = max_width.saturating_sub(6).max(8);
-                    let code_w = source
-                        .iter()
-                        .map(|l| width(l))
-                        .max()
-                        .unwrap_or(0)
-                        .min(inner);
-                    let label = if lang.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {}", lang)
-                    };
-                    out.push(box_rule("╭", "╮", code_w, &label, st));
-                    let lang = code_lang(&lang);
-                    let mut in_block = false;
-                    for content in &source {
-                        let shown = if width(content) > code_w {
-                            format!("{}…", truncate(content, code_w.saturating_sub(1)))
-                        } else {
-                            content.clone()
-                        };
-                        let mut spans = vec![Span::styled("│ ", st.fence)];
-                        let mut hl = highlight_code(&shown, lang, st, &mut in_block);
-                        // Keep the right border aligned: pad the visible width.
-                        let w: usize = hl.iter().map(|s| width(s.content.as_ref())).sum();
-                        if w < code_w {
-                            hl.push(Span::styled(" ".repeat(code_w - w), st.code));
-                        }
-                        spans.append(&mut hl);
-                        spans.push(Span::styled(" │", st.fence));
-                        out.push(Line::from(spans));
-                    }
-                    let end = out.len(); // the bottom border line
-                    out.push(box_rule("╰", "╯", code_w, "", st));
-                    blocks.push((start, end, source.join("\n")));
-                }
+                finish_fence(&mut out, &mut blocks, start, &lang, &source, max_width, st);
             } else {
                 flush(&mut paragraph, &mut out);
                 in_fence = true;
@@ -719,35 +773,17 @@ pub fn markdown_with_blocks(
     }
 
     if in_fence {
-        // Mid-stream block: render unboxed so live code stays visible; the
-        // frame appears once the closing fence lands.
-        if st.rail {
-            let label = if fence_lang.is_empty() {
-                "─".to_string()
-            } else {
-                format!("─ {} ", fence_lang)
-            };
-            out.push(Line::from(Span::styled(label, st.fence)));
-            for line in &fence_lines {
-                out.push(Line::from(vec![
-                    Span::raw(" ".to_string()),
-                    Span::styled(line.clone(), st.code),
-                ]));
-            }
-        } else {
-            let label = if fence_lang.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", fence_lang)
-            };
-            out.push(Line::from(Span::styled(format!("▏{label}"), st.fence)));
-            for line in &fence_lines {
-                out.push(Line::from(vec![
-                    Span::styled("▏ ", st.fence),
-                    Span::styled(line.clone(), st.code),
-                ]));
-            }
-        }
+        // Still streaming: frame what has arrived so the code looks finished
+        // from its first line, with no visible flip when the fence closes.
+        finish_fence(
+            &mut out,
+            &mut blocks,
+            fence_start,
+            &fence_lang,
+            &fence_lines,
+            max_width,
+            st,
+        );
     }
     if in_table {
         flush_table(
@@ -927,6 +963,14 @@ enum CodeLang {
     Slash,
     /// `#` line comments (python, bash, yaml, …).
     Hash,
+    /// JSON: string keys before `:` get the type colour.
+    Json,
+    /// `--` comments and SQL keywords.
+    Sql,
+    /// Unified diff: `+`/`-` lines carry diff colours.
+    Diff,
+    /// Terminal transcripts: `$ `/`❯ ` prompts before a shell command.
+    Shell,
     /// No known comment syntax; strings and numbers still highlight.
     Plain,
 }
@@ -935,10 +979,15 @@ fn code_lang(lang: &str) -> CodeLang {
     match lang {
         "rust" | "rs" | "c" | "h" | "cpp" | "c++" | "cc" | "hpp" | "go" | "java" | "kt"
         | "kotlin" | "swift" | "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "zig" | "cs"
-        | "csharp" | "dart" | "scala" | "php" | "solidity" | "json" | "jsonc" => CodeLang::Slash,
-        "python" | "py" | "python3" | "ruby" | "rb" | "bash" | "sh" | "shell" | "zsh" | "fish"
-        | "yaml" | "yml" | "toml" | "perl" | "r" | "makefile" | "make" | "dockerfile"
-        | "docker" | "ini" | "conf" | "gitignore" | "env" => CodeLang::Hash,
+        | "csharp" | "dart" | "scala" | "php" | "solidity" | "jsonc" => CodeLang::Slash,
+        "json" => CodeLang::Json,
+        "sql" | "postgres" | "postgresql" | "sqlite" => CodeLang::Sql,
+        "diff" | "patch" => CodeLang::Diff,
+        "bash" | "sh" | "shell" | "zsh" | "fish" | "console" | "terminal" => CodeLang::Shell,
+        "python" | "py" | "python3" | "ruby" | "rb" | "yaml" | "yml" | "toml" | "perl" | "r"
+        | "makefile" | "make" | "dockerfile" | "docker" | "ini" | "conf" | "gitignore" | "env" => {
+            CodeLang::Hash
+        }
         _ => CodeLang::Plain,
     }
 }
@@ -1036,6 +1085,63 @@ fn code_keyword(word: &str) -> bool {
     )
 }
 
+/// SQL's own keyword set; the merged `code_keyword` list is language-agnostic.
+fn is_sql_keyword(word: &str) -> bool {
+    matches!(
+        word.to_ascii_uppercase().as_str(),
+        "SELECT"
+            | "FROM"
+            | "WHERE"
+            | "INSERT"
+            | "INTO"
+            | "VALUES"
+            | "UPDATE"
+            | "SET"
+            | "DELETE"
+            | "CREATE"
+            | "TABLE"
+            | "DROP"
+            | "ALTER"
+            | "JOIN"
+            | "LEFT"
+            | "RIGHT"
+            | "INNER"
+            | "OUTER"
+            | "ON"
+            | "GROUP"
+            | "BY"
+            | "ORDER"
+            | "HAVING"
+            | "LIMIT"
+            | "OFFSET"
+            | "AS"
+            | "AND"
+            | "OR"
+            | "NOT"
+            | "NULL"
+            | "IS"
+            | "IN"
+            | "LIKE"
+            | "BETWEEN"
+            | "DISTINCT"
+            | "UNION"
+            | "WITH"
+            | "CASE"
+            | "WHEN"
+            | "THEN"
+            | "ELSE"
+            | "END"
+            | "PRIMARY"
+            | "KEY"
+            | "FOREIGN"
+            | "REFERENCES"
+            | "INDEX"
+            | "BEGIN"
+            | "COMMIT"
+            | "ROLLBACK"
+    )
+}
+
 fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
@@ -1086,6 +1192,34 @@ fn highlight_code(
         }
     }
 
+    // Diff fences are data, not prose: a single span per line keeps the
+    // +/- signal unambiguous and costs no tokenisation.
+    if lang == CodeLang::Diff {
+        let style = if line.starts_with("+++") || line.starts_with("---") {
+            st.code_comment
+        } else if line.starts_with('+') {
+            st.code_add
+        } else if line.starts_with('-') {
+            st.code_delete
+        } else if line.starts_with("@@") {
+            st.code_function
+        } else {
+            st.code
+        };
+        return vec![Span::styled(line.to_string(), style)];
+    }
+
+    // A shell transcript's prompt is an affordance, not part of the command.
+    if lang == CodeLang::Shell {
+        for prompt in ["$ ", "❯ ", "> "] {
+            if let Some(rest) = line.strip_prefix(prompt) {
+                let mut spans = vec![Span::styled(prompt.to_string(), st.heading)];
+                spans.extend(highlight_code(rest, CodeLang::Hash, st, in_block));
+                return spans;
+            }
+        }
+    }
+
     let chars: Vec<char> = line.chars().collect();
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut run = String::new();
@@ -1121,6 +1255,7 @@ fn highlight_code(
         // Line comments run to the end of the line.
         if (lang == CodeLang::Slash && two(['/', '/']))
             || (lang == CodeLang::Hash && chars[i] == '#')
+            || (lang == CodeLang::Sql && two(['-', '-']))
         {
             push_run(&mut spans, &mut run, style);
             let comment: String = chars[i..].iter().collect();
@@ -1182,7 +1317,15 @@ fn highlight_code(
                 }
                 i += 1;
             }
-            spans.push(Span::styled(text, st.code_string));
+            // In JSON (and config-like snippets) a quoted key is followed by
+            // a colon; colouring it as a type makes key/value structure read
+            // at a glance without a full parser.
+            let is_key = matches!(lang, CodeLang::Json | CodeLang::Slash)
+                && chars.get(i).is_some_and(|c| *c == ':');
+            spans.push(Span::styled(
+                text,
+                if is_key { st.code_type } else { st.code_string },
+            ));
             continue;
         }
 
@@ -1243,7 +1386,7 @@ fn highlight_code(
                 j += 1;
             }
             let word: String = chars[i..j].iter().collect();
-            if code_keyword(&word) {
+            if code_keyword(&word) || (lang == CodeLang::Sql && is_sql_keyword(&word)) {
                 push_run(&mut spans, &mut run, style);
                 spans.push(Span::styled(word, st.code_keyword));
             } else if word

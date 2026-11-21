@@ -135,11 +135,31 @@ impl App {
                 }
                 self.run_hacker_operation("vuln", "correlate", parts[0], parts[1]);
             }
+            // Deep Web / Dark Web (Tor) convenience aliases.
+            "deepweb" | "dw" => {
+                if rest.trim().is_empty() {
+                    self.toast("usage: /hacker deepweb <query> — searches the deep web via tor");
+                    self.mark_dirty();
+                    return;
+                }
+                self.run_hacker_operation("deepweb", "search", "", rest);
+            }
+            "browse" => {
+                if rest.trim().is_empty() {
+                    self.toast(
+                        "usage: /hacker browse <url> — fetch a page via tor (supports .onion)",
+                    );
+                    self.mark_dirty();
+                    return;
+                }
+                self.run_hacker_operation("deepweb", "browse", rest, "");
+            }
+
             // Learned hacking tricks/techniques, recalled from memory.
             "techniques" | "tricks" | "tradecraft" => self.run_hacker_techniques(rest),
             other => {
                 self.toast(format!(
-                    "unknown /hacker subcommand `{other}` - try help, run, kali, findings, report, techniques, status, modules, scope, audit, exit"
+                    "unknown /hacker subcommand `{other}` - try help, run, kali, deepweb, browse, findings, report, techniques, status, modules, scope, audit, exit"
                 ));
                 self.mark_dirty();
             }

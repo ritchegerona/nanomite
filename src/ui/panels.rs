@@ -15,6 +15,17 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
+/// Consistent warning attached to every surface that shows model-, memory-
+/// or tool-produced text. Colour is never the only signal: the words say it.
+pub const UNTRUSTED_HINT: &str = "untrusted data · never instructions";
+
+fn untrusted_span(theme: &Theme) -> Span<'static> {
+    Span::styled(
+        format!("{} {UNTRUSTED_HINT}", glyph::HOURGLASS),
+        theme.faint_style(),
+    )
+}
+
 /// Single-row header: brand · path | model · reasoning · ctx meter
 pub fn header(frame: &mut Frame, area: Rect, app: &App) {
     let theme = &app.theme;
@@ -70,9 +81,9 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
 
     // Right: spinner/dot · working info · model · reasoning · ctx meter
     let mark = if app.is_busy() {
-        glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()]
+        glyph::display(glyph::SPINNER[app.view.spinner % glyph::SPINNER.len()], "*")
     } else {
-        glyph::DOT
+        glyph::display(glyph::DOT, ".")
     };
 
     let ctx_limit = model_context_limit(&app.cfg.model).max(1);
@@ -110,9 +121,11 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
     let ctx_style = if pct >= 85 {
-        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.danger())
+            .add_modifier(Modifier::BOLD)
     } else if pct >= 60 {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(theme.warn())
     } else {
         theme.faint_style()
     };
@@ -201,6 +214,16 @@ pub fn header(frame: &mut Frame, area: Rect, app: &App) {
         ),
         Span::styled(ctx_display, ctx_style),
     ]);
+
+    // Running version: only on wide terminals, where it cannot crowd the
+    // model/context readout. `truncate_spans_head` drops from the front, so
+    // this tail survives if the row still runs out of room.
+    if width >= 120 {
+        right_spans.push(Span::styled(
+            format!("  v{}", crate::VERSION),
+            theme.faint_style(),
+        ));
+    }
 
     // Debug frame stats (`/hud`): ride at the tail of the header now that the
     // footer row is gone.
@@ -441,12 +464,22 @@ pub fn help(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             with_aliases
         };
+        // An inline section tag groups the sheet without adding rows, so the
+        // help sheet stays scroll-stable as commands are added.
+        let hint = format!("[{}] {}", entry.kind.group(), entry.hint);
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {names:<cmd_w$}  "),
                 Style::default().fg(theme.accent()),
             ),
-            Span::styled(text::truncate(entry.hint, hint_w), theme.dim()),
+            Span::styled(
+                text::truncate(&hint, hint_w),
+                if hint_w > 18 {
+                    theme.dim()
+                } else {
+                    theme.faint_style()
+                },
+            ),
         ]));
     }
 
@@ -481,7 +514,13 @@ pub fn help(frame: &mut Frame, area: Rect, app: &App) {
             ))
             .centered(),
         )
-        .title_bottom(Line::from(Span::styled(" esc close ", theme.faint_style())).right_aligned())
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(" esc close · v{} ", crate::VERSION),
+                theme.faint_style(),
+            ))
+            .right_aligned(),
+        )
         .style(Style::default().bg(theme.panel_bg()));
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
@@ -717,50 +756,37 @@ pub fn picker(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(spans));
     }
 
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border_focus()))
-        .title(
-            Line::from(Span::styled(
-                // The live row count (and the filtered share, once a query is
-                // typed) makes it obvious the list came from the endpoint just
-                // now instead of being a fixed table.
-                if picker.loading || picker.source.is_empty() {
-                    format!(" {} ", picker.title())
-                } else {
-                    // Count models, not provider section titles.
-                    let count = |rows: &[crate::app::PickerItem]| {
-                        rows.iter().filter(|i| !i.is_header()).count()
-                    };
-                    let shown = count(&picker.items);
-                    let total = count(&picker.source);
-                    if shown == total {
-                        format!(" {} · {} ", picker.title(), total)
-                    } else {
-                        format!(" {} · {}/{} ", picker.title(), shown, total)
-                    }
-                },
-                Style::default().fg(theme.accent()),
-            ))
-            .centered(),
-        )
-        .title_bottom(
-            Line::from(Span::styled(
-                format!(
-                    " {}{} move {} enter apply {} esc close ",
-                    glyph::ARROW_UP,
-                    glyph::ARROW_DOWN,
-                    glyph::DOT,
-                    glyph::DOT
-                ),
-                theme.faint_style(),
-            ))
-            .right_aligned(),
-        )
-        .style(Style::default().bg(theme.panel_bg()));
-    let inner = block.inner(area);
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
+    // The live row count (and the filtered share, once a query is typed) makes
+    // it obvious the list came from the endpoint just now instead of being a
+    // fixed table.
+    let title = if picker.loading || picker.source.is_empty() {
+        format!(" {} ", picker.title())
+    } else {
+        // Count models, not provider section titles.
+        let count =
+            |rows: &[crate::app::PickerItem]| rows.iter().filter(|i| !i.is_header()).count();
+        let shown = count(&picker.items);
+        let total = count(&picker.source);
+        if shown == total {
+            format!(" {} · {} ", picker.title(), total)
+        } else {
+            format!(" {} · {}/{} ", picker.title(), shown, total)
+        }
+    };
+    let inner = modal_chrome(
+        frame,
+        area,
+        theme,
+        Line::from(Span::styled(title, Style::default().fg(theme.accent()))),
+        &format!(
+            "{}{} move {} enter apply {} esc close",
+            glyph::ARROW_UP,
+            glyph::ARROW_DOWN,
+            glyph::DOT,
+            glyph::DOT
+        ),
+        theme.border_focus(),
+    );
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -887,15 +913,32 @@ pub fn connect(frame: &mut Frame, area: Rect, app: &App) {
 
 /// Rows shown by `ctrl+x`: every slash command plus a few local actions.
 pub fn command_items(app: &App) -> Vec<PickerItem> {
-    let mut items: Vec<PickerItem> = crate::commands::COMMANDS
-        .iter()
-        .map(|entry| PickerItem {
-            label: entry.command.to_string(),
-            hint: entry.hint.to_string(),
-            value: PickerValue::Command(entry.kind),
-            current: false,
-        })
-        .collect();
+    let mut by_group: std::collections::BTreeMap<&'static str, Vec<PickerItem>> =
+        std::collections::BTreeMap::new();
+    for entry in crate::commands::COMMANDS {
+        by_group
+            .entry(entry.kind.group())
+            .or_default()
+            .push(PickerItem {
+                label: entry.command.to_string(),
+                hint: entry.hint.to_string(),
+                value: PickerValue::Command(entry.kind),
+                current: false,
+            });
+    }
+    let mut items: Vec<PickerItem> = Vec::with_capacity(crate::commands::COMMANDS.len() + 12);
+    // Group headers reuse the same non-selectable rows as provider groups, so
+    // one selection style and one scroll path cover every picker.
+    for group in crate::commands::GROUPS {
+        if let Some(rows) = by_group.remove(group) {
+            items.push(PickerItem::header(group));
+            items.extend(rows);
+        }
+    }
+    for (group, rows) in by_group {
+        items.push(PickerItem::header(group));
+        items.extend(rows);
+    }
 
     items.push(PickerItem {
         label: format!("Connect & Switch  ·  {}", app.provider_label()),
@@ -1444,6 +1487,22 @@ pub fn settings(frame: &mut Frame, area: Rect, app: &App) {
         ]));
     }
 
+    // Always-visible build facts, so users can quote the exact build they are
+    // running without leaving the app (the title-bottom hint also shows it).
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled("  about", Style::default().fg(theme.accent())),
+        Span::styled(
+            format!(
+                " nanomite v{} · {} {}",
+                crate::VERSION,
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            ),
+            theme.faint_style(),
+        ),
+    ]));
+
     // Keep the highlighted row inside the viewport.
     let selected_line = row_line
         .get(state.cursor)
@@ -1468,11 +1527,12 @@ pub fn settings(frame: &mut Frame, area: Rect, app: &App) {
         .title_bottom(
             Line::from(Span::styled(
                 format!(
-                    " {} {} move {} enter toggle {} esc close ",
+                    " {}{} move {} enter toggle {} esc close · v{} ",
                     glyph::ARROW_UP,
                     glyph::ARROW_DOWN,
                     glyph::DOT,
-                    glyph::DOT
+                    glyph::DOT,
+                    crate::VERSION
                 ),
                 theme.faint_style(),
             ))
@@ -1611,6 +1671,10 @@ pub fn board(frame: &mut Frame, area: Rect, app: &App) {
     if state.in_memory {
         status.push(Span::styled(" · in-memory store", theme.faint_style()));
     }
+    if inner_w >= 48 {
+        status.push(Span::styled("  ", theme.faint_style()));
+        status.push(untrusted_span(theme));
+    }
 
     let esc_hint = if state.running {
         "esc cancel"
@@ -1699,13 +1763,13 @@ pub fn memory(frame: &mut Frame, area: Rect, app: &App) {
     let body: Vec<Span<'static>> = vec![Span::styled(record.content.clone(), theme.base())];
     lines.extend(text::wrap_spans(body, inner_w.max(8)));
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        format!(
-            "{} unread \u{b7} stored memory is untrusted data",
-            record.content.len()
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{} unread · ", record.content.len()),
+            theme.faint_style(),
         ),
-        theme.faint_style(),
-    )));
+        untrusted_span(theme),
+    ]));
 
     // `offset` hides rows from the top, so Up moves toward older body text.
     let offset = view.offset.min(lines.len().saturating_sub(1));
@@ -1984,6 +2048,110 @@ fn improve_block(
             },
         );
     }
+}
+
+/// Shared modal chrome: one border treatment, one centred title and one
+/// right-aligned key legend for every overlay that owns the whole screen.
+fn modal_chrome(
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    title: Line<'static>,
+    keys: &str,
+    border: Color,
+) -> Rect {
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border))
+        .title(title.centered())
+        .title_bottom(
+            Line::from(Span::styled(format!(" {keys} "), theme.faint_style())).right_aligned(),
+        )
+        .style(Style::default().bg(theme.panel_bg()));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    inner
+}
+
+/// A real modal for tool approval. The status line still carries a short
+/// reminder, but this surface shows the whole command, the risk classification
+/// and the full answer legend so the user never approves blind.
+pub fn confirm_modal(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(request) = &app.pending_confirm else {
+        return;
+    };
+    let theme = &app.theme;
+    let width = (area.width.saturating_mul(76) / 100).clamp(40.min(area.width), 84.min(area.width));
+    let height = 9u16.min(area.height);
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    let inner = modal_chrome(
+        frame,
+        rect,
+        theme,
+        Line::from(Span::styled(
+            " approval required ",
+            Style::default()
+                .fg(theme.warn())
+                .add_modifier(Modifier::BOLD),
+        )),
+        "y allow · a always · n deny · d always deny",
+        theme.warn(),
+    );
+
+    let risk = if matches!(
+        request.tool.as_str(),
+        "run_command" | "ssh_run" | "memory_delete"
+    ) {
+        "external - may affect the host or network"
+    } else {
+        "internal - scoped to this workspace"
+    };
+    let budget = inner.width.saturating_sub(8) as usize;
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(" tool  ", theme.faint_style()),
+            Span::styled(
+                text::truncate(&request.tool, budget),
+                Style::default()
+                    .fg(theme.accent())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(" risk  ", theme.faint_style()),
+            Span::styled(risk, Style::default().fg(theme.warn())),
+        ]),
+        Line::default(),
+    ];
+    if let Some(preview) = request
+        .preview
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        for raw in preview.lines().take(4) {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "   {}{}",
+                    glyph::CHEVRON,
+                    text::truncate(raw, budget.saturating_sub(3))
+                ),
+                theme.dim(),
+            )));
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "   no preview available",
+            theme.faint_style(),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 pub fn overlay_rect(area: Rect, kind: OverlayKind, content_rows: u16) -> Rect {
@@ -2577,9 +2745,9 @@ pub fn live_diff_viewer(frame: &mut Frame, area: Rect, app: &App) {
         // Parse and render diff with colors
         for diff_line in diff.lines() {
             let style = if diff_line.starts_with('+') {
-                Style::default().fg(theme.success())
+                Style::default().fg(theme.diff_add())
             } else if diff_line.starts_with('-') {
-                Style::default().fg(theme.danger())
+                Style::default().fg(theme.diff_delete())
             } else if diff_line.starts_with('@') {
                 Style::default()
                     .fg(theme.accent())
@@ -2588,10 +2756,11 @@ pub fn live_diff_viewer(frame: &mut Frame, area: Rect, app: &App) {
                 theme.faint_style()
             };
 
-            let display_line = if diff_line.len() > inner.width as usize - 2 {
-                &diff_line[..inner.width as usize - 2]
+            let budget = (inner.width as usize).saturating_sub(2);
+            let display_line = if text::width(diff_line) > budget {
+                text::truncate(diff_line, budget)
             } else {
-                diff_line
+                diff_line.to_string()
             };
             lines.push(Line::from(Span::styled(
                 format!(" {}", display_line),
@@ -2663,40 +2832,24 @@ pub fn tool_monitor(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(format!(" ({}) ", elapsed_str), theme.faint_style()),
         ]));
 
+        let budget = (inner.width as usize).saturating_sub(4);
         if let Some(preview) = &tool.preview {
-            let preview_line = if preview.len() > inner.width as usize - 4 {
-                &preview[..inner.width as usize - 4]
-            } else {
-                preview
-            };
             lines.push(Line::from(Span::styled(
-                format!("  ↳ {}", preview_line),
+                format!("  ↳ {}", text::truncate(preview, budget)),
                 theme.faint_style(),
             )));
         }
 
         // Show live output from detail
         for detail_line in tool.detail.lines() {
-            if detail_line.starts_with("[stdout]") {
-                let content = &detail_line[9..];
-                let display = if content.len() > inner.width as usize - 4 {
-                    &content[..inner.width as usize - 4]
-                } else {
-                    content
-                };
+            if let Some(content) = detail_line.strip_prefix("[stdout] ") {
                 lines.push(Line::from(Span::styled(
-                    format!("  > {}", display),
+                    format!("  > {}", text::truncate(content, budget)),
                     theme.success(),
                 )));
-            } else if detail_line.starts_with("[stderr]") {
-                let content = &detail_line[9..];
-                let display = if content.len() > inner.width as usize - 4 {
-                    &content[..inner.width as usize - 4]
-                } else {
-                    content
-                };
+            } else if let Some(content) = detail_line.strip_prefix("[stderr] ") {
                 lines.push(Line::from(Span::styled(
-                    format!("  ! {}", display),
+                    format!("  ! {}", text::truncate(content, budget)),
                     theme.danger(),
                 )));
             }
@@ -2705,9 +2858,14 @@ pub fn tool_monitor(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::default());
     }
 
-    // Truncate to fit
-    if lines.len() > inner.height as usize {
-        lines.truncate(inner.height as usize);
+    // Truncate to fit, keeping the untrusted-data marker as the last row.
+    let badge = Line::from(untrusted_span(theme));
+    let limit = inner.height as usize;
+    if lines.len() < limit {
+        lines.push(badge);
+    } else if limit > 0 {
+        lines.truncate(limit - 1);
+        lines.push(badge);
     }
 
     frame.render_widget(Paragraph::new(lines), inner);

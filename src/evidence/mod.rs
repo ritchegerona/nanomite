@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -72,6 +73,7 @@ impl EvidenceLocker {
 
     /// Store raw bytes as evidence, content-addressed by SHA-256.
     /// Returns the artifact's hash and a reference to its metadata.
+    #[allow(clippy::too_many_arguments)]
     pub fn store(
         &self,
         assessment_id: &str,
@@ -115,26 +117,17 @@ impl EvidenceLocker {
     }
 
     /// Retrieve an artifact's payload by hash within an assessment.
-    pub fn retrieve(
-        &self,
-        assessment_id: &str,
-        hash: &str,
-    ) -> std::io::Result<Vec<u8>> {
+    pub fn retrieve(&self, assessment_id: &str, hash: &str) -> std::io::Result<Vec<u8>> {
         let path = self.root.join(assessment_id).join(hash).join("payload");
         std::fs::read(path)
     }
 
     /// Retrieve an artifact's metadata by hash within an assessment.
-    pub fn metadata(
-        &self,
-        assessment_id: &str,
-        hash: &str,
-    ) -> std::io::Result<EvidenceArtifact> {
+    pub fn metadata(&self, assessment_id: &str, hash: &str) -> std::io::Result<EvidenceArtifact> {
         let path = self.root.join(assessment_id).join(hash).join("meta.json");
         let text = std::fs::read_to_string(path)?;
-        serde_json::from_str(&text).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })
+        serde_json::from_str(&text)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
     /// List artifacts matching the filter.
@@ -170,9 +163,7 @@ impl EvidenceLocker {
                             continue;
                         }
                         if let Ok(text) = std::fs::read_to_string(&meta_path) {
-                            if let Ok(artifact) =
-                                serde_json::from_str::<EvidenceArtifact>(&text)
-                            {
+                            if let Ok(artifact) = serde_json::from_str::<EvidenceArtifact>(&text) {
                                 if let Some(ref t) = filter.target {
                                     if artifact.target != *t {
                                         continue;
@@ -197,7 +188,7 @@ impl EvidenceLocker {
         }
 
         // Newest first.
-        items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        items.sort_by_key(|b| Reverse(b.created_at));
         let total = items.len();
 
         Ok(EvidenceQuery { items, total })
@@ -205,10 +196,7 @@ impl EvidenceLocker {
 
     /// Verify integrity of all artifacts in an assessment: recompute SHA-256
     /// and compare to the stored hash directory name and metadata.
-    pub fn verify_integrity(
-        &self,
-        assessment_id: &str,
-    ) -> std::io::Result<Vec<(String, bool)>> {
+    pub fn verify_integrity(&self, assessment_id: &str) -> std::io::Result<Vec<(String, bool)>> {
         let mut results = Vec::new();
         let assessment_dir = self.root.join(assessment_id);
         if !assessment_dir.exists() {
@@ -354,9 +342,7 @@ mod tests {
             "text/plain",
         );
 
-        let all = locker
-            .list(&EvidenceFilter::default())
-            .expect("list all");
+        let all = locker.list(&EvidenceFilter::default()).expect("list all");
         assert_eq!(all.total, 3);
 
         let by_assess = locker

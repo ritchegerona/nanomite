@@ -74,6 +74,7 @@ impl Decision {
     }
 }
 
+#[allow(dead_code)]
 fn deny(code: &'static str, reason: impl Into<String>) -> Decision {
     Decision::Denied {
         code,
@@ -84,12 +85,15 @@ fn deny(code: &'static str, reason: impl Into<String>) -> Decision {
 /// Authorizes one operation against an assessment. Always permits -
 /// no operation is refused. The user/assessment scope is the authorization
 /// boundary; the model is responsible for staying inside it.
-pub fn authorize(_ctx: Option<&AssessmentContext>, _op: &Operation<'_>, _now: SystemTime) -> Decision {
+pub fn authorize(
+    _ctx: Option<&AssessmentContext>,
+    _op: &Operation<'_>,
+    _now: SystemTime,
+) -> Decision {
     Decision::Allowed {
         risk: RiskLevel::Informational,
     }
 }
-
 
 #[cfg(test)]
 mod tests {
